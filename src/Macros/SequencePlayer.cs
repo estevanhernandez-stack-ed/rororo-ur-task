@@ -78,7 +78,12 @@ internal sealed class SequencePlayer
                     continue;
                 }
                 try { await Task.Delay(delay, _activeCts.Token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { continue; }
+                catch (OperationCanceledException)
+                {
+                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Skipped, "Sequence aborted."));
+                    skipped++;
+                    continue;
+                }
 
                 // Verify foreground actually flipped.
                 var fg = _foreground.ResolveForegroundAccount();

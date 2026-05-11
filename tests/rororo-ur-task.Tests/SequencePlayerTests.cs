@@ -117,4 +117,43 @@ public class SequencePlayerTests
         Assert.Equal(PlaybackOutcome.Completed, result.PerAlt[2].Outcome);
         Assert.Equal(3, player.CalledWithTargets.Count); // all three were called — fail didn't stop the loop
     }
+
+    [Fact]
+    public async Task PlayAsync_AbortMidSequence_RemainingMarkedSkipped()
+    {
+        var player = new FakePlayer();
+        // First alt completes; abort fires before the second.
+        player.Results.Enqueue(PlaybackResult.Completed());
+
+        var fg = new FakeForeground();
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+
+        var targets = new[]
+        {
+            Alt(1001, 47821334, "Goldnail8"),
+            Alt(1002, 47821335, "ScrambledTen"),
+            Alt(1003, 47821336, "PinkPotatoChip"),
+        };
+        long lastFocused = 0;
+        fg.Resolver = () => targets.FirstOrDefault(a => a.RobloxUserId == lastFocused);
+
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Focusing && prog.CurrentAlt is not null)
+                lastFocused = prog.CurrentAlt.RobloxUserId;
+
+            // Trigger abort just as the loop starts focusing alt 2.
+            if (prog.Completed == 1 && prog.Phase == SequencePhase.Focusing && prog.CurrentAlt?.RobloxUserId == 47821335)
+                sequence.Abort();
+        };
+
+        var result = await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        Assert.Equal(1, result.Completed);
+        Assert.Equal(2, result.Skipped); // alts 2 and 3 marked Skipped
+        Assert.Equal(PlaybackOutcome.Completed, result.PerAlt[0].Outcome);
+        Assert.Equal(PlaybackOutcome.Skipped, result.PerAlt[1].Outcome);
+        Assert.Equal(PlaybackOutcome.Skipped, result.PerAlt[2].Outcome);
+        Assert.Equal("Sequence aborted.", result.PerAlt[1].Reason);
+    }
 }
