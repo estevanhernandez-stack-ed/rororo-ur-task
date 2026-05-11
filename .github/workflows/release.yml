@@ -8,6 +8,11 @@ on:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    # softprops/action-gh-release needs contents:write to publish the release.
+    # Default GITHUB_TOKEN ships with contents:read in workflows on forked PRs,
+    # which trips this step on first-time release runs.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout rororo-ur-task
