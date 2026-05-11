@@ -17,6 +17,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 {
     private const int StatusLogLimit = 100;
     private readonly PluginRuntime _runtime;
+    private readonly UserPreferences _prefs = UserPreferences.Load();
 
     public RecorderViewModel(PluginRuntime runtime)
     {
@@ -28,6 +29,9 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
         PlayMacroCommand = new RelayCommand<Macro>(m => { if (m is not null) _runtime.TriggerPlayMacro(m.Id); });
+
+        // Initialize pin state from saved prefs based on current compact mode (default: false / not compact).
+        _isTopmost = _isCompact ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
 
         _runtime.StateChanged += () =>
         {
@@ -164,6 +168,13 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             _isCompact = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsNotCompact));
+            // Switch pin state to whichever mode's preference.
+            var prefTopmost = value ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
+            if (_isTopmost != prefTopmost)
+            {
+                _isTopmost = prefTopmost;
+                OnPropertyChanged(nameof(IsTopmost));
+            }
         }
     }
 
@@ -177,6 +188,9 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         {
             if (_isTopmost == value) return;
             _isTopmost = value;
+            if (_isCompact) _prefs.TopmostInCompactMode = value;
+            else _prefs.TopmostInFullMode = value;
+            _prefs.Save();
             OnPropertyChanged();
         }
     }
