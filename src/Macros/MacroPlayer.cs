@@ -344,13 +344,14 @@ internal sealed class MacroPlayer
     private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 }
 
-internal enum PlaybackOutcome { Refused, Completed, Aborted }
+public enum PlaybackOutcome { Refused, Completed, Aborted, Skipped }
 
-internal sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
+public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
 {
     public static PlaybackResult Refused(string reason) => new(PlaybackOutcome.Refused, reason);
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
+    public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
 }
 
 internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo BoundAccount, long TargetUserId);
