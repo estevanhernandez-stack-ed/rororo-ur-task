@@ -16,6 +16,11 @@
          Scaffold ships as console-shaped WinExe to keep build verification clean. -->
     <UseWPF>false</UseWPF>
     <UseWindowsForms>false</UseWindowsForms>
+
+    <!-- AllowUnsafeBlocks is required by the LibraryImport source generator
+         (modern P/Invoke). Used in ForegroundWatcher and subsequent low-level
+         hook + SendInput + RegisterHotKey calls in tasks 4–8. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
