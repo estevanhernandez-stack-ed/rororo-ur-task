@@ -156,4 +156,50 @@ public class SequencePlayerTests
         Assert.Equal(PlaybackOutcome.Skipped, result.PerAlt[2].Outcome);
         Assert.Equal("Sequence aborted.", result.PerAlt[1].Reason);
     }
+
+    [Fact]
+    public async Task PlayAsync_ForegroundFlipFails_RecordsAltFailedAndContinues()
+    {
+        var player = new FakePlayer();
+        // Two completions enqueued — for alt 1 and alt 3. Alt 2 fails before PlayAsync is called.
+        player.Results.Enqueue(PlaybackResult.Completed());
+        player.Results.Enqueue(PlaybackResult.Completed());
+
+        var fg = new FakeForeground();
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+
+        var targets = new[]
+        {
+            Alt(1001, 47821334, "Goldnail8"),
+            Alt(99999, 47821335, "PhantomAlt"), // foreground never reports this one
+            Alt(1003, 47821336, "PinkPotatoChip"),
+        };
+
+        // Foreground reports the first or third alt but never the phantom middle one.
+        long lastFocused = 0;
+        fg.Resolver = () =>
+        {
+            if (lastFocused == targets[0].RobloxUserId) return targets[0];
+            if (lastFocused == targets[2].RobloxUserId) return targets[2];
+            return null; // phantom alt never becomes foreground
+        };
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Focusing && prog.CurrentAlt is not null)
+                lastFocused = prog.CurrentAlt.RobloxUserId;
+        };
+
+        var result = await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        Assert.Equal(2, result.Completed);
+        Assert.Equal(1, result.Failed);
+        Assert.Equal(0, result.Skipped);
+        Assert.Equal(PlaybackOutcome.Completed, result.PerAlt[0].Outcome);
+        Assert.Equal(PlaybackOutcome.Refused, result.PerAlt[1].Outcome);
+        Assert.Equal(PlaybackOutcome.Completed, result.PerAlt[2].Outcome);
+        Assert.NotNull(result.PerAlt[1].Reason);
+        // The failed alt should NOT have triggered MacroPlayer.PlayAsync — only alts 1 and 3.
+        Assert.Equal(2, player.CalledWithTargets.Count);
+        Assert.DoesNotContain(targets[1].RobloxUserId, player.CalledWithTargets);
+    }
 }
