@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>626labs.ur-task</AssemblyName>
+    <RootNamespace>Labs626.UrTask</RootNamespace>
+    <Version>0.1.0</Version>
+    <Company>626 Labs LLC</Company>
+    <Product>RoRoRo Ur Task</Product>
+    <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account, refuse playback on any other.</Description>
+
+    <!-- WPF + WinForms flip on in task 9 (recorder window) + task 10 (tray icon).
+         Scaffold ships as console-shaped WinExe to keep build verification clean. -->
+    <UseWPF>false</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.70.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ProjectReference until the PluginContract NuGet publishes to nuget.org.
+         Matches the rororo-hello-plugin stub pattern. Requires sibling ROROROblox
+         repo on disk for build (CI documents this in the workflow). -->
+    <ProjectReference Include="..\ROROROblox\src\ROROROblox.PluginContract\ROROROblox.PluginContract.csproj" />
+  </ItemGroup>
+
+</Project>

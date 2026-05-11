@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "626labs.ur-task",
+  "name": "RoRoRo Ur Task",
+  "version": "0.1.0",
+  "contractVersion": "1.0",
+  "publisher": "626 Labs LLC",
+  "description": "Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account; playback refuses unless the foreground window matches.",
+  "capabilities": [
+    "system.synthesize-keyboard-input",
+    "system.synthesize-mouse-input",
+    "system.watch-global-input",
+    "host.events.account-launched",
+    "host.events.account-exited",
+    "host.ui.row-badge",
+    "host.ui.tray-menu"
+  ],
+  "icon": "icon.png",
+  "updateFeed": "https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases.atom"
+}
