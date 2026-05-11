@@ -7,7 +7,7 @@
   "boundDisplayName": "Goldnail8",
   "recordedAtUnixMs": 1746000000000,
   "events": [
-    { "kind": "KeyDown", "timestampMs": 0, "virtualKeyCode": 32 },
-    { "kind": "KeyUp",   "timestampMs": 80, "virtualKeyCode": 32 }
+    { "kind": 0, "timestampMs": 0, "virtualKeyCode": 32 },
+    { "kind": 1, "timestampMs": 80, "virtualKeyCode": 32 }
   ]
 }

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Labs626.UrTask.Macros;
 
@@ -17,6 +18,11 @@ public sealed class MacroStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // String-form enums match MacroV1Migrator's read-side options for symmetry —
+        // direct-deserialize code paths (not going through the migrator) don't have
+        // to repeat the converter setup. The migrator's converter accepts both string
+        // and integer forms, so v0.1 macros (integer enums) still load fine.
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly string _directory;
