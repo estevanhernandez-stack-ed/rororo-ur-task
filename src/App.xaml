@@ -85,6 +85,9 @@
                 </Setter>
             </Style>
 
+            <!-- Built-in converter: bool → Visibility (True=Visible, False=Collapsed). -->
+            <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+
             <!-- Small uppercase label, tracked. JetBrains-Mono-shaped vibe. -->
             <Style x:Key="MetaLabel" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />

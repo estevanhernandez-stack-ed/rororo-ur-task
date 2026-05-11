@@ -21,4 +21,16 @@ public partial class RecorderWindow : Window
         Hide();
         base.OnClosing(e);
     }
+
+    private void OnTogglePinClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel vm)
+            vm.IsTopmost = !vm.IsTopmost;
+    }
+
+    private void OnToggleCompactClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel vm)
+            vm.IsCompact = !vm.IsCompact;
+    }
 }

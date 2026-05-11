@@ -8,101 +8,121 @@
         Background="{StaticResource BgBrush}"
         Foreground="{StaticResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
+        Topmost="{Binding IsTopmost}"
         WindowStartupLocation="CenterScreen">
 
-    <Grid Margin="24,20">
+    <Window.InputBindings>
+        <KeyBinding Key="M" Modifiers="Control+Shift" Command="{Binding ToggleCompactCommand}" />
+    </Window.InputBindings>
+
+    <Grid Margin="20,18">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- header -->
-            <RowDefinition Height="Auto" /> <!-- foreground bind display -->
-            <RowDefinition Height="Auto" /> <!-- state pill -->
-            <RowDefinition Height="Auto" /> <!-- buttons -->
-            <RowDefinition Height="Auto" /> <!-- last macro -->
-            <RowDefinition Height="*" />    <!-- macros list -->
-            <RowDefinition Height="Auto" /> <!-- log header -->
-            <RowDefinition Height="120" />  <!-- log list -->
-            <RowDefinition Height="Auto" /> <!-- footer -->
+            <RowDefinition Height="Auto" /> <!-- 0: header -->
+            <RowDefinition Height="Auto" /> <!-- 1: status pill -->
+            <RowDefinition Height="Auto" /> <!-- 2: buttons -->
+            <RowDefinition Height="Auto" /> <!-- 3: multi-window toggle -->
+            <RowDefinition Height="*" />    <!-- 4: macros area -->
+            <RowDefinition Height="Auto" /> <!-- 5: activity log header -->
+            <RowDefinition Height="100" />  <!-- 6: activity log -->
+            <RowDefinition Height="Auto" /> <!-- 7: footer -->
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <TextBlock Text="RORORO UR TASK"
-                       FontFamily="{StaticResource MonoFont}"
-                       FontSize="10"
-                       Foreground="{StaticResource CyanBrush}" />
-            <TextBlock Text="Per-window macros for RoRoRo-managed alts."
-                       FontFamily="{StaticResource DisplayFont}"
-                       FontSize="20"
-                       Foreground="{StaticResource WhiteBrush}"
-                       Margin="0,4,0,0" />
-        </StackPanel>
+        <!-- Row 0: header -->
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="RORORO UR TASK"
+                           FontFamily="{StaticResource MonoFont}"
+                           FontSize="10"
+                           Foreground="{StaticResource CyanBrush}" />
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBlock Text="Macros"
+                               FontFamily="{StaticResource DisplayFont}"
+                               FontSize="20"
+                               Foreground="{StaticResource WhiteBrush}" />
+                    <Border Margin="10,4,0,0"
+                            Padding="6,2"
+                            CornerRadius="3"
+                            Background="{StaticResource RowBgBrush}"
+                            Visibility="{Binding IsRecordModeAllWindows, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="MULTI-WINDOW"
+                                   FontSize="8"
+                                   Foreground="{StaticResource CyanBrush}" />
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+            <Button Grid.Column="1"
+                    Content="&#x1F4CC;"
+                    ToolTip="Always on top"
+                    Padding="6,3"
+                    Margin="0,0,6,0"
+                    Click="OnTogglePinClicked" />
+            <Button Grid.Column="2"
+                    Content="&#x2310;"
+                    ToolTip="Compact mode (Ctrl+Shift+M)"
+                    Padding="6,3"
+                    Click="OnToggleCompactClicked" />
+        </Grid>
 
-        <!-- Foreground bind display -->
+        <!-- Row 1: status pill -->
         <Border Grid.Row="1"
                 Background="{StaticResource RowBgBrush}"
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
-                Padding="14,12">
-            <StackPanel>
-                <TextBlock Text="FOREGROUND WINDOW" Style="{StaticResource MetaLabel}" />
-                <TextBlock Text="{Binding BoundForegroundLabel}"
-                           FontSize="14"
-                           Margin="0,4,0,0" />
-            </StackPanel>
+                Padding="14,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Ellipse Grid.Column="0"
+                         Width="8" Height="8"
+                         Margin="0,0,10,0"
+                         VerticalAlignment="Top"
+                         Fill="{StaticResource MutedTextBrush}" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding StatusLabel}"
+                               FontFamily="{StaticResource DisplayFont}"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource WhiteBrush}" />
+                    <TextBlock Text="{Binding StatusMeta}"
+                               FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,2,0,0" />
+                    <ProgressBar Margin="0,6,0,0"
+                                 Height="3"
+                                 Value="{Binding SequenceProgressFraction, Mode=OneWay}"
+                                 Minimum="0"
+                                 Maximum="1"
+                                 Visibility="{Binding IsSequencePlaying, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <!-- State pill -->
-        <Border Grid.Row="2"
-                Margin="0,14,0,0"
-                Padding="14,10"
-                CornerRadius="6">
-            <Border.Style>
-                <Style TargetType="Border">
-                    <Setter Property="Background" Value="{StaticResource RowBgBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
-                    <Setter Property="BorderThickness" Value="1" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                            <Setter Property="BorderBrush" Value="{StaticResource MagentaBrush}" />
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                            <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Border.Style>
-            <StackPanel>
-                <TextBlock Text="STATE" Style="{StaticResource MetaLabel}" />
-                <TextBlock Text="{Binding StateLabel}"
-                           FontFamily="{StaticResource DisplayFont}"
-                           FontSize="22"
-                           FontWeight="SemiBold"
-                           Margin="0,4,0,0" />
-            </StackPanel>
-        </Border>
-
-        <!-- Buttons -->
-        <Grid Grid.Row="3" Margin="0,14,0,0">
+        <!-- Row 2: buttons -->
+        <Grid Grid.Row="2" Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="8" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="8" />
-                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Button Grid.Column="0" Style="{StaticResource PrimaryButton}" Command="{Binding RecordCommand}">
+            <Button Grid.Column="0"
+                    Style="{StaticResource PrimaryButton}"
+                    Command="{Binding RecordCommand}">
                 <StackPanel>
                     <TextBlock Text="RECORD" />
-                    <TextBlock Text="F8" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
+                    <TextBlock Text="Ctrl+Shift+R" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
                 </StackPanel>
             </Button>
-            <Button Grid.Column="2" Style="{StaticResource PrimaryButton}" Command="{Binding PlayCommand}">
-                <StackPanel>
-                    <TextBlock Text="PLAY LAST" />
-                    <TextBlock Text="F5" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
-                </StackPanel>
-            </Button>
-            <Button Grid.Column="4" Style="{StaticResource SecondaryButton}" Command="{Binding StopCommand}">
+            <Button Grid.Column="2"
+                    Style="{StaticResource SecondaryButton}"
+                    Command="{Binding StopCommand}">
                 <StackPanel>
                     <TextBlock Text="ABORT" />
                     <TextBlock Text="Esc" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
@@ -110,50 +130,126 @@
             </Button>
         </Grid>
 
-        <!-- Last macro -->
-        <StackPanel Grid.Row="4" Margin="0,14,0,0">
-            <TextBlock Text="LAST RECORDED" Style="{StaticResource MetaLabel}" />
-            <TextBlock Text="{Binding LastMacroLabel}"
-                       FontSize="12"
-                       Foreground="{StaticResource MutedTextBrush}"
-                       Margin="0,4,0,0" />
-        </StackPanel>
+        <!-- Row 3: multi-window toggle -->
+        <Border Grid.Row="3"
+                Margin="0,12,0,0"
+                Background="{StaticResource RowBgBrush}"
+                BorderBrush="{StaticResource DividerBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <CheckBox Grid.Column="0"
+                          IsChecked="{Binding IsRecordModeAllWindows, Mode=TwoWay}"
+                          VerticalAlignment="Center"
+                          Margin="0,0,8,0" />
+                <TextBlock Grid.Column="1"
+                           Text="Record across all windows"
+                           FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2"
+                           Text="EXPERIMENTAL"
+                           FontSize="8"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           VerticalAlignment="Center"
+                           Margin="8,0,0,0" />
+            </Grid>
+        </Border>
 
-        <!-- Macros list -->
-        <Border Grid.Row="5"
-                Margin="0,14,0,0"
+        <!-- Row 4: macros area -->
+        <Border Grid.Row="4"
+                Margin="0,12,0,0"
                 Background="{StaticResource RowBgBrush}"
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
                 CornerRadius="6">
-            <ListBox ItemsSource="{Binding Macros}"
-                     Background="Transparent"
-                     Foreground="{StaticResource WhiteBrush}"
-                     BorderThickness="0"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Margin="0,6">
-                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                            <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,0">
-                                <Run Text="{Binding Events.Count, Mode=OneWay}" />
-                                <Run Text="events · recorded against " />
-                                <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
-                            </TextBlock>
-                        </StackPanel>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <Grid>
+                <!-- Empty state -->
+                <TextBlock Text="Hit Ctrl+Shift+R or RECORD to capture your first macro"
+                           FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"
+                           Margin="20"
+                           Visibility="{Binding HasNoMacros, Converter={StaticResource BoolToVisibility}}" />
+                <!-- Macros list -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding HasMacros, Converter={StaticResource BoolToVisibility}}">
+                    <ItemsControl ItemsSource="{Binding Macros}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="6"
+                                        Background="{StaticResource BgBrush}"
+                                        BorderBrush="{StaticResource DividerBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="11,9">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid Grid.Row="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Name, FallbackValue='(unnamed)'}"
+                                                       FontSize="12"
+                                                       FontWeight="SemiBold" />
+                                            <Button Grid.Column="1"
+                                                    Content="PLAY"
+                                                    Style="{StaticResource PrimaryButton}"
+                                                    Padding="9,3"
+                                                    FontSize="10"
+                                                    Command="{Binding DataContext.PlayMacroCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <TextBlock Grid.Column="2"
+                                                       Text="&#x22EF;"
+                                                       FontSize="14"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Margin="6,0,0,0"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
+                                            <TextBlock FontSize="9" Foreground="{StaticResource MutedTextBrush}">
+                                                <Run Text="{Binding Events.Count, Mode=OneWay}" />
+                                                <Run Text="events" />
+                                            </TextBlock>
+                                            <TextBlock FontSize="9" Foreground="{StaticResource MutedTextBrush}" Margin="10,0,0,0">
+                                                <Run Text="&#x00B7;" />
+                                                <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
         </Border>
 
-        <!-- Log header -->
-        <TextBlock Grid.Row="6"
+        <!-- Row 5: activity log header -->
+        <TextBlock Grid.Row="5"
                    Text="ACTIVITY"
-                   Style="{StaticResource MetaLabel}"
-                   Margin="0,14,0,0" />
+                   FontFamily="{StaticResource MonoFont}"
+                   FontSize="9"
+                   Foreground="{StaticResource MutedTextBrush}"
+                   Margin="0,12,0,0" />
 
-        <!-- Log -->
-        <Border Grid.Row="7"
+        <!-- Row 6: activity log -->
+        <Border Grid.Row="6"
                 Margin="0,4,0,0"
                 Background="{StaticResource RowBgBrush}"
                 BorderBrush="{StaticResource DividerBrush}"
@@ -174,12 +270,14 @@
             </ListBox>
         </Border>
 
-        <!-- Footer / connection -->
-        <Border Grid.Row="8" Margin="0,14,0,0" Padding="0,8,0,0"
+        <!-- Row 7: footer -->
+        <Border Grid.Row="7" Margin="0,12,0,0" Padding="0,8,0,0"
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="0,1,0,0">
             <TextBlock Text="{Binding ConnectionLabel}"
-                       Style="{StaticResource MetaLabel}" />
+                       FontFamily="{StaticResource MonoFont}"
+                       FontSize="9"
+                       Foreground="{StaticResource MutedTextBrush}" />
         </Border>
     </Grid>
 </Window>
