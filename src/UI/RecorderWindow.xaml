@@ -106,7 +106,7 @@
         </Border>
 
         <!-- Row 2: buttons -->
-        <Grid Grid.Row="2" Margin="0,12,0,0">
+        <Grid Grid.Row="2" Margin="0,12,0,0" Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="8" />
@@ -137,7 +137,8 @@
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
-                Padding="12,8">
+                Padding="12,8"
+                Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -168,7 +169,8 @@
                 Background="{StaticResource RowBgBrush}"
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
-                CornerRadius="6">
+                CornerRadius="6"
+                Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
             <Grid>
                 <!-- Empty state -->
                 <TextBlock Text="Hit Ctrl+Shift+R or RECORD to capture your first macro"
@@ -246,7 +248,8 @@
                    FontFamily="{StaticResource MonoFont}"
                    FontSize="9"
                    Foreground="{StaticResource MutedTextBrush}"
-                   Margin="0,12,0,0" />
+                   Margin="0,12,0,0"
+                   Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}" />
 
         <!-- Row 6: activity log -->
         <Border Grid.Row="6"
@@ -254,7 +257,8 @@
                 Background="{StaticResource RowBgBrush}"
                 BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
-                CornerRadius="6">
+                CornerRadius="6"
+                Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
             <ListBox ItemsSource="{Binding StatusLines}"
                      Background="Transparent"
                      Foreground="{StaticResource MutedTextBrush}"
@@ -273,7 +277,8 @@
         <!-- Row 7: footer -->
         <Border Grid.Row="7" Margin="0,12,0,0" Padding="0,8,0,0"
                 BorderBrush="{StaticResource DividerBrush}"
-                BorderThickness="0,1,0,0">
+                BorderThickness="0,1,0,0"
+                Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
             <TextBlock Text="{Binding ConnectionLabel}"
                        FontFamily="{StaticResource MonoFont}"
                        FontSize="9"
