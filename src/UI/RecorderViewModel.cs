@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.UI;
@@ -10,14 +9,14 @@ namespace Labs626.UrTask.UI;
 /// <summary>
 /// Binds <see cref="PluginRuntime"/> state to the recorder window. Observes
 /// runtime events (StateChanged, ConnectionChanged, StatusLogged,
-/// MacrosChanged), polls the foreground watcher on a 250ms dispatcher timer,
-/// and surfaces simple ICommand wrappers for Record/Play/Stop buttons.
+/// MacrosChanged, SequenceProgressed) and surfaces ICommand wrappers plus
+/// v0.2 bindable surface: SequenceProgress, IsCompact, IsTopmost, RecordMode,
+/// PlayMacroCommand, and derived status properties.
 /// </summary>
 internal sealed class RecorderViewModel : INotifyPropertyChanged
 {
     private const int StatusLogLimit = 100;
     private readonly PluginRuntime _runtime;
-    private readonly DispatcherTimer _foregroundTimer;
 
     public RecorderViewModel(PluginRuntime runtime)
     {
@@ -27,11 +26,22 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         StatusLines = new ObservableCollection<string>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
-        PlayCommand = new RelayCommand(_runtime.TriggerPlayLast);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
+        PlayMacroCommand = new RelayCommand<Macro>(m => { if (m is not null) _runtime.TriggerPlayMacro(m.Id); });
 
-        _runtime.StateChanged += () => { OnPropertyChanged(nameof(StateLabel)); OnPropertyChanged(nameof(IsRecording)); OnPropertyChanged(nameof(IsPlaying)); };
-        _runtime.ConnectionChanged += () => { OnPropertyChanged(nameof(ConnectionLabel)); OnPropertyChanged(nameof(IsConnected)); };
+        _runtime.StateChanged += () =>
+        {
+            OnPropertyChanged(nameof(StateLabel));
+            OnPropertyChanged(nameof(IsRecording));
+            OnPropertyChanged(nameof(IsPlaying));
+            OnPropertyChanged(nameof(StatusLabel));
+            OnPropertyChanged(nameof(StatusMeta));
+        };
+        _runtime.ConnectionChanged += () =>
+        {
+            OnPropertyChanged(nameof(ConnectionLabel));
+            OnPropertyChanged(nameof(IsConnected));
+        };
         _runtime.StatusLogged += line =>
         {
             StatusLines.Insert(0, line);
@@ -43,28 +53,31 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             var loaded = _runtime.Store.LoadAll();
             foreach (var m in loaded.Macros.OrderByDescending(m => m.RecordedAtUnixMs))
                 Macros.Add(m);
-            OnPropertyChanged(nameof(LastMacroLabel));
+            OnPropertyChanged(nameof(HasMacros));
+            OnPropertyChanged(nameof(HasNoMacros));
+            OnPropertyChanged(nameof(StatusMeta));
         };
-
-        _foregroundTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(250),
-            DispatcherPriority.Normal, (_, _) => OnPropertyChanged(nameof(BoundForegroundLabel)),
-            Dispatcher.CurrentDispatcher);
-        _foregroundTimer.Start();
+        _runtime.SequenceProgressed += p => SequenceProgress = p;
     }
+
+    // ---------- Collections ----------
 
     public ObservableCollection<Macro> Macros { get; }
     public ObservableCollection<string> StatusLines { get; }
 
+    // ---------- Commands ----------
+
     public ICommand RecordCommand { get; }
-    public ICommand PlayCommand { get; }
     public ICommand StopCommand { get; }
+    public ICommand PlayMacroCommand { get; }
+
+    // ---------- Existing state properties ----------
 
     public string StateLabel => _runtime.State switch
     {
-        PluginState.Idle => "IDLE",
         PluginState.Recording => "RECORDING",
         PluginState.Playing => "PLAYING",
-        _ => "—",
+        _ => "IDLE",
     };
 
     public bool IsRecording => _runtime.State == PluginState.Recording;
@@ -76,27 +89,103 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
     public bool IsConnected => _runtime.IsConnected;
 
-    public string BoundForegroundLabel
+    // ---------- v0.2: SequenceProgress ----------
+
+    private SequenceProgress? _sequenceProgress;
+    public SequenceProgress? SequenceProgress
     {
-        get
+        get => _sequenceProgress;
+        private set
         {
-            var fg = _runtime.ResolveForegroundNow();
-            return fg is null
-                ? "No RoRoRo-managed window in foreground"
-                : $"{fg.DisplayName}  ·  user {fg.RobloxUserId}";
+            if (Equals(_sequenceProgress, value)) return;
+            _sequenceProgress = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsSequencePlaying));
+            OnPropertyChanged(nameof(StatusLabel));
+            OnPropertyChanged(nameof(StatusMeta));
+            OnPropertyChanged(nameof(SequenceProgressFraction));
         }
     }
 
-    public string LastMacroLabel
+    public bool IsSequencePlaying => _sequenceProgress is { Phase: not SequencePhase.Done and not SequencePhase.Aborted };
+
+    public double SequenceProgressFraction
+        => _sequenceProgress is null || _sequenceProgress.Total == 0
+            ? 0.0
+            : (double)_sequenceProgress.Index / _sequenceProgress.Total;
+
+    // ---------- v0.2: RecordMode ----------
+
+    public RecordMode RecordMode
     {
-        get
+        get => _runtime.CurrentRecordMode;
+        set
         {
-            var m = _runtime.LastMacro;
-            return m is null
-                ? "—"
-                : $"{m.Events.Count} events · {m.Duration.TotalSeconds:F1}s · recorded against {m.RecordedAgainstDisplayName ?? "(any alt)"}";
+            if (_runtime.CurrentRecordMode == value) return;
+            _runtime.CurrentRecordMode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRecordModeAllWindows));
         }
     }
+
+    public bool IsRecordModeAllWindows
+    {
+        get => _runtime.CurrentRecordMode == RecordMode.AllWindows;
+        set => RecordMode = value ? RecordMode.AllWindows : RecordMode.PerWindow;
+    }
+
+    // ---------- v0.2: IsCompact / IsTopmost ----------
+
+    private bool _isCompact;
+    public bool IsCompact
+    {
+        get => _isCompact;
+        set
+        {
+            if (_isCompact == value) return;
+            _isCompact = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsNotCompact));
+        }
+    }
+
+    public bool IsNotCompact => !_isCompact;
+
+    private bool _isTopmost;
+    public bool IsTopmost
+    {
+        get => _isTopmost;
+        set
+        {
+            if (_isTopmost == value) return;
+            _isTopmost = value;
+            OnPropertyChanged();
+        }
+    }
+
+    // ---------- v0.2: Status pill ----------
+
+    public string StatusLabel => (IsRecording, IsPlaying, IsSequencePlaying) switch
+    {
+        (true, _, _) => "Recording",
+        (_, _, true) => $"Playing {_sequenceProgress!.CurrentAlt?.DisplayName ?? "..."}",
+        (_, true, _) => "Playing",
+        _ => "Idle",
+    };
+
+    public string StatusMeta => (IsRecording, IsSequencePlaying) switch
+    {
+        (true, _) => $"recording in {_runtime.CurrentRecordMode} mode",
+        (_, true) => $"alt {_sequenceProgress!.Index + 1} of {_sequenceProgress.Total} · {_sequenceProgress.Completed} succeeded, {_sequenceProgress.Failed} failed",
+        _ => $"{Macros.Count} macros",
+    };
+
+    // ---------- v0.2: Empty-state helpers ----------
+
+    public bool HasMacros => Macros.Count > 0;
+    public bool HasNoMacros => Macros.Count == 0;
+
+    // ---------- INPC ----------
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
