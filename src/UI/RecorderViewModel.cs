@@ -94,7 +94,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             var m = _runtime.LastMacro;
             return m is null
                 ? "—"
-                : $"{m.Events.Count} events · {m.Duration.TotalSeconds:F1}s · bound {m.BoundDisplayName}";
+                : $"{m.Events.Count} events · {m.Duration.TotalSeconds:F1}s · recorded against {m.RecordedAgainstDisplayName ?? "(any alt)"}";
         }
     }
 

@@ -47,7 +47,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player.Started += (_, args) =>
         {
             State = PluginState.Playing;
-            Log($"playback start: macro bound to user {args.Macro.BoundUserId} ({args.Macro.BoundDisplayName})");
+            Log($"playback start: macro recorded against user {args.Macro.RecordedAgainstUserId} ({args.Macro.RecordedAgainstDisplayName ?? "(unknown)"})");
         };
         _player.Ended += (_, _) =>
         {
@@ -191,9 +191,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
             SchemaVersion: Macro.CurrentSchemaVersion,
             Id: Guid.NewGuid().ToString(),
             Name: $"Recording {DateTimeOffset.Now:HH:mm:ss}",
-            BoundUserId: bound.RobloxUserId,
-            BoundAccountId: bound.AccountId,
-            BoundDisplayName: bound.DisplayName,
+            RecordMode: "PerWindow",
+            RecordedAgainstUserId: bound.RobloxUserId,
+            RecordedAgainstDisplayName: bound.DisplayName,
+            InterAltDelayMs: null,
             RecordedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Events: events.ToList());
 

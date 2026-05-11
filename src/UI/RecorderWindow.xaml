@@ -137,8 +137,8 @@
                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                             <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,0">
                                 <Run Text="{Binding Events.Count, Mode=OneWay}" />
-                                <Run Text="events · bound to " />
-                                <Run Text="{Binding BoundDisplayName, Mode=OneWay}" />
+                                <Run Text="events · recorded against " />
+                                <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
                             </TextBlock>
                         </StackPanel>
                     </DataTemplate>

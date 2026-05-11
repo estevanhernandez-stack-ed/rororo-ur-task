@@ -7,7 +7,7 @@ namespace Labs626.UrTask.Macros;
 /// <summary>
 /// Plays back recorded macros via SendInput, preserving original timing.
 /// The structural feature: pre-flight + continuous foreground checks against
-/// the macro's <see cref="Macro.BoundUserId"/>. Mismatch at pre-flight
+/// the macro's <see cref="Macro.RecordedAgainstUserId"/>. Mismatch at pre-flight
 /// refuses the playback outright; mismatch mid-playback aborts immediately.
 ///
 /// Threading: <see cref="PlayAsync"/> runs as a regular async Task. The
@@ -31,7 +31,7 @@ internal sealed class MacroPlayer
 
     /// <summary>
     /// Play the given macro. Pre-flight check: foreground window's user-id
-    /// must match macro.BoundUserId. Mid-playback check: same, on every event.
+    /// must match macro.RecordedAgainstUserId. Mid-playback check: same, on every event.
     /// Returns a <see cref="PlaybackResult"/> indicating outcome.
     /// </summary>
     public async Task<PlaybackResult> PlayAsync(Macro macro, CancellationToken external = default)
@@ -42,10 +42,10 @@ internal sealed class MacroPlayer
         var preflight = _foreground.ResolveForegroundAccount();
         if (preflight is null)
             return PlaybackResult.Refused("No RoRoRo-managed window is currently in the foreground.");
-        if (preflight.RobloxUserId != macro.BoundUserId)
+        if (preflight.RobloxUserId != macro.RecordedAgainstUserId)
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
-                $"macro is bound to user {macro.BoundUserId} ({macro.BoundDisplayName}).");
+                $"macro is bound to user {macro.RecordedAgainstUserId ?? -1} ({macro.RecordedAgainstDisplayName ?? "(unknown)"}).");
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight));
@@ -66,7 +66,7 @@ internal sealed class MacroPlayer
                 // Continuous foreground check. If the user alt-tabs to a non-bound
                 // window mid-playback, refuse to send the input.
                 var fg = _foreground.ResolveForegroundAccount();
-                if (fg is null || fg.RobloxUserId != macro.BoundUserId)
+                if (fg is null || fg.RobloxUserId != macro.RecordedAgainstUserId)
                 {
                     return PlaybackResult.Aborted(
                         $"Foreground shifted to {(fg?.DisplayName ?? "non-RoRoRo window")} at event {i + 1}/{macro.Events.Count}.");
