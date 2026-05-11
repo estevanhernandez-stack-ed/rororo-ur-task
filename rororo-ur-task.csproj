@@ -12,10 +12,11 @@
     <Product>RoRoRo Ur Task</Product>
     <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account, refuse playback on any other.</Description>
 
-    <!-- WPF + WinForms flip on in task 9 (recorder window) + task 10 (tray icon).
-         Scaffold ships as console-shaped WinExe to keep build verification clean. -->
-    <UseWPF>false</UseWPF>
+    <!-- WPF on for the recorder window (task 9). Tray icon (task 10) uses
+         Hardcodet.NotifyIcon.Wpf which is WPF-native — no WinForms needed. -->
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>false</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
 
     <!-- AllowUnsafeBlocks is required by the LibraryImport source generator
          (modern P/Invoke). Used in ForegroundWatcher and subsequent low-level
@@ -25,6 +26,17 @@
 
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.70.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- App.xaml lives under src/ rather than the project root; the default
+         ApplicationDefinition glob only covers root-level *.xaml. Declare
+         explicitly so the WPF SDK generates Main from it. -->
+    <ApplicationDefinition Remove="**/App.xaml" />
+    <ApplicationDefinition Include="src\App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </ApplicationDefinition>
   </ItemGroup>
 
   <ItemGroup>
