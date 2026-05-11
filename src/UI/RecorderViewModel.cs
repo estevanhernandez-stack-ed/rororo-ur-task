@@ -27,7 +27,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         StatusLines = new ObservableCollection<string>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
-        PlayCommand = new RelayCommand(_runtime.TriggerPlay);
+        PlayCommand = new RelayCommand(_runtime.TriggerPlayLast);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
 
         _runtime.StateChanged += () => { OnPropertyChanged(nameof(StateLabel)); OnPropertyChanged(nameof(IsRecording)); OnPropertyChanged(nameof(IsPlaying)); };

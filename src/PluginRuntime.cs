@@ -26,6 +26,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly ForegroundWatcher _foreground;
     private readonly MacroRecorder _recorder;
     private readonly MacroPlayer _player;
+    private readonly SequencePlayer _sequence;
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
 
@@ -38,6 +39,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground);
+        _sequence = new SequencePlayer(_player, _foreground);
+        _sequence.Progress += (_, p) => SequenceProgressed?.Invoke(p);
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         _hotkeys = new HotkeyService();
@@ -77,6 +80,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action<string>? StatusLogged;
     public event Action? ConnectionChanged;
     public event Action? MacrosChanged;
+    public event Action<SequenceProgress>? SequenceProgressed;
 
     /// <summary>Foreground resolution at this instant. UI polls this on a 250ms timer.</summary>
     public AccountRegistry.AccountInfo? ResolveForegroundNow() => _foreground.ResolveForegroundAccount();
@@ -84,8 +88,66 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// <summary>Invoke the Ctrl+Shift+R path (record toggle). Hotkeys + UI buttons share the same handler.</summary>
     public void TriggerRecordToggle() => OnHotkey(HotkeyKind.RecordToggle);
 
-    /// <summary>Invoke the Ctrl+Shift+P path (play last).</summary>
-    public void TriggerPlay() => OnHotkey(HotkeyKind.Play);
+    /// <summary>Invoke the Ctrl+Shift+P path (play last on smart-default target).</summary>
+    public void TriggerPlayLast() => OnHotkey(HotkeyKind.Play);
+
+    /// <summary>
+    /// Invoke per-macro PLAY (from a card button click): always opens the target
+    /// picker so the user picks single or multi each time. Single → MacroPlayer
+    /// direct; multi → SequencePlayer batch.
+    /// </summary>
+    public void TriggerPlayMacro(string macroId)
+    {
+        var loaded = Store.LoadAll();
+        var macro = loaded.Macros.FirstOrDefault(m => m.Id == macroId);
+        if (macro is null) { Log($"PlayMacro({macroId}) — macro not found."); return; }
+
+        var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+        if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
+
+        var fg = _foreground.ResolveForegroundAccount();
+        long? preferredUserId = fg?.RobloxUserId ?? macro.RecordedAgainstUserId;
+
+        // Picker must run on the UI thread (it's a WPF Window).
+        IReadOnlyList<AccountRegistry.AccountInfo>? selected = null;
+        var disp = Application.Current?.Dispatcher;
+        if (disp is not null)
+        {
+            disp.Invoke(() =>
+            {
+                var picker = new UI.PlaybackTargetPickerWindow(macro.Name ?? "macro", alts, preferredUserId, multiSelect: true);
+                var owner = Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(picker, owner)) picker.Owner = owner;
+                if (picker.ShowDialog() == true) selected = picker.SelectedTargets;
+            });
+        }
+
+        if (selected is null || selected.Count == 0)
+        {
+            Log("Target picker — cancelled.");
+            return;
+        }
+
+        var targets = selected.ToList();
+        _lastMacro = macro;
+
+        if (targets.Count == 1)
+        {
+            _ = Task.Run(async () =>
+            {
+                var result = await _player.PlayAsync(macro, targets[0].RobloxUserId);
+                Log($"playback result on {targets[0].DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+            });
+        }
+        else
+        {
+            _ = Task.Run(async () =>
+            {
+                var seqResult = await _sequence.PlayAsync(macro, targets);
+                Log($"sequence done: {seqResult.Completed}/{targets.Count} succeeded · {seqResult.Failed} failed · {seqResult.Skipped} skipped");
+            });
+        }
+    }
 
     /// <summary>Invoke the Esc path (abort).</summary>
     public void TriggerAbort() => OnHotkey(HotkeyKind.Abort);
@@ -158,8 +220,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 });
                 break;
             case HotkeyKind.Abort:
-                if (_player.Abort()) Log("Playback aborted (Esc).");
-                else Log("Esc ignored — nothing playing.");
+                bool aborted = _sequence.Abort() | _player.Abort();
+                Log(aborted ? "Aborted (Esc)." : "Esc ignored — nothing playing.");
                 break;
         }
     }
