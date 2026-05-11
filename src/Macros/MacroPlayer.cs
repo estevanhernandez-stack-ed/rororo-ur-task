@@ -130,6 +130,17 @@ internal sealed class MacroPlayer
 
     private static void SendKey(ushort vkCode, bool keyUp)
     {
+        // Derive scan code from the virtual-key code. Many games (Roblox
+        // included) check the scan code to distinguish "real" input from
+        // synthetic, and silently drop events that arrive with wScan=0.
+        // wVk + wScan together is the standard SendInput pattern for game
+        // macros. KEYEVENTF_SCANCODE alone (with wVk=0) would also work but
+        // breaks foreign keyboard layout mapping; the dual-field form is
+        // safer across locales.
+        var scanCode = (ushort)MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
+        var flags = (keyUp ? KEYEVENTF_KEYUP : 0u);
+        if (IsExtendedKey(vkCode)) flags |= KEYEVENTF_EXTENDEDKEY;
+
         var input = new INPUT
         {
             type = INPUT_KEYBOARD,
@@ -138,12 +149,28 @@ internal sealed class MacroPlayer
                 keyboard = new KEYBDINPUT
                 {
                     wVk = vkCode,
-                    dwFlags = keyUp ? KEYEVENTF_KEYUP : 0u,
+                    wScan = scanCode,
+                    dwFlags = flags,
                 },
             },
         };
         SendOne(ref input);
     }
+
+    /// <summary>
+    /// Extended-key set per Win32 KEYEVENTF_EXTENDEDKEY docs. Arrow keys,
+    /// PageUp/Down, Home/End, Insert/Delete, Numpad Divide, Right Ctrl, Right
+    /// Alt all need the flag — Win32 keyboard handlers branch on it.
+    /// </summary>
+    private static bool IsExtendedKey(ushort vk) => vk switch
+    {
+        0x21 or 0x22 or 0x23 or 0x24 => true, // PageUp, PageDown, End, Home
+        0x25 or 0x26 or 0x27 or 0x28 => true, // Left, Up, Right, Down
+        0x2D or 0x2E => true,                 // Insert, Delete
+        0x6F => true,                         // Numpad Divide
+        0xA3 or 0xA5 => true,                 // Right Ctrl, Right Alt
+        _ => false,
+    };
 
     private static void SendMouseMove(int screenX, int screenY)
     {
@@ -244,7 +271,10 @@ internal sealed class MacroPlayer
     private const uint INPUT_MOUSE = 0;
     private const uint INPUT_KEYBOARD = 1;
 
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    private const uint MAPVK_VK_TO_VSC = 0x00;
 
     private const uint MOUSEEVENTF_MOVE = 0x0001;
     private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -307,6 +337,9 @@ internal sealed class MacroPlayer
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 }
 
 internal enum PlaybackOutcome { Refused, Completed, Aborted }
