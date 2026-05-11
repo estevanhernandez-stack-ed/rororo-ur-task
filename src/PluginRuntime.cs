@@ -33,6 +33,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
 
+    public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
+
     public PluginRuntime()
     {
         Accounts = new AccountRegistry();
@@ -229,9 +231,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private void StartRecording()
     {
         var account = _foreground.ResolveForegroundAccount();
-        if (account is null)
+        if (CurrentRecordMode == RecordMode.PerWindow && account is null)
         {
-            Log("Record refused — foreground window isn't a RoRoRo-managed Roblox process.");
+            Log("Record refused — foreground window isn't a RoRoRo-managed Roblox process. (Switch to multi-window mode to record anyway.)");
             return;
         }
         try
@@ -244,7 +246,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes);
             _recordingBoundAccount = account;
             State = PluginState.Recording;
-            Log($"Recording started — bound to user {account.RobloxUserId} ({account.DisplayName}).");
+            Log(CurrentRecordMode == RecordMode.AllWindows
+                ? "Recording (multi-window mode) — capturing input across all windows."
+                : $"Recording started — bound to user {account!.RobloxUserId} ({account.DisplayName}).");
         }
         catch (Exception ex)
         {
@@ -259,16 +263,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recordingBoundAccount = null;
         State = PluginState.Idle;
 
-        if (bound is null) { Log("Stop without bound account — discarded."); return; }
         if (events.Count == 0) { Log("Stop — 0 events captured."); return; }
 
         var macro = new Macro(
             SchemaVersion: Macro.CurrentSchemaVersion,
             Id: Guid.NewGuid().ToString(),
             Name: $"Recording {DateTimeOffset.Now:HH:mm:ss}",
-            RecordMode: "PerWindow",
-            RecordedAgainstUserId: bound.RobloxUserId,
-            RecordedAgainstDisplayName: bound.DisplayName,
+            RecordMode: CurrentRecordMode == RecordMode.AllWindows ? "AllWindows" : "PerWindow",
+            RecordedAgainstUserId: bound?.RobloxUserId,
+            RecordedAgainstDisplayName: bound?.DisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Events: events.ToList());
@@ -308,3 +311,5 @@ internal sealed class PluginRuntime : IAsyncDisposable
 }
 
 internal enum PluginState { Idle, Recording, Playing }
+
+public enum RecordMode { PerWindow, AllWindows }
