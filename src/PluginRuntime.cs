@@ -9,7 +9,7 @@ namespace Labs626.UrTask;
 /// <summary>
 /// Owns all the moving parts (gRPC client, account registry, foreground
 /// watcher, macro recorder + player + store, auto-stop coordinator,
-/// hotkeys) and wires the F8 / F5 / Esc hotkey handlers. The ViewModel
+/// hotkeys) and wires the Ctrl+Shift+R / Ctrl+Shift+P / Esc hotkey handlers. The ViewModel
 /// observes this runtime — runtime knows nothing about UI.
 ///
 /// Public events surface state changes for the VM to bind against. All
@@ -81,10 +81,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// <summary>Foreground resolution at this instant. UI polls this on a 250ms timer.</summary>
     public AccountRegistry.AccountInfo? ResolveForegroundNow() => _foreground.ResolveForegroundAccount();
 
-    /// <summary>Invoke the F8 path (record toggle). Hotkeys + UI buttons share the same handler.</summary>
+    /// <summary>Invoke the Ctrl+Shift+R path (record toggle). Hotkeys + UI buttons share the same handler.</summary>
     public void TriggerRecordToggle() => OnHotkey(HotkeyKind.RecordToggle);
 
-    /// <summary>Invoke the F5 path (play last).</summary>
+    /// <summary>Invoke the Ctrl+Shift+P path (play last).</summary>
     public void TriggerPlay() => OnHotkey(HotkeyKind.Play);
 
     /// <summary>Invoke the Esc path (abort).</summary>
@@ -97,7 +97,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: F8 record/stop · F5 play · Esc abort.");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play · Esc abort.");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -142,7 +142,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 else StopAndSaveRecording();
                 break;
             case HotkeyKind.Play:
-                if (_lastMacro is null) Log("F5 ignored — no macro to play.");
+                if (_lastMacro is null) Log("Ctrl+Shift+P ignored — no macro to play.");
                 else _ = Task.Run(async () =>
                 {
                     var result = await _player.PlayAsync(_lastMacro);
@@ -166,7 +166,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
         try
         {
-            _recorder.Start(HotkeyService.RegisteredVkCodes);
+            // Esc is always filtered (so Esc during record doesn't bake into the macro).
+            // VK_R / VK_P are chord-only — the recorder handles the modifier check via
+            // HotkeyService.ChordHotkeyVkCodes.
+            _recorder.Start(
+                alwaysIgnore: new[] { HotkeyService.AbortVkCode },
+                chordIgnore: HotkeyService.ChordHotkeyVkCodes);
             _recordingBoundAccount = account;
             State = PluginState.Recording;
             Log($"Recording started — bound to user {account.RobloxUserId} ({account.DisplayName}).");

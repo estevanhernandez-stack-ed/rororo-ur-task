@@ -50,7 +50,8 @@ public sealed class MacroRecorder
     private readonly object _lock = new();
     private List<MacroEvent>? _events;
     private Stopwatch? _clock;
-    private HashSet<int>? _ignoredVkCodes;
+    private HashSet<int>? _alwaysIgnoredVkCodes;
+    private HashSet<int>? _chordIgnoredVkCodes;
     private long _lastMouseMoveMs;
     private Thread? _hookThread;
     private uint _hookThreadId;
@@ -69,13 +70,16 @@ public sealed class MacroRecorder
     /// fails). Throws on installation failure so the caller can surface it
     /// rather than recording into a black hole.
     ///
-    /// <paramref name="ignoredVkCodes"/> — vkCodes (typically the hotkeys
-    /// registered with HotkeyService) that the recorder will silently drop
-    /// rather than capture. Without this, pressing F8 to stop recording
-    /// would bake the F8 keystroke into the macro and playback would echo
-    /// it back, triggering record-stop mid-playback.
+    /// <paramref name="alwaysIgnore"/> — vkCodes dropped unconditionally (e.g.
+    /// Esc). Without this, pressing Esc to abort playback would bake the
+    /// keystroke into the macro.
+    ///
+    /// <paramref name="chordIgnore"/> — vkCodes dropped only when Ctrl+Shift is
+    /// held (e.g. R/P for Ctrl+Shift+R/P). Bare 'r' and 'p' typing still records.
     /// </summary>
-    public void Start(IReadOnlyCollection<int>? ignoredVkCodes = null)
+    public void Start(
+        IReadOnlyCollection<int>? alwaysIgnore = null,
+        IReadOnlyCollection<int>? chordIgnore = null)
     {
         lock (_lock)
         {
@@ -83,8 +87,11 @@ public sealed class MacroRecorder
 
             _events = new List<MacroEvent>(capacity: 1024);
             _clock = Stopwatch.StartNew();
-            _ignoredVkCodes = ignoredVkCodes is { Count: > 0 }
-                ? new HashSet<int>(ignoredVkCodes)
+            _alwaysIgnoredVkCodes = alwaysIgnore is { Count: > 0 }
+                ? new HashSet<int>(alwaysIgnore)
+                : null;
+            _chordIgnoredVkCodes = chordIgnore is { Count: > 0 }
+                ? new HashSet<int>(chordIgnore)
                 : null;
             _lastMouseMoveMs = -MouseMoveMinIntervalMs; // ensure the first move always records
             _readySignal = new ManualResetEventSlim(false);
@@ -189,9 +196,19 @@ public sealed class MacroRecorder
             var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
             var vkCode = (int)info.vkCode;
 
-            // Drop the configured hotkeys (F8 / F5 / Esc) so pressing them to
-            // control the plugin doesn't bake the keystroke into the macro.
-            if (_ignoredVkCodes is null || !_ignoredVkCodes.Contains(vkCode))
+            // Always-ignored keys (Esc): drop regardless of modifier state.
+            if (_alwaysIgnoredVkCodes?.Contains(vkCode) == true)
+                return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+
+            // Chord-ignored keys (R/P): drop only when Ctrl+Shift is held — otherwise
+            // they're normal typing and need to be recorded.
+            if (_chordIgnoredVkCodes?.Contains(vkCode) == true)
+            {
+                bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                if (ctrlDown && shiftDown) return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            }
+
             {
                 var msg = wParam.ToInt32();
                 MacroEventKind? kind = msg switch
@@ -339,4 +356,10 @@ public sealed class MacroRecorder
 
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
+
+    private const int VK_CONTROL = 0x11;
+    private const int VK_SHIFT = 0x10;
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
 }
