@@ -26,6 +26,15 @@
 
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.70.0" />
+    <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Plugin icon — surfaced on RoRoRo's consent sheet via manifest.json, on
+         the WPF window chrome via Window.Icon, and on the system tray icon.
+         v0.1 ships the generic 626 brand mark; v0.1.1 lands a custom-rendered
+         icon following the vibe-X-square-1024 family pattern. -->
+    <Resource Include="icon.png" />
   </ItemGroup>
 
   <ItemGroup>
