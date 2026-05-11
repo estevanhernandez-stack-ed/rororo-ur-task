@@ -45,6 +45,8 @@ public sealed class MacroStore
     /// <summary>
     /// Load every macro file in the directory. Returns successes and failures
     /// separately so the UI can surface invalid files without breaking the load.
+    /// v0.1 macros are auto-migrated to v2 via <see cref="MacroV1Migrator"/>;
+    /// the migration is sticky — the next save persists in v2 shape.
     /// </summary>
     public LoadResult LoadAll()
     {
@@ -56,21 +58,10 @@ public sealed class MacroStore
             try
             {
                 var json = File.ReadAllText(path);
-                var macro = JsonSerializer.Deserialize<Macro>(json, JsonOptions);
+                var macro = MacroV1Migrator.LoadAndMigrate(json);
                 if (macro is null)
                 {
-                    failures.Add(new LoadFailure(path, "Deserialization returned null."));
-                    continue;
-                }
-                // BUG RISK — A1 bumped Macro.CurrentSchemaVersion to 2 without wiring in
-                // the v1->v2 migrator. Until A2 (MacroV1Migrator) and A3 (this method calls
-                // the migrator instead of gating) ship, existing v0.1 macros on disk will
-                // fail to load and the user loses visibility of them. Do not ship A1
-                // without A2+A3 to production.
-                if (macro.SchemaVersion != Macro.CurrentSchemaVersion)
-                {
-                    failures.Add(new LoadFailure(path,
-                        $"Schema version {macro.SchemaVersion} not supported (current: {Macro.CurrentSchemaVersion})."));
+                    failures.Add(new LoadFailure(path, "Migration returned null."));
                     continue;
                 }
                 loaded.Add(macro);
