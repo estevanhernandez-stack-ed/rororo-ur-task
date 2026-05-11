@@ -39,10 +39,19 @@ public sealed class MacroRecorder
     private const int WM_XBUTTONDOWN = 0x020B;
     private const int WM_XBUTTONUP = 0x020C;
 
+    // ~30Hz cap on WM_MOUSEMOVE captures. The low-level hook fires at ~100–250Hz
+    // depending on the mouse driver; replaying that flood saturates Roblox's
+    // message pump and stalls its render loop for the duration of playback.
+    // Clicks / scrolls / keyboard always record at full fidelity — only the
+    // in-between cursor sampling gets thinned. Click events carry their own
+    // (x,y) so positional accuracy is unaffected.
+    private const long MouseMoveMinIntervalMs = 33;
+
     private readonly object _lock = new();
     private List<MacroEvent>? _events;
     private Stopwatch? _clock;
     private HashSet<int>? _ignoredVkCodes;
+    private long _lastMouseMoveMs;
     private Thread? _hookThread;
     private uint _hookThreadId;
     private IntPtr _keyboardHook = IntPtr.Zero;
@@ -77,6 +86,7 @@ public sealed class MacroRecorder
             _ignoredVkCodes = ignoredVkCodes is { Count: > 0 }
                 ? new HashSet<int>(ignoredVkCodes)
                 : null;
+            _lastMouseMoveMs = -MouseMoveMinIntervalMs; // ensure the first move always records
             _readySignal = new ManualResetEventSlim(false);
             _installError = null;
 
@@ -212,8 +222,13 @@ public sealed class MacroRecorder
             switch (msg)
             {
                 case WM_MOUSEMOVE:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseMove, 0, info.pt.x, info.pt.y, 0, 0));
+                    var nowMs = _clock.ElapsedMilliseconds;
+                    if (nowMs - _lastMouseMoveMs >= MouseMoveMinIntervalMs)
+                    {
+                        _lastMouseMoveMs = nowMs;
+                        _events.Add(new MacroEvent(nowMs,
+                            MacroEventKind.MouseMove, 0, info.pt.x, info.pt.y, 0, 0));
+                    }
                     break;
                 case WM_LBUTTONDOWN:
                     _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
