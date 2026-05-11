@@ -12,7 +12,12 @@ namespace Labs626.UrTask.PluginHost;
 /// Stateless on purpose — callers (record start, playback pre-flight,
 /// playback continuous check) ask on demand. No polling loop lives here.
 /// </summary>
-internal sealed partial class ForegroundWatcher
+internal interface IForegroundWatcher
+{
+    AccountRegistry.AccountInfo? ResolveForegroundAccount();
+}
+
+internal sealed partial class ForegroundWatcher : IForegroundWatcher
 {
     private readonly AccountRegistry _registry;
 

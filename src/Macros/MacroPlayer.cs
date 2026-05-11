@@ -15,12 +15,21 @@ namespace Labs626.UrTask.Macros;
 /// SendInput calls happen on whichever thread Task.Delay continues on
 /// (thread pool by default) — Win32 doesn't care which thread sends input.
 /// </summary>
-internal sealed class MacroPlayer
+internal interface IMacroPlayer
 {
-    private readonly ForegroundWatcher _foreground;
+    bool IsPlaying { get; }
+    Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default);
+    bool Abort();
+    event EventHandler<PlaybackStartedArgs>? Started;
+    event EventHandler<PlaybackEndedArgs>? Ended;
+}
+
+internal sealed class MacroPlayer : IMacroPlayer
+{
+    private readonly IForegroundWatcher _foreground;
     private CancellationTokenSource? _activeCts;
 
-    public MacroPlayer(ForegroundWatcher foreground)
+    public MacroPlayer(IForegroundWatcher foreground)
     {
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
     }
