@@ -42,6 +42,7 @@ public sealed class MacroRecorder
     private readonly object _lock = new();
     private List<MacroEvent>? _events;
     private Stopwatch? _clock;
+    private HashSet<int>? _ignoredVkCodes;
     private Thread? _hookThread;
     private uint _hookThreadId;
     private IntPtr _keyboardHook = IntPtr.Zero;
@@ -58,8 +59,14 @@ public sealed class MacroRecorder
     /// Begin recording. Blocks until the hooks are installed (or installation
     /// fails). Throws on installation failure so the caller can surface it
     /// rather than recording into a black hole.
+    ///
+    /// <paramref name="ignoredVkCodes"/> — vkCodes (typically the hotkeys
+    /// registered with HotkeyService) that the recorder will silently drop
+    /// rather than capture. Without this, pressing F8 to stop recording
+    /// would bake the F8 keystroke into the macro and playback would echo
+    /// it back, triggering record-stop mid-playback.
     /// </summary>
-    public void Start()
+    public void Start(IReadOnlyCollection<int>? ignoredVkCodes = null)
     {
         lock (_lock)
         {
@@ -67,6 +74,9 @@ public sealed class MacroRecorder
 
             _events = new List<MacroEvent>(capacity: 1024);
             _clock = Stopwatch.StartNew();
+            _ignoredVkCodes = ignoredVkCodes is { Count: > 0 }
+                ? new HashSet<int>(ignoredVkCodes)
+                : null;
             _readySignal = new ManualResetEventSlim(false);
             _installError = null;
 
@@ -167,20 +177,27 @@ public sealed class MacroRecorder
         if (nCode >= 0 && _events is not null && _clock is not null)
         {
             var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            var msg = wParam.ToInt32();
-            MacroEventKind? kind = msg switch
+            var vkCode = (int)info.vkCode;
+
+            // Drop the configured hotkeys (F8 / F5 / Esc) so pressing them to
+            // control the plugin doesn't bake the keystroke into the macro.
+            if (_ignoredVkCodes is null || !_ignoredVkCodes.Contains(vkCode))
             {
-                WM_KEYDOWN or WM_SYSKEYDOWN => MacroEventKind.KeyDown,
-                WM_KEYUP or WM_SYSKEYUP => MacroEventKind.KeyUp,
-                _ => null,
-            };
-            if (kind is not null)
-            {
-                _events.Add(new MacroEvent(
-                    TimestampMs: _clock.ElapsedMilliseconds,
-                    Kind: kind.Value,
-                    VirtualKeyCode: (int)info.vkCode,
-                    X: 0, Y: 0, MouseButton: 0, WheelDelta: 0));
+                var msg = wParam.ToInt32();
+                MacroEventKind? kind = msg switch
+                {
+                    WM_KEYDOWN or WM_SYSKEYDOWN => MacroEventKind.KeyDown,
+                    WM_KEYUP or WM_SYSKEYUP => MacroEventKind.KeyUp,
+                    _ => null,
+                };
+                if (kind is not null)
+                {
+                    _events.Add(new MacroEvent(
+                        TimestampMs: _clock.ElapsedMilliseconds,
+                        Kind: kind.Value,
+                        VirtualKeyCode: vkCode,
+                        X: 0, Y: 0, MouseButton: 0, WheelDelta: 0));
+                }
             }
         }
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
