@@ -30,6 +30,21 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Tests need access to the plugin's internal types (PluginClient,
+         AccountRegistry, ForegroundWatcher, etc.). -->
+    <InternalsVisibleTo Include="rororo-ur-task.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The tests/ directory has its own csproj. Excluding the source files
+         here so the main project's implicit **/*.cs glob doesn't try to
+         compile them as part of the EXE. -->
+    <Compile Remove="tests\**\*.cs" />
+    <EmbeddedResource Remove="tests\**\*" />
+    <None Remove="tests\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Plugin icon — surfaced on RoRoRo's consent sheet via manifest.json, on
          the WPF window chrome via Window.Icon, and on the system tray icon.
          v0.1 ships the generic 626 brand mark; v0.1.1 lands a custom-rendered

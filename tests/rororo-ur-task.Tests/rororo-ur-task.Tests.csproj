@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>rororo-ur-task.Tests</AssemblyName>
+    <RootNamespace>Labs626.UrTask.Tests</RootNamespace>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.70.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Plugin under test -->
+    <ProjectReference Include="..\..\rororo-ur-task.csproj" />
+    <!-- ROROROblox.App for the host plumbing (PluginHostStartupService,
+         CapabilityInterceptor, PluginHostService, the registry interfaces).
+         Same shape ROROROblox.PluginTestHarness uses to spin up a real host. -->
+    <ProjectReference Include="..\..\..\ROROROblox\src\ROROROblox.App\ROROROblox.App.csproj" />
+    <ProjectReference Include="..\..\..\ROROROblox\src\ROROROblox.PluginContract\ROROROblox.PluginContract.csproj" />
+  </ItemGroup>
+
+</Project>

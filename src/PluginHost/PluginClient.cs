@@ -18,11 +18,12 @@ namespace Labs626.UrTask.PluginHost;
 /// </summary>
 internal sealed class PluginClient : IAsyncDisposable
 {
-    private const string PipeName = "rororo-plugin-host";
+    private const string DefaultPipeName = "rororo-plugin-host";
     private const string ContractVersion = "1.0";
     private const int ConnectTimeoutMs = 10_000;
 
     private readonly string _pluginId;
+    private readonly string _pipeName;
     private readonly AccountRegistry _accounts;
     private GrpcChannel? _channel;
     private RoRoRoHost.RoRoRoHostClient? _client;
@@ -30,10 +31,11 @@ internal sealed class PluginClient : IAsyncDisposable
     private Task? _exitedConsumer;
     private CancellationTokenSource? _consumerCts;
 
-    public PluginClient(string pluginId, AccountRegistry accounts)
+    public PluginClient(string pluginId, AccountRegistry accounts, string? pipeName = null)
     {
         _pluginId = pluginId ?? throw new ArgumentNullException(nameof(pluginId));
         _accounts = accounts ?? throw new ArgumentNullException(nameof(accounts));
+        _pipeName = pipeName ?? DefaultPipeName;
     }
 
     /// <summary>The RoRoRo host version reported by the handshake response.</summary>
@@ -49,7 +51,7 @@ internal sealed class PluginClient : IAsyncDisposable
             {
                 ConnectCallback = async (_, ict) =>
                 {
-                    var pipe = new NamedPipeClientStream(".", PipeName,
+                    var pipe = new NamedPipeClientStream(".", _pipeName,
                         PipeDirection.InOut, PipeOptions.Asynchronous);
                     try
                     {
@@ -59,7 +61,7 @@ internal sealed class PluginClient : IAsyncDisposable
                     {
                         pipe.Dispose();
                         throw new IOException(
-                            $"Named pipe '{PipeName}' not available after {ConnectTimeoutMs}ms. " +
+                            $"Named pipe '{_pipeName}' not available after {ConnectTimeoutMs}ms. " +
                             "Is RoRoRo running?");
                     }
                     return pipe;
