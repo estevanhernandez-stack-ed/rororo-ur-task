@@ -7,8 +7,9 @@ namespace Labs626.UrTask.Macros;
 /// <summary>
 /// Plays back recorded macros via SendInput, preserving original timing.
 /// The structural feature: pre-flight + continuous foreground checks against
-/// the macro's <see cref="Macro.RecordedAgainstUserId"/>. Mismatch at pre-flight
-/// refuses the playback outright; mismatch mid-playback aborts immediately.
+/// the explicit <c>targetUserId</c> passed to <see cref="PlayAsync"/>. Mismatch
+/// at pre-flight refuses the playback outright; mismatch mid-playback aborts
+/// immediately.
 ///
 /// Threading: <see cref="PlayAsync"/> runs as a regular async Task. The
 /// SendInput calls happen on whichever thread Task.Delay continues on
@@ -30,11 +31,12 @@ internal sealed class MacroPlayer
     public event EventHandler<PlaybackEndedArgs>? Ended;
 
     /// <summary>
-    /// Play the given macro. Pre-flight check: foreground window's user-id
-    /// must match macro.RecordedAgainstUserId. Mid-playback check: same, on every event.
-    /// Returns a <see cref="PlaybackResult"/> indicating outcome.
+    /// Play the given macro against the specified target user-id. Pre-flight check:
+    /// foreground window's user-id must match <paramref name="targetUserId"/>.
+    /// Mid-playback check: same, on every event. Returns a <see cref="PlaybackResult"/>
+    /// indicating outcome.
     /// </summary>
-    public async Task<PlaybackResult> PlayAsync(Macro macro, CancellationToken external = default)
+    public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
@@ -42,13 +44,13 @@ internal sealed class MacroPlayer
         var preflight = _foreground.ResolveForegroundAccount();
         if (preflight is null)
             return PlaybackResult.Refused("No RoRoRo-managed window is currently in the foreground.");
-        if (preflight.RobloxUserId != macro.RecordedAgainstUserId)
+        if (preflight.RobloxUserId != targetUserId)
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
-                $"macro was recorded against user {macro.RecordedAgainstUserId ?? -1} ({macro.RecordedAgainstDisplayName ?? "(unknown)"}).");
+                $"target is user {targetUserId}.");
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
-        Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight));
+        Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
 
         try
         {
@@ -63,10 +65,10 @@ internal sealed class MacroPlayer
                     await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
                 }
 
-                // Continuous foreground check. If the user alt-tabs to a non-bound
+                // Continuous foreground check. If the user alt-tabs to a non-target
                 // window mid-playback, refuse to send the input.
                 var fg = _foreground.ResolveForegroundAccount();
-                if (fg is null || fg.RobloxUserId != macro.RecordedAgainstUserId)
+                if (fg is null || fg.RobloxUserId != targetUserId)
                 {
                     return PlaybackResult.Aborted(
                         $"Foreground shifted to {(fg?.DisplayName ?? "non-RoRoRo window")} at event {i + 1}/{macro.Events.Count}.");
@@ -351,5 +353,5 @@ internal sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
 }
 
-internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo BoundAccount);
+internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo BoundAccount, long TargetUserId);
 internal sealed record PlaybackEndedArgs(Macro Macro);

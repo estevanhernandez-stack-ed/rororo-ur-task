@@ -47,7 +47,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player.Started += (_, args) =>
         {
             State = PluginState.Playing;
-            Log($"playback start: macro recorded against user {args.Macro.RecordedAgainstUserId} ({args.Macro.RecordedAgainstDisplayName ?? "(unknown)"})");
+            Log($"playback start: target user {args.TargetUserId} ({args.BoundAccount.DisplayName})");
         };
         _player.Ended += (_, _) =>
         {
@@ -142,11 +142,19 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 else StopAndSaveRecording();
                 break;
             case HotkeyKind.Play:
-                if (_lastMacro is null) Log("Ctrl+Shift+P ignored — no macro to play.");
-                else _ = Task.Run(async () =>
+                if (_lastMacro is null) { Log("Ctrl+Shift+P ignored — no macro to play."); break; }
+                _ = Task.Run(async () =>
                 {
-                    var result = await _player.PlayAsync(_lastMacro);
-                    Log($"playback result: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+                    // Smart default: play on whatever's in foreground if it's a RoRoRo-managed
+                    // alt. Phase D (target picker) wires up the fallback modal when not.
+                    var fg = _foreground.ResolveForegroundAccount();
+                    if (fg is null)
+                    {
+                        Log("Ctrl+Shift+P ignored — no RoRoRo alt in foreground (target picker lands in Phase D).");
+                        return;
+                    }
+                    var result = await _player.PlayAsync(_lastMacro, fg.RobloxUserId);
+                    Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
                 });
                 break;
             case HotkeyKind.Abort:
