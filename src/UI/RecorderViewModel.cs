@@ -57,7 +57,24 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(HasNoMacros));
             OnPropertyChanged(nameof(StatusMeta));
         };
-        _runtime.SequenceProgressed += p => SequenceProgress = p;
+        _runtime.SequenceProgressed += p =>
+        {
+            SequenceProgress = p;
+
+            // Auto-collapse to compact when a multi-alt sequence starts so the
+            // Roblox alt windows are visible behind the recorder. Restore prior
+            // compact state when the sequence ends. Single-alt plays don't
+            // trigger auto-collapse (too brief).
+            if (p.Phase == SequencePhase.Focusing && p.Index == 0 && p.Total > 1)
+            {
+                _wasCompactBeforeSequence = IsCompact;
+                IsCompact = true;
+            }
+            else if (p.Phase == SequencePhase.Done || p.Phase == SequencePhase.Aborted)
+            {
+                IsCompact = _wasCompactBeforeSequence;
+            }
+        };
     }
 
     // ---------- Collections ----------
@@ -92,6 +109,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     // ---------- v0.2: SequenceProgress ----------
 
     private SequenceProgress? _sequenceProgress;
+    private bool _wasCompactBeforeSequence;
     public SequenceProgress? SequenceProgress
     {
         get => _sequenceProgress;
