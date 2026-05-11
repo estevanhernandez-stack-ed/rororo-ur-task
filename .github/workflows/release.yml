@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout rororo-ur-task
+        uses: actions/checkout@v4
+        with:
+          path: rororo-ur-task
+
+      # ProjectReference in the csproj points at ..\ROROROblox\src\... so the
+      # PluginContract has to be on disk as a sibling repo. Until the contract
+      # publishes as a NuGet, this is the way.
+      - name: Checkout ROROROblox (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: estevanhernandez-stack-ed/ROROROblox
+          path: ROROROblox
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build plugin artifacts
+        shell: pwsh
+        working-directory: rororo-ur-task
+        run: ./build/build-plugin.ps1
+
+      - name: Show artifacts
+        shell: pwsh
+        working-directory: rororo-ur-task
+        run: |
+          Get-ChildItem artifacts -File
+          Get-Content artifacts/manifest.sha256
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rororo-ur-task/artifacts/manifest.json
+            rororo-ur-task/artifacts/manifest.sha256
+            rororo-ur-task/artifacts/plugin.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') }}
