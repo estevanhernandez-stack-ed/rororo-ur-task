@@ -56,6 +56,11 @@ public sealed class MacroStore
                     failures.Add(new LoadFailure(path, "Deserialization returned null."));
                     continue;
                 }
+                // BUG RISK — A1 bumped Macro.CurrentSchemaVersion to 2 without wiring in
+                // the v1->v2 migrator. Until A2 (MacroV1Migrator) and A3 (this method calls
+                // the migrator instead of gating) ship, existing v0.1 macros on disk will
+                // fail to load and the user loses visibility of them. Do not ship A1
+                // without A2+A3 to production.
                 if (macro.SchemaVersion != Macro.CurrentSchemaVersion)
                 {
                     failures.Add(new LoadFailure(path,

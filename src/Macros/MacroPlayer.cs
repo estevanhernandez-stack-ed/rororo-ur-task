@@ -45,7 +45,7 @@ internal sealed class MacroPlayer
         if (preflight.RobloxUserId != macro.RecordedAgainstUserId)
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
-                $"macro is bound to user {macro.RecordedAgainstUserId ?? -1} ({macro.RecordedAgainstDisplayName ?? "(unknown)"}).");
+                $"macro was recorded against user {macro.RecordedAgainstUserId ?? -1} ({macro.RecordedAgainstDisplayName ?? "(unknown)"}).");
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight));

@@ -23,6 +23,8 @@ internal sealed class AutoStopCoordinator
         _player = player ?? throw new ArgumentNullException(nameof(player));
         if (accounts is null) throw new ArgumentNullException(nameof(accounts));
 
+        // (Transitional: in Task B1, this becomes args.TargetUserId — the actual
+        // target passed to PlayAsync, not the macro's metadata.)
         _player.Started += (_, args) => _activeTargetUserId = args.Macro.RecordedAgainstUserId;
         _player.Ended += (_, _) => _activeTargetUserId = null;
         accounts.AccountRemoved += OnAccountRemoved;
