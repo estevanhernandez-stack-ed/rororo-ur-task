@@ -35,3 +35,6 @@ $RECYCLE.BIN/
 *.env
 .env.local
 secrets/
+
+# Superpowers brainstorming companion (local mockups)
+.superpowers/
