@@ -29,6 +29,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
         PlayMacroCommand = new RelayCommand<Macro>(m => { if (m is not null) _runtime.TriggerPlayMacro(m.Id); });
+        ToggleCompactCommand = new RelayCommand(() => IsCompact = !IsCompact);
 
         // Initialize pin state from saved prefs based on current compact mode (default: false / not compact).
         _isTopmost = _isCompact ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
@@ -91,6 +92,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand RecordCommand { get; }
     public ICommand StopCommand { get; }
     public ICommand PlayMacroCommand { get; }
+    public ICommand ToggleCompactCommand { get; }
 
     // ---------- Existing state properties ----------
 
