@@ -19,6 +19,7 @@ internal interface IMacroPlayer
 {
     bool IsPlaying { get; }
     Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default);
+    Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default);
     bool Abort();
     event EventHandler<PlaybackStartedArgs>? Started;
     event EventHandler<PlaybackEndedArgs>? Ended;
@@ -91,6 +92,40 @@ internal sealed class MacroPlayer : IMacroPlayer
         {
             return PlaybackResult.Aborted("Playback cancelled.");
         }
+        finally
+        {
+            Ended?.Invoke(this, new PlaybackEndedArgs(macro));
+            _activeCts?.Dispose();
+            _activeCts = null;
+        }
+    }
+
+    /// <summary>
+    /// Play an AllWindows macro raw — no foreground gating, no auto-stop. Replays
+    /// the recorded events as-is, including any window-switching clicks the user
+    /// captured during recording. Esc still aborts via <see cref="Abort"/>.
+    /// </summary>
+    public async Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
+    {
+        if (macro is null) throw new ArgumentNullException(nameof(macro));
+        if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
+
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        Started?.Invoke(this, new PlaybackStartedArgs(macro, BoundAccount: null, TargetUserId: 0));
+
+        try
+        {
+            var clock = Stopwatch.StartNew();
+            for (int i = 0; i < macro.Events.Count; i++)
+            {
+                var evt = macro.Events[i];
+                var wait = evt.TimestampMs - clock.ElapsedMilliseconds;
+                if (wait > 0) await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
+                SendMacroEvent(evt);
+            }
+            return PlaybackResult.Completed();
+        }
+        catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
         finally
         {
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
@@ -363,5 +398,5 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
 }
 
-internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo BoundAccount, long TargetUserId);
+internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo? BoundAccount, long TargetUserId);
 internal sealed record PlaybackEndedArgs(Macro Macro);

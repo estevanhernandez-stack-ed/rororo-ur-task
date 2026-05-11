@@ -23,7 +23,7 @@ internal sealed class AutoStopCoordinator
         _player = player ?? throw new ArgumentNullException(nameof(player));
         if (accounts is null) throw new ArgumentNullException(nameof(accounts));
 
-        _player.Started += (_, args) => _activeTargetUserId = args.TargetUserId;
+        _player.Started += (_, args) => _activeTargetUserId = args.TargetUserId == 0 ? null : args.TargetUserId;
         _player.Ended += (_, _) => _activeTargetUserId = null;
         accounts.AccountRemoved += OnAccountRemoved;
     }

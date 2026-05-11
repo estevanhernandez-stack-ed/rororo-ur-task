@@ -32,6 +32,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
+    private bool _allWindowsConfirmedThisSession;
 
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
@@ -52,7 +53,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player.Started += (_, args) =>
         {
             State = PluginState.Playing;
-            Log($"playback start: target user {args.TargetUserId} ({args.BoundAccount.DisplayName})");
+            Log(args.TargetUserId == 0
+                ? "playback start: multi-window (no target gating)"
+                : $"playback start: target user {args.TargetUserId} ({args.BoundAccount?.DisplayName ?? "(unknown)"})");
         };
         _player.Ended += (_, _) =>
         {
@@ -104,6 +107,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
         var macro = loaded.Macros.FirstOrDefault(m => m.Id == macroId);
         if (macro is null) { Log($"PlayMacro({macroId}) — macro not found."); return; }
 
+        if (macro.RecordMode == "AllWindows")
+        {
+            PlayAllWindowsMacro(macro);
+            return;
+        }
+
         var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
         if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
 
@@ -153,6 +162,38 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     /// <summary>Invoke the Esc path (abort).</summary>
     public void TriggerAbort() => OnHotkey(HotkeyKind.Abort);
+
+    private void PlayAllWindowsMacro(Macro macro)
+    {
+        if (!_allWindowsConfirmedThisSession)
+        {
+            bool confirmed = false;
+            var disp = Application.Current?.Dispatcher;
+            if (disp is not null)
+            {
+                disp.Invoke(() =>
+                {
+                    var dlg = new UI.MultiWindowConfirmDialog();
+                    var owner = Application.Current?.MainWindow;
+                    if (owner is not null) dlg.Owner = owner;
+                    confirmed = dlg.ShowDialog() == true;
+                });
+            }
+            if (!confirmed)
+            {
+                Log("Multi-window playback — cancelled.");
+                return;
+            }
+            _allWindowsConfirmedThisSession = true;
+        }
+
+        _lastMacro = macro;
+        _ = Task.Run(async () =>
+        {
+            var result = await _player.PlayAllWindowsRawAsync(macro);
+            Log($"multi-window playback: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+        });
+    }
 
     // ---------- Lifecycle ----------
 

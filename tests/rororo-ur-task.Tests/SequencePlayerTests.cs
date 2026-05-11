@@ -35,6 +35,12 @@ public class SequencePlayerTests
             return Task.FromResult(r);
         }
 
+        public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
+        {
+            // Not exercised by sequence tests but required by the interface.
+            return Task.FromResult(PlaybackResult.Completed());
+        }
+
         public bool Abort() => false;
     }
 
