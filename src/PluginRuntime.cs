@@ -40,6 +40,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
+    /// <summary>
+    /// When true (default), all mouse events are dropped during recording —
+    /// the recorded macro is keyboard-only. See MacroRecorder.Start for the
+    /// rationale (absolute-screen coords don't survive un-stacked alt windows).
+    /// </summary>
+    public bool RecordKeyboardOnly { get; set; } = true;
+
     public PluginRuntime()
     {
         Accounts = new AccountRegistry();
@@ -326,7 +333,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // HotkeyService.ChordHotkeyVkCodes.
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
-                chordIgnore: HotkeyService.ChordHotkeyVkCodes);
+                chordIgnore: HotkeyService.ChordHotkeyVkCodes,
+                ignoreMouseEvents: RecordKeyboardOnly);
             _recordingBoundAccount = account;
             State = PluginState.Recording;
             Log(CurrentRecordMode == RecordMode.AllWindows

@@ -76,6 +76,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // Initialize pin state from saved prefs based on current compact mode.
         _isTopmost = _isCompact ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
 
+        // Hydrate keyboard-only toggle from prefs onto the runtime so the first
+        // recording obeys the saved preference.
+        _runtime.RecordKeyboardOnly = _prefs.KeyboardOnlyRecording;
+
         _runtime.StateChanged += () =>
         {
             OnPropertyChanged(nameof(StateLabel));
@@ -240,6 +244,30 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         set => RecordMode = value ? RecordMode.AllWindows : RecordMode.PerWindow;
     }
 
+    // ---------- v0.2: Keyboard-only recording toggle ----------
+
+    /// <summary>
+    /// When true (default), mouse events are dropped during recording.
+    /// Persisted across sessions via <see cref="UserPreferences"/>. Inverse
+    /// (RecordMouseToo) exposed for the warning binding.
+    /// </summary>
+    public bool IsKeyboardOnlyRecording
+    {
+        get => _runtime.RecordKeyboardOnly;
+        set
+        {
+            if (_runtime.RecordKeyboardOnly == value) return;
+            _runtime.RecordKeyboardOnly = value;
+            _prefs.KeyboardOnlyRecording = value;
+            _prefs.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowMouseRecordingWarning));
+        }
+    }
+
+    /// <summary>True when mouse recording is enabled (inverse of IsKeyboardOnlyRecording). Drives the yellow stacking-warning visibility.</summary>
+    public bool ShowMouseRecordingWarning => !_runtime.RecordKeyboardOnly;
+
     // ---------- v0.2: IsCompact / IsTopmost ----------
 
     private bool _isCompact;
@@ -371,6 +399,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsNotPlaybackActive));
             OnPropertyChanged(nameof(StatusLabel));
             OnPropertyChanged(nameof(StatusMeta));
+            OnPropertyChanged(nameof(CurrentRunnerAltPid));
             // Refresh command CanExecute
             (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -378,6 +407,12 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }
+
+    /// <summary>
+    /// PID of the alt currently being visited by the runner (-1 when no runner active).
+    /// AssignmentRow XAML binds against this for "currently playing" row highlight.
+    /// </summary>
+    public int CurrentRunnerAltPid => _runnerProgress?.Current?.Alt.Pid ?? -1;
 
     public bool IsRunnerActive => _runnerProgress is { Phase: not AssignmentPhase.Stopped };
 

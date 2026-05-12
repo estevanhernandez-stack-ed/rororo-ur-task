@@ -175,6 +175,10 @@
             <local:PairedAltForMacroConverter x:Key="PairedAltForMacro" />
             <local:PairedAltVisibilityConverter x:Key="PairedAltVisibility" />
 
+            <!-- Multi-value converter: row int == current int → bool.
+                 Drives the active-alt-row outline during round-robin playback. -->
+            <local:IntEqualsConverter x:Key="IntEquals" />
+
             <!-- Small uppercase label, tracked. JetBrains-Mono-shaped vibe. -->
             <Style x:Key="MetaLabel" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />

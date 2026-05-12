@@ -52,6 +52,7 @@ public sealed class MacroRecorder
     private Stopwatch? _clock;
     private HashSet<int>? _alwaysIgnoredVkCodes;
     private HashSet<int>? _chordIgnoredVkCodes;
+    private bool _ignoreMouseEvents;
     private long _lastMouseMoveMs;
     private Thread? _hookThread;
     private uint _hookThreadId;
@@ -76,10 +77,19 @@ public sealed class MacroRecorder
     ///
     /// <paramref name="chordIgnore"/> — vkCodes dropped only when Ctrl+Shift is
     /// held (e.g. R/P for Ctrl+Shift+R/P). Bare 'r' and 'p' typing still records.
+    ///
+    /// <paramref name="ignoreMouseEvents"/> — when true, all mouse events (clicks,
+    /// moves, wheel, X-buttons) are dropped at the hook callback. Keyboard
+    /// recording is unchanged. Default true: mouse coordinates are absolute
+    /// screen pixels, so a recorded click at one screen position misses any alt
+    /// window not stacked at that same position — and worse, mis-clicks steal
+    /// foreground from the intended alt during round-robin replay. Users who
+    /// want mouse capture (with the stacking requirement) untick the toggle.
     /// </summary>
     public void Start(
         IReadOnlyCollection<int>? alwaysIgnore = null,
-        IReadOnlyCollection<int>? chordIgnore = null)
+        IReadOnlyCollection<int>? chordIgnore = null,
+        bool ignoreMouseEvents = true)
     {
         lock (_lock)
         {
@@ -93,6 +103,7 @@ public sealed class MacroRecorder
             _chordIgnoredVkCodes = chordIgnore is { Count: > 0 }
                 ? new HashSet<int>(chordIgnore)
                 : null;
+            _ignoreMouseEvents = ignoreMouseEvents;
             _lastMouseMoveMs = -MouseMoveMinIntervalMs; // ensure the first move always records
             _readySignal = new ManualResetEventSlim(false);
             _installError = null;
@@ -232,7 +243,7 @@ public sealed class MacroRecorder
 
     private IntPtr OnMouseEvent(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && _events is not null && _clock is not null)
+        if (nCode >= 0 && _events is not null && _clock is not null && !_ignoreMouseEvents)
         {
             var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
             var msg = wParam.ToInt32();

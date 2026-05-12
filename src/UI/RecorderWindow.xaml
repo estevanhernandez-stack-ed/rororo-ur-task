@@ -231,7 +231,7 @@
                     </Button>
                 </Grid>
 
-                <!-- Row 3: multi-window toggle -->
+                <!-- Row 3: recording-mode toggles (keyboard-only + multi-window) -->
                 <Border Grid.Row="3"
                         Margin="0,12,0,0"
                         Background="{StaticResource RowBgBrush}"
@@ -240,29 +240,63 @@
                         CornerRadius="6"
                         Padding="12,8"
                         Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <CheckBox Grid.Column="0"
-                                  IsChecked="{Binding IsRecordModeAllWindows, Mode=TwoWay}"
-                                  IsEnabled="{Binding IsNotPlaybackActive}"
-                                  VerticalAlignment="Center"
-                                  Margin="0,0,8,0" />
-                        <TextBlock Grid.Column="1"
-                                   Text="Record across all windows"
-                                   FontSize="11"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2"
-                                   Text="EXPERIMENTAL"
-                                   FontSize="8"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   VerticalAlignment="Center"
-                                   Margin="8,0,0,0" />
-                    </Grid>
+                    <StackPanel>
+                        <!-- Keyboard-only recording (default ON) -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding IsKeyboardOnlyRecording, Mode=TwoWay}"
+                                      IsEnabled="{Binding IsNotPlaybackActive}"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,8,0" />
+                            <TextBlock Grid.Column="1"
+                                       Text="Record keyboard only (recommended)"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+
+                        <!-- Warning visible only when mouse recording is enabled -->
+                        <TextBlock Text="Mouse events recorded — stack all alt windows at the same screen position for playback to land clicks correctly."
+                                   FontSize="9"
+                                   Foreground="{StaticResource MagentaBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="22,4,0,0"
+                                   Visibility="{Binding ShowMouseRecordingWarning, Converter={StaticResource BoolToVisibility}}" />
+
+                        <!-- Divider between the two toggles -->
+                        <Border Height="1"
+                                Background="{StaticResource DividerBrush}"
+                                Margin="0,8,0,8" />
+
+                        <!-- Multi-window recording (experimental) -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding IsRecordModeAllWindows, Mode=TwoWay}"
+                                      IsEnabled="{Binding IsNotPlaybackActive}"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,8,0" />
+                            <TextBlock Grid.Column="1"
+                                       Text="Record across all windows"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="2"
+                                       Text="EXPERIMENTAL"
+                                       FontSize="8"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0" />
+                        </Grid>
+                    </StackPanel>
                 </Border>
 
                 <!-- Row 4: macros area (shorter — click card to mark active for assignment) -->
@@ -301,6 +335,8 @@
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                    <Setter Property="BorderThickness" Value="1" />
+                                                    <Setter Property="Background" Value="{StaticResource BgBrush}" />
                                                     <Setter Property="Tag">
                                                         <Setter.Value>
                                                             <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
@@ -311,8 +347,13 @@
                                                         </Setter.Value>
                                                     </Setter>
                                                     <Style.Triggers>
+                                                        <!-- Active painter: thick cyan border + tinted background so the
+                                                             "loaded for assign" state is unambiguous against other paired
+                                                             cards that have their own chips drawing attention. -->
                                                         <Trigger Property="Tag" Value="True">
                                                             <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                            <Setter Property="BorderThickness" Value="2" />
+                                                            <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
                                                         </Trigger>
                                                     </Style.Triggers>
                                                 </Style>
@@ -484,13 +525,36 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Border Margin="6,3"
-                                                Background="{StaticResource BgBrush}"
-                                                BorderBrush="{StaticResource DividerBrush}"
-                                                BorderThickness="1"
                                                 CornerRadius="5"
                                                 Padding="10,7"
                                                 Cursor="Hand"
                                                 MouseLeftButtonDown="OnAssignmentRowClicked">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource BgBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                    <Setter Property="BorderThickness" Value="1" />
+                                                    <Setter Property="Tag">
+                                                        <Setter.Value>
+                                                            <MultiBinding Converter="{StaticResource IntEquals}" Mode="OneWay">
+                                                                <Binding Path="Alt.Pid" Mode="OneWay" />
+                                                                <Binding Path="DataContext.CurrentRunnerAltPid"
+                                                                         RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                         Mode="OneWay" />
+                                                            </MultiBinding>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                    <Style.Triggers>
+                                                        <!-- Active alt during cycle: cyan outline + tint so the row
+                                                             being played reads at a glance without window-hopping. -->
+                                                        <Trigger Property="Tag" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                            <Setter Property="BorderThickness" Value="2" />
+                                                            <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
