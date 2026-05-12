@@ -54,9 +54,9 @@ public partial class RecorderWindow : Window
         else
         {
             MinWidth = 440;
-            MinHeight = 520;
+            MinHeight = 580;
             Width = 520;
-            Height = 640;
+            Height = 720;
             SizeToContent = SizeToContent.Manual;
         }
     }
@@ -73,23 +73,28 @@ public partial class RecorderWindow : Window
             vm.IsCompact = !vm.IsCompact;
     }
 
+    // ── Macro card handlers ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Clicking anywhere on a macro card marks it as the active assignment macro
+    /// (cyan outline, "ACTIVE" chip). The card click replaces the old per-card
+    /// PLAY button — left-clicking = "I want to assign this macro."
+    /// </summary>
+    private void OnMacroCardClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is Labs626.UrTask.Macros.Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.MarkMacroActiveCommand.Execute(macro);
+        }
+    }
+
     private void OnMacroOverflowClicked(object sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.ContextMenu is not null)
         {
             btn.ContextMenu.PlacementTarget = btn;
             btn.ContextMenu.IsOpen = true;
-        }
-    }
-
-    private void OnMacroPlayOnMultipleClicked(object sender, RoutedEventArgs e)
-    {
-        if (sender is MenuItem mi
-            && DataContext is RecorderViewModel vm
-            && (mi.Tag as Labs626.UrTask.Macros.Macro
-                ?? ((mi.Parent as ContextMenu)?.PlacementTarget as FrameworkElement)?.Tag as Labs626.UrTask.Macros.Macro) is Labs626.UrTask.Macros.Macro macro)
-        {
-            vm.PlayMacroOnMultipleCommand.Execute(macro);
         }
     }
 
@@ -119,6 +124,21 @@ public partial class RecorderWindow : Window
             {
                 vm.DeleteMacro(macro);
             }
+        }
+    }
+
+    // ── Assignment row handler ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Clicking an alt row in the assignment panel commits (or clears) the active
+    /// macro to that alt. The toggle logic lives in ToggleAltAssignmentCommand.
+    /// </summary>
+    private void OnAssignmentRowClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is AssignmentRow row
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.ToggleAltAssignmentCommand.Execute(row);
         }
     }
 

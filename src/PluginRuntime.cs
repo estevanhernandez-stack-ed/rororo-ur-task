@@ -27,13 +27,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly MacroRecorder _recorder;
     private readonly MacroPlayer _player;
     private readonly SequencePlayer _sequence;
+    private readonly AssignmentRunner _runner;
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
-    private bool _allWindowsConfirmedThisSession;
     private bool _sequenceActive;
+
+    // ---------- Assignment state ----------
+    private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
 
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
@@ -48,6 +51,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground);
         _sequence = new SequencePlayer(_player, _foreground);
+        _runner = new AssignmentRunner(_player, _foreground);
+
         _sequence.Progress += (_, p) =>
         {
             SequenceProgressed?.Invoke(p);
@@ -61,6 +66,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(null));
             }
         };
+
+        _runner.Progress += (_, p) => RaiseUI(() => AssignmentProgressed?.Invoke(p));
+
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         _hotkeys = new HotkeyService();
@@ -117,10 +125,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action<string?>? CurrentlyPlayingMacroChanged;
     /// <summary>
     /// Fires whenever _lastMacro changes — record-save, any play path,
-    /// and on app-start load. Drives the Ctrl+Shift+P chord chip on the
-    /// last-played macro card.
+    /// and on app-start load. Kept for backward compat; assignment model
+    /// no longer drives Ctrl+Shift+P off this.
     /// </summary>
     public event Action<string?>? LastMacroChanged;
+
+    // ---------- Assignment events ----------
+    public event Action<int, Macro?>? AssignmentChanged;  // (altPid, newMacroOrNull)
+    public event Action? AssignmentsReset;
+    public event Action<AssignmentProgress>? AssignmentProgressed;
 
     /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
@@ -134,161 +147,35 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// <summary>Invoke the Ctrl+Shift+R path (record toggle). Hotkeys + UI buttons share the same handler.</summary>
     public void TriggerRecordToggle() => OnHotkey(HotkeyKind.RecordToggle);
 
-    /// <summary>Invoke the Ctrl+Shift+P path (play last on smart-default target).</summary>
-    public void TriggerPlayLast() => OnHotkey(HotkeyKind.Play);
-
-    /// <summary>
-    /// Smart-default per-card PLAY: play on the focused alt if a Roblox alt is
-    /// foreground, else open the picker in single-select mode as fallback.
-    /// AllWindows macros still route through the pre-flight confirm regardless.
-    /// </summary>
-    public void TriggerPlayMacro(string macroId)
-    {
-        var macro = LoadMacroById(macroId);
-        if (macro is null) return;
-
-        if (macro.RecordMode == "AllWindows")
-        {
-            PlayAllWindowsMacro(macro);
-            return;
-        }
-
-        var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
-        if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
-
-        var fg = _foreground.ResolveForegroundAccount();
-
-        _lastMacro = macro;
-        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
-
-        if (fg is not null)
-        {
-            // Smart default — play directly on focused alt, no modal.
-            _ = Task.Run(async () =>
-            {
-                var result = await _player.PlayAsync(macro, fg.RobloxUserId);
-                Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
-            });
-            return;
-        }
-
-        // Fallback: picker in single-select.
-        OpenPickerAndPlay(macro, alts, multiSelect: false);
-    }
-
-    /// <summary>
-    /// Explicit batch path wired from the ⋯ → "Play on multiple alts..." menu.
-    /// Always opens picker in multi-select mode.
-    /// </summary>
-    public void TriggerPlayMacroOnMultiple(string macroId)
-    {
-        var macro = LoadMacroById(macroId);
-        if (macro is null) return;
-
-        if (macro.RecordMode == "AllWindows")
-        {
-            Log("Multi-window macros are played raw — multi-alt batch doesn't apply.");
-            PlayAllWindowsMacro(macro);
-            return;
-        }
-
-        var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
-        if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
-
-        _lastMacro = macro;
-        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
-        OpenPickerAndPlay(macro, alts, multiSelect: true);
-    }
-
-    private Macro? LoadMacroById(string macroId)
-    {
-        var loaded = Store.LoadAll();
-        var macro = loaded.Macros.FirstOrDefault(m => m.Id == macroId);
-        if (macro is null) Log($"PlayMacro({macroId}) — macro not found.");
-        return macro;
-    }
-
-    private void OpenPickerAndPlay(Macro macro, List<AccountRegistry.AccountInfo> alts, bool multiSelect)
-    {
-        IReadOnlyList<AccountRegistry.AccountInfo>? selected = null;
-        var disp = Application.Current?.Dispatcher;
-        if (disp is not null)
-        {
-            disp.Invoke(() =>
-            {
-                var fg = _foreground.ResolveForegroundAccount();
-                long? preferredUserId = fg?.RobloxUserId ?? macro.RecordedAgainstUserId;
-                var picker = new UI.PlaybackTargetPickerWindow(macro.Name ?? "macro", alts, preferredUserId, multiSelect);
-                var owner = Application.Current?.MainWindow;
-                if (owner is not null) picker.Owner = owner;
-                if (picker.ShowDialog() == true) selected = picker.SelectedTargets;
-            });
-        }
-
-        if (selected is null || selected.Count == 0)
-        {
-            Log("Target picker — cancelled.");
-            return;
-        }
-
-        var targets = selected.ToList();
-        if (targets.Count == 1)
-        {
-            _ = Task.Run(async () =>
-            {
-                // Picker just closed → plugin recorder is foreground.
-                // AttachThreadInput flips focus to the chosen alt before preflight.
-                var target = targets[0];
-                Win32Focus.AttachAndFocus(target.Pid);
-                await Task.Delay(150).ConfigureAwait(false); // settle: give Windows time to register the flip
-                var result = await _player.PlayAsync(macro, target.RobloxUserId);
-                Log($"playback result on {target.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
-            });
-        }
-        else
-        {
-            _ = Task.Run(async () =>
-            {
-                var seqResult = await _sequence.PlayAsync(macro, targets);
-                Log($"sequence done: {seqResult.Completed}/{targets.Count} succeeded · {seqResult.Failed} failed · {seqResult.Skipped} skipped");
-            });
-        }
-    }
+    /// <summary>Fire the round-robin assignment loop. Ctrl+Shift+P hotkey + PLAY ASSIGNMENTS button share this path.</summary>
+    public void TriggerPlayAssignments() => OnHotkey(HotkeyKind.Play);
 
     /// <summary>Invoke the Esc path (abort).</summary>
     public void TriggerAbort() => OnHotkey(HotkeyKind.Abort);
 
-    private void PlayAllWindowsMacro(Macro macro)
-    {
-        if (!_allWindowsConfirmedThisSession)
-        {
-            bool confirmed = false;
-            var disp = Application.Current?.Dispatcher;
-            if (disp is not null)
-            {
-                disp.Invoke(() =>
-                {
-                    var dlg = new UI.MultiWindowConfirmDialog();
-                    var owner = Application.Current?.MainWindow;
-                    if (owner is not null) dlg.Owner = owner;
-                    confirmed = dlg.ShowDialog() == true;
-                });
-            }
-            if (!confirmed)
-            {
-                Log("Multi-window playback — cancelled.");
-                return;
-            }
-            _allWindowsConfirmedThisSession = true;
-        }
+    // ---------- Assignment commands ----------
 
-        _lastMacro = macro;
-        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
-        _ = Task.Run(async () =>
-        {
-            var result = await _player.PlayAllWindowsRawAsync(macro);
-            Log($"multi-window playback: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
-        });
+    public Macro? GetAssignment(int altPid) => _assignments.TryGetValue(altPid, out var m) ? m : null;
+
+    public IReadOnlyDictionary<int, Macro?> AllAssignments => _assignments;
+
+    public bool IsRunnerRunning => _runner.IsRunning;
+
+    public void AssignMacroToAlt(int altPid, Macro? macro)
+    {
+        if (macro is null) _assignments.Remove(altPid);
+        else _assignments[altPid] = macro;
+        Log(macro is null
+            ? $"assignment cleared: pid {altPid} → keep-alive (Space)"
+            : $"assignment: pid {altPid} → {macro.Name ?? "(unnamed)"}");
+        RaiseUI(() => AssignmentChanged?.Invoke(altPid, macro));
+    }
+
+    public void ResetAssignments()
+    {
+        _assignments.Clear();
+        Log("all assignments cleared.");
+        RaiseUI(() => AssignmentsReset?.Invoke());
     }
 
     // ---------- Lifecycle ----------
@@ -298,7 +185,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play · Esc abort.");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Esc abort.");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -343,58 +230,40 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 if (!_recorder.IsRecording) StartRecording();
                 else StopAndSaveRecording();
                 break;
+
             case HotkeyKind.Play:
-                if (_lastMacro is null) { Log("Ctrl+Shift+P ignored — no macro to play."); break; }
-                var lastMacro = _lastMacro;
+                var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+                if (alts.Count == 0)
+                {
+                    Log("PlayAssignments — no RoRoRo-managed alts running.");
+                    break;
+                }
+
+                // Build assignment list — every running alt gets a slot,
+                // unassigned = null macro (keep-alive Space).
+                var assignments = alts.Select(a =>
+                    new Assignment(a, _assignments.TryGetValue(a.Pid, out var m) ? m : null)).ToList();
+
+                var explicitCount = assignments.Count(a => a.Macro is not null);
+                var keepAliveCount = assignments.Count(a => a.Macro is null);
+                Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc to stop.");
+
                 _ = Task.Run(async () =>
                 {
-                    var fg = _foreground.ResolveForegroundAccount();
-                    if (fg is not null)
+                    try
                     {
-                        // Smart default: play on whatever RoRoRo-managed alt is in foreground.
-                        var result = await _player.PlayAsync(lastMacro, fg.RobloxUserId);
-                        Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
-                        return;
+                        await _runner.RunAsync(assignments);
+                        Log("Assignment loop stopped.");
                     }
-
-                    // Fallback: open picker in single-select mode so the user can choose a target.
-                    var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
-                    if (alts.Count == 0)
+                    catch (Exception ex)
                     {
-                        Log("Ctrl+Shift+P ignored — no RoRoRo-managed alts running.");
-                        return;
+                        Log($"Assignment loop error: {ex.Message}");
                     }
-
-                    AccountRegistry.AccountInfo? picked = null;
-                    var disp = Application.Current?.Dispatcher;
-                    if (disp is not null)
-                    {
-                        disp.Invoke(() =>
-                        {
-                            var picker = new UI.PlaybackTargetPickerWindow(
-                                lastMacro.Name ?? "macro",
-                                alts,
-                                preferredUserId: lastMacro.RecordedAgainstUserId,
-                                multiSelect: false);
-                            var owner = Application.Current?.MainWindow;
-                            if (owner is not null) picker.Owner = owner;
-                            if (picker.ShowDialog() == true && picker.SelectedTargets is { Count: > 0 } sel)
-                                picked = sel[0];
-                        });
-                    }
-
-                    if (picked is null)
-                    {
-                        Log("Ctrl+Shift+P — picker cancelled.");
-                        return;
-                    }
-
-                    var fallbackResult = await _player.PlayAsync(lastMacro, picked.RobloxUserId);
-                    Log($"playback result on {picked.DisplayName}: {fallbackResult.Outcome}{(fallbackResult.Reason is null ? "" : " — " + fallbackResult.Reason)}");
                 });
                 break;
+
             case HotkeyKind.Abort:
-                bool aborted = _sequence.Abort() | _player.Abort();
+                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort();
                 Log(aborted ? "Aborted (Esc)." : "Esc ignored — nothing playing.");
                 break;
         }

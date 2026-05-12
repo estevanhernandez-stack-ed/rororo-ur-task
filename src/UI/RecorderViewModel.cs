@@ -1,17 +1,18 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Input;
 using Labs626.UrTask.Macros;
+using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.UI;
 
 /// <summary>
 /// Binds <see cref="PluginRuntime"/> state to the recorder window. Observes
-/// runtime events (StateChanged, ConnectionChanged, StatusLogged,
-/// MacrosChanged, SequenceProgressed) and surfaces ICommand wrappers plus
-/// v0.2 bindable surface: SequenceProgress, IsCompact, IsTopmost, RecordMode,
-/// PlayMacroCommand, and derived status properties.
+/// runtime events and surfaces ICommand wrappers plus v0.2 bindable surface:
+/// SequenceProgress, IsCompact, IsTopmost, RecordMode, assignment table commands,
+/// and derived status properties.
 /// </summary>
 internal sealed class RecorderViewModel : INotifyPropertyChanged
 {
@@ -25,14 +26,42 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
+        Assignments = new ObservableCollection<AssignmentRow>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
-        PlayMacroCommand = new RelayCommand<Macro>(m => { if (m is not null) _runtime.TriggerPlayMacro(m.Id); });
-        PlayMacroOnMultipleCommand = new RelayCommand<Macro>(m => { if (m is not null) _runtime.TriggerPlayMacroOnMultiple(m.Id); });
         ToggleCompactCommand = new RelayCommand(() => IsCompact = !IsCompact);
 
-        // Initialize pin state from saved prefs based on current compact mode (default: false / not compact).
+        // Assignment commands
+        MarkMacroActiveCommand = new RelayCommand<Macro>(m => { if (m is not null) ActiveAssignmentMacro = m; });
+
+        ToggleAltAssignmentCommand = new RelayCommand<AssignmentRow>(row =>
+        {
+            if (row is null) return;
+            // Toggle: if this row already has the active macro assigned, clear it.
+            // Else, assign the active macro (which may be null = keep-alive).
+            if (row.AssignedMacro is not null && _activeAssignmentMacro is not null
+                && row.AssignedMacro.Id == _activeAssignmentMacro.Id)
+            {
+                _runtime.AssignMacroToAlt(row.Alt.Pid, null);
+            }
+            else
+            {
+                _runtime.AssignMacroToAlt(row.Alt.Pid, _activeAssignmentMacro);
+            }
+        });
+
+        ResetAssignmentsCommand = new RelayCommand(() => _runtime.ResetAssignments());
+
+        PlayAssignmentsCommand = new RelayCommand(
+            () => _runtime.TriggerPlayAssignments(),
+            () => Assignments.Count > 0 && !IsRunnerActive);
+
+        StopAssignmentsCommand = new RelayCommand(
+            () => _runtime.TriggerAbort(),
+            () => IsRunnerActive);
+
+        // Initialize pin state from saved prefs based on current compact mode.
         _isTopmost = _isCompact ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
 
         _runtime.StateChanged += () =>
@@ -65,18 +94,18 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(HasNoMacros));
             OnPropertyChanged(nameof(StatusMeta));
         };
-        _runtime.CurrentlyPlayingMacroChanged += id => CurrentlyPlayingMacroId = id;
-        _runtime.LastMacroChanged += id => LastMacroId = id;
-        LastMacroId = _runtime.LastMacro?.Id;
+        _runtime.CurrentlyPlayingMacroChanged += _ =>
+        {
+            // No longer drives card state but keep for potential future use.
+        };
+        _runtime.LastMacroChanged += _ =>
+        {
+            // LastMacro is kept on runtime but no longer drives a card chip.
+        };
 
         _runtime.SequenceProgressed += p =>
         {
             SequenceProgress = p;
-
-            // Auto-collapse to compact when a multi-alt sequence starts so the
-            // Roblox alt windows are visible behind the recorder. Restore prior
-            // compact state when the sequence ends. Single-alt plays don't
-            // trigger auto-collapse (too brief).
             if (p.Phase == SequencePhase.Focusing && p.Index == 0 && p.Total > 1)
             {
                 _wasCompactBeforeSequence = IsCompact;
@@ -87,20 +116,36 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
                 IsCompact = _wasCompactBeforeSequence;
             }
         };
+
+        // Assignment event handlers
+        _runtime.AssignmentChanged += (pid, macro) => RaiseUI(() => RefreshAssignmentRow(pid, macro));
+        _runtime.AssignmentsReset += () => RaiseUI(() => { foreach (var r in Assignments) r.AssignedMacro = null; });
+        _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
+
+        // Account add/remove updates rows live
+        _runtime.Accounts.AccountAdded += (_, info) => RaiseUI(() => AddAssignmentRow(info));
+        _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() => RemoveAssignmentRow(info.Pid));
+
+        // Seed current alts on construction
+        foreach (var alt in _runtime.Accounts.Snapshot()) AddAssignmentRow(alt);
     }
 
     // ---------- Collections ----------
 
     public ObservableCollection<Macro> Macros { get; }
     public ObservableCollection<string> StatusLines { get; }
+    public ObservableCollection<AssignmentRow> Assignments { get; }
 
     // ---------- Commands ----------
 
     public ICommand RecordCommand { get; }
     public ICommand StopCommand { get; }
-    public ICommand PlayMacroCommand { get; }
-    public ICommand PlayMacroOnMultipleCommand { get; }
     public ICommand ToggleCompactCommand { get; }
+    public ICommand MarkMacroActiveCommand { get; }
+    public ICommand ToggleAltAssignmentCommand { get; }
+    public ICommand ResetAssignmentsCommand { get; }
+    public ICommand PlayAssignmentsCommand { get; }
+    public ICommand StopAssignmentsCommand { get; }
 
     // ---------- Existing state properties ----------
 
@@ -143,8 +188,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
     public bool IsSequencePlaying => _sequenceProgress is { Phase: not SequencePhase.Done and not SequencePhase.Aborted };
 
-    /// <summary>True when any single-macro or multi-alt sequence playback is active.</summary>
-    public bool IsAnyPlaybackActive => IsPlaying || IsSequencePlaying;
+    /// <summary>True when any single-macro, multi-alt sequence, or assignment-loop playback is active.</summary>
+    public bool IsAnyPlaybackActive => IsRecording || IsPlaying || IsSequencePlaying || IsRunnerActive;
 
     /// <summary>Inverse of <see cref="IsAnyPlaybackActive"/> — drives IsEnabled bindings.</summary>
     public bool IsNotPlaybackActive => !IsAnyPlaybackActive;
@@ -186,7 +231,6 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             _isCompact = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsNotCompact));
-            // Switch pin state to whichever mode's preference.
             var prefTopmost = value ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
             if (_isTopmost != prefTopmost)
             {
@@ -213,58 +257,72 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         }
     }
 
+    // ---------- Assignment: ActiveAssignmentMacro ----------
+
+    private Macro? _activeAssignmentMacro;
+    public Macro? ActiveAssignmentMacro
+    {
+        get => _activeAssignmentMacro;
+        private set
+        {
+            if (Equals(_activeAssignmentMacro, value)) return;
+            _activeAssignmentMacro = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ActiveAssignmentMacroId));
+            OnPropertyChanged(nameof(HasActiveAssignment));
+            OnPropertyChanged(nameof(ActiveAssignmentName));
+            OnPropertyChanged(nameof(StatusLabel));
+            OnPropertyChanged(nameof(StatusMeta));
+        }
+    }
+
+    public string? ActiveAssignmentMacroId => _activeAssignmentMacro?.Id;
+    public bool HasActiveAssignment => _activeAssignmentMacro is not null;
+    public string ActiveAssignmentName => _activeAssignmentMacro?.Name ?? "(none)";
+
+    // ---------- Assignment: RunnerProgress ----------
+
+    private AssignmentProgress? _runnerProgress;
+    public AssignmentProgress? RunnerProgress
+    {
+        get => _runnerProgress;
+        private set
+        {
+            if (Equals(_runnerProgress, value)) return;
+            _runnerProgress = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRunnerActive));
+            OnPropertyChanged(nameof(IsAnyPlaybackActive));
+            OnPropertyChanged(nameof(IsNotPlaybackActive));
+            OnPropertyChanged(nameof(StatusLabel));
+            OnPropertyChanged(nameof(StatusMeta));
+            // Refresh command CanExecute
+            (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool IsRunnerActive => _runnerProgress is { Phase: not AssignmentPhase.Stopped };
+
     // ---------- v0.2: Status pill ----------
 
-    public string StatusLabel => (IsRecording, IsPlaying, IsSequencePlaying) switch
+    public string StatusLabel => (IsRecording, IsRunnerActive, IsSequencePlaying, IsPlaying) switch
     {
-        (true, _, _) => "Recording",
-        (_, _, true) => $"Playing {_sequenceProgress!.CurrentAlt?.DisplayName ?? "..."}",
-        (_, true, _) => "Playing",
-        _ => "Idle",
+        (true, _, _, _) => "Recording",
+        (_, true, _, _) => $"Running · {_runnerProgress!.Current?.Alt.DisplayName ?? "..."}",
+        (_, _, true, _) => $"Playing {_sequenceProgress!.CurrentAlt?.DisplayName ?? "..."}",
+        (_, _, _, true) => "Playing",
+        _ => HasActiveAssignment ? $"Ready · {ActiveAssignmentName} loaded" : "Idle",
     };
 
-    public string StatusMeta => (IsRecording, IsSequencePlaying) switch
+    public string StatusMeta => (IsRecording, IsRunnerActive, IsSequencePlaying) switch
     {
-        (true, _) => $"recording in {_runtime.CurrentRecordMode} mode",
-        (_, true) => $"alt {_sequenceProgress!.Index + 1} of {_sequenceProgress.Total} · {_sequenceProgress.Completed} succeeded, {_sequenceProgress.Failed} failed",
-        _ => $"{Macros.Count} macros",
+        (true, _, _) => $"recording in {_runtime.CurrentRecordMode} mode",
+        (_, true, _) => $"cycle {_runnerProgress!.Cycle} · alt {_runnerProgress.IndexInCycle + 1}/{_runnerProgress.TotalInCycle} · "
+                        + (_runnerProgress.Current?.Macro?.Name ?? "keep-alive"),
+        (_, _, true) => $"alt {_sequenceProgress!.Index + 1} of {_sequenceProgress.Total} · {_sequenceProgress.Completed} succeeded, {_sequenceProgress.Failed} failed",
+        _ => HasActiveAssignment ? "Ctrl+Shift+P starts the loop · Esc stops" : $"{Macros.Count} macros · pick one to assign",
     };
-
-    // ---------- v0.2: CurrentlyPlayingMacroId ----------
-
-    private string? _currentlyPlayingMacroId;
-    /// <summary>
-    /// The Id of the macro currently playing, or null when idle. Drives the
-    /// card cyan outline and PLAY → PLAYING badge via MacroIdEqualsCurrentConverter.
-    /// </summary>
-    public string? CurrentlyPlayingMacroId
-    {
-        get => _currentlyPlayingMacroId;
-        private set
-        {
-            if (_currentlyPlayingMacroId == value) return;
-            _currentlyPlayingMacroId = value;
-            OnPropertyChanged();
-        }
-    }
-
-    // ---------- v0.2: LastMacroId (Ctrl+Shift+P chord chip) ----------
-
-    private string? _lastMacroId;
-    /// <summary>
-    /// The Id of the last-played/recorded macro. Drives the Ctrl+Shift+P
-    /// chord chip on the corresponding macro card via MacroIdEqualsCurrentConverter.
-    /// </summary>
-    public string? LastMacroId
-    {
-        get => _lastMacroId;
-        private set
-        {
-            if (_lastMacroId == value) return;
-            _lastMacroId = value;
-            OnPropertyChanged();
-        }
-    }
 
     // ---------- v0.2: Empty-state helpers ----------
 
@@ -286,6 +344,36 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         if (macro is null) return;
         _runtime.Store.Delete(macro.Id);
         _runtime.RaiseMacrosChanged();
+    }
+
+    // ---------- Assignment helpers ----------
+
+    private void AddAssignmentRow(AccountRegistry.AccountInfo alt)
+    {
+        if (Assignments.Any(r => r.Alt.Pid == alt.Pid)) return;
+        var existing = _runtime.GetAssignment(alt.Pid);
+        Assignments.Add(new AssignmentRow(alt) { AssignedMacro = existing });
+    }
+
+    private void RemoveAssignmentRow(int pid)
+    {
+        var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
+        if (row is not null) Assignments.Remove(row);
+    }
+
+    private void RefreshAssignmentRow(int pid, Macro? macro)
+    {
+        var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
+        if (row is not null) row.AssignedMacro = macro;
+    }
+
+    // ---------- Dispatcher helper ----------
+
+    private static void RaiseUI(Action callback)
+    {
+        var disp = Application.Current?.Dispatcher;
+        if (disp is null || disp.CheckAccess()) callback();
+        else disp.BeginInvoke(callback);
     }
 
     // ---------- INPC ----------

@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RoRoRo Ur Task"
         Icon="pack://application:,,,/icon.png"
-        Width="520" Height="640"
-        MinWidth="440" MinHeight="520"
+        Width="520" Height="720"
+        MinWidth="440" MinHeight="580"
         Background="{StaticResource BgBrush}"
         Foreground="{StaticResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
@@ -80,17 +80,18 @@
                 </StackPanel>
             </Grid>
 
-            <!-- Existing window content -->
+            <!-- Window content -->
             <Grid Grid.Row="1" Margin="20,0,20,18">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" /> <!-- 0: header -->
                     <RowDefinition Height="Auto" /> <!-- 1: status pill -->
-                    <RowDefinition Height="Auto" /> <!-- 2: buttons -->
+                    <RowDefinition Height="Auto" /> <!-- 2: buttons (RECORD / ABORT) -->
                     <RowDefinition Height="Auto" /> <!-- 3: multi-window toggle -->
-                    <RowDefinition Height="*" />    <!-- 4: macros area -->
-                    <RowDefinition Height="Auto" /> <!-- 5: activity log header -->
-                    <RowDefinition Height="100" />  <!-- 6: activity log -->
-                    <RowDefinition Height="Auto" /> <!-- 7: footer -->
+                    <RowDefinition Height="140" />  <!-- 4: macros area (fixed height — shorter than before) -->
+                    <RowDefinition Height="Auto" /> <!-- 5: assignments panel -->
+                    <RowDefinition Height="Auto" /> <!-- 6: activity log header -->
+                    <RowDefinition Height="100" />  <!-- 7: activity log -->
+                    <RowDefinition Height="Auto" /> <!-- 8: footer -->
                 </Grid.RowDefinitions>
 
                 <!-- Row 0: header -->
@@ -149,6 +150,9 @@
                                 <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
                                     <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
                                 </DataTrigger>
+                                <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
+                                    <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
@@ -172,6 +176,9 @@
                                             <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
                                             <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -258,7 +265,7 @@
                     </Grid>
                 </Border>
 
-                <!-- Row 4: macros area -->
+                <!-- Row 4: macros area (shorter — click card to mark active for assignment) -->
                 <Border Grid.Row="4"
                         Margin="0,12,0,0"
                         Background="{StaticResource RowBgBrush}"
@@ -283,11 +290,14 @@
                             <ItemsControl ItemsSource="{Binding Macros}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
+                                        <!-- Clicking the card marks it as the active assignment macro -->
                                         <Border Margin="6"
                                                 Background="{StaticResource BgBrush}"
                                                 BorderThickness="1"
                                                 CornerRadius="6"
-                                                Padding="11,9">
+                                                Padding="11,9"
+                                                Cursor="Hand"
+                                                MouseLeftButtonDown="OnMacroCardClicked">
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
@@ -295,7 +305,7 @@
                                                         <Setter.Value>
                                                             <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
                                                                 <Binding Path="Id" />
-                                                                <Binding Path="DataContext.CurrentlyPlayingMacroId"
+                                                                <Binding Path="DataContext.ActiveAssignmentMacroId"
                                                                          RelativeSource="{RelativeSource AncestorType=Window}" />
                                                             </MultiBinding>
                                                         </Setter.Value>
@@ -316,44 +326,13 @@
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
-                                                        <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Grid.Column="0"
                                                                Text="{Binding Name, FallbackValue='(unnamed)'}"
                                                                FontSize="12"
                                                                FontWeight="SemiBold" />
+                                                    <!-- ⋯ overflow: Rename + Delete only (Play on multiple removed) -->
                                                     <Button Grid.Column="1"
-                                                            Padding="9,3"
-                                                            FontSize="10"
-                                                            Command="{Binding DataContext.PlayMacroCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                            CommandParameter="{Binding}">
-                                                        <Button.Style>
-                                                            <Style TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
-                                                                <Setter Property="Content" Value="PLAY" />
-                                                                <Setter Property="Padding" Value="9,3" />
-                                                                <Setter Property="FontSize" Value="10" />
-                                                                <Setter Property="Tag">
-                                                                    <Setter.Value>
-                                                                        <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
-                                                                            <Binding Path="Id" />
-                                                                            <Binding Path="DataContext.CurrentlyPlayingMacroId"
-                                                                                     RelativeSource="{RelativeSource AncestorType=Window}" />
-                                                                        </MultiBinding>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                                <Style.Triggers>
-                                                                    <Trigger Property="Tag" Value="True">
-                                                                        <Setter Property="Content" Value="PLAYING" />
-                                                                        <Setter Property="IsEnabled" Value="False" />
-                                                                    </Trigger>
-                                                                    <DataTrigger Binding="{Binding DataContext.IsAnyPlaybackActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
-                                                                        <Setter Property="IsEnabled" Value="False" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Button.Style>
-                                                    </Button>
-                                                    <Button Grid.Column="2"
                                                             Content="&#x22EF;"
                                                             FontSize="14"
                                                             Foreground="{StaticResource MutedTextBrush}"
@@ -362,13 +341,10 @@
                                                             Padding="6,0"
                                                             Margin="6,0,0,0"
                                                             VerticalAlignment="Center"
-                                                            IsEnabled="{Binding DataContext.IsNotPlaybackActive, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             Click="OnMacroOverflowClicked"
                                                             Tag="{Binding}">
                                                         <Button.ContextMenu>
                                                             <ContextMenu>
-                                                                <MenuItem Header="Play on multiple alts..." Click="OnMacroPlayOnMultipleClicked" Tag="{Binding}" />
-                                                                <Separator />
                                                                 <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
                                                                 <MenuItem Header="Delete" Click="OnMacroDeleteClicked" Tag="{Binding}" />
                                                             </ContextMenu>
@@ -384,7 +360,7 @@
                                                         <Run Text="&#x00B7;" />
                                                         <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
                                                     </TextBlock>
-                                                    <!-- Ctrl+Shift+P chord chip — visible only on the last-played macro card -->
+                                                    <!-- ACTIVE chip — visible when this card is the active assignment macro -->
                                                     <Border Background="{StaticResource RowBgBrush}"
                                                             BorderBrush="{StaticResource CyanBrush}"
                                                             BorderThickness="1"
@@ -399,7 +375,7 @@
                                                                     <Setter.Value>
                                                                         <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
                                                                             <Binding Path="Id" />
-                                                                            <Binding Path="DataContext.LastMacroId"
+                                                                            <Binding Path="DataContext.ActiveAssignmentMacroId"
                                                                                      RelativeSource="{RelativeSource AncestorType=Window}" />
                                                                         </MultiBinding>
                                                                     </Setter.Value>
@@ -411,7 +387,7 @@
                                                                 </Style.Triggers>
                                                             </Style>
                                                         </Border.Style>
-                                                        <TextBlock Text="Ctrl+Shift+P"
+                                                        <TextBlock Text="ACTIVE"
                                                                    FontFamily="{StaticResource MonoFont}"
                                                                    FontSize="8"
                                                                    Foreground="{StaticResource CyanBrush}" />
@@ -426,8 +402,126 @@
                     </Grid>
                 </Border>
 
-                <!-- Row 5: activity log header -->
-                <TextBlock Grid.Row="5"
+                <!-- Row 5: assignments panel -->
+                <Border Grid.Row="5"
+                        Margin="0,12,0,0"
+                        Background="{StaticResource RowBgBrush}"
+                        BorderBrush="{StaticResource DividerBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="0"
+                        Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /> <!-- header -->
+                            <RowDefinition Height="*" />    <!-- rows -->
+                            <RowDefinition Height="Auto" /> <!-- footer: PLAY + STOP -->
+                        </Grid.RowDefinitions>
+
+                        <!-- Assignments header -->
+                        <Border Grid.Row="0" Padding="11,9,11,7">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="ASSIGNMENTS"
+                                           FontFamily="{StaticResource MonoFont}"
+                                           FontSize="9"
+                                           Foreground="{StaticResource CyanBrush}" />
+                                <TextBlock Text="Click a macro to mark it · click an alt row to assign · unassigned alts get keep-alive (Space)"
+                                           FontSize="9"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Margin="0,3,0,0"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="RESET"
+                                    FontSize="9"
+                                    Padding="9,3"
+                                    Command="{Binding ResetAssignmentsCommand}" />
+                          </Grid>
+                        </Border>
+
+                        <!-- Assignment rows -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="160">
+                            <ItemsControl ItemsSource="{Binding Assignments}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="6,3"
+                                                Background="{StaticResource BgBrush}"
+                                                BorderBrush="{StaticResource DividerBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="5"
+                                                Padding="10,7"
+                                                Cursor="Hand"
+                                                MouseLeftButtonDown="OnAssignmentRowClicked">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding DisplayMacroName}"
+                                                               FontSize="10"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Margin="0,2,0,0" />
+                                                </StackPanel>
+                                                <Border Grid.Column="1"
+                                                        Background="{StaticResource RowBgBrush}"
+                                                        BorderBrush="{StaticResource CyanBrush}"
+                                                        BorderThickness="1"
+                                                        CornerRadius="3"
+                                                        Padding="6,2"
+                                                        VerticalAlignment="Center"
+                                                        Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
+                                                    <TextBlock Text="ASSIGNED"
+                                                               FontSize="8"
+                                                               Foreground="{StaticResource CyanBrush}"
+                                                               FontWeight="SemiBold" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <!-- Footer: PLAY ASSIGNMENTS + STOP -->
+                        <Border Grid.Row="2" Padding="11,8,11,11">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Padding="0,8"
+                                    Command="{Binding PlayAssignmentsCommand}">
+                                <StackPanel>
+                                    <TextBlock Text="PLAY ASSIGNMENTS" FontSize="11" FontWeight="SemiBold" />
+                                    <TextBlock Text="Ctrl+Shift+P" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Padding="0,8"
+                                    Command="{Binding StopAssignmentsCommand}">
+                                <StackPanel>
+                                    <TextBlock Text="STOP" FontSize="11" />
+                                    <TextBlock Text="Esc" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Button>
+                          </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- Row 6: activity log header -->
+                <TextBlock Grid.Row="6"
                            Text="ACTIVITY"
                            FontFamily="{StaticResource MonoFont}"
                            FontSize="9"
@@ -435,8 +529,8 @@
                            Margin="0,12,0,0"
                            Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}" />
 
-                <!-- Row 6: activity log -->
-                <Border Grid.Row="6"
+                <!-- Row 7: activity log -->
+                <Border Grid.Row="7"
                         Margin="0,4,0,0"
                         Background="{StaticResource RowBgBrush}"
                         BorderBrush="{StaticResource DividerBrush}"
@@ -465,8 +559,8 @@
                     </ListBox>
                 </Border>
 
-                <!-- Row 7: footer -->
-                <Border Grid.Row="7" Margin="0,12,0,0" Padding="0,8,0,0"
+                <!-- Row 8: footer -->
+                <Border Grid.Row="8" Margin="0,12,0,0" Padding="0,8,0,0"
                         BorderBrush="{StaticResource DividerBrush}"
                         BorderThickness="0,1,0,0"
                         Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
