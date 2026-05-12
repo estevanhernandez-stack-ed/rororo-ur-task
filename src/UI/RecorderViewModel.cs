@@ -219,6 +219,23 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public bool HasMacros => Macros.Count > 0;
     public bool HasNoMacros => Macros.Count == 0;
 
+    // ---------- Macro mutations ----------
+
+    public void RenameMacro(Macro macro, string newName)
+    {
+        if (macro is null || string.IsNullOrWhiteSpace(newName)) return;
+        var renamed = macro with { Name = newName };
+        _runtime.Store.Save(renamed);
+        _runtime.RaiseMacrosChanged();
+    }
+
+    public void DeleteMacro(Macro macro)
+    {
+        if (macro is null) return;
+        _runtime.Store.Delete(macro.Id);
+        _runtime.RaiseMacrosChanged();
+    }
+
     // ---------- INPC ----------
 
     public event PropertyChangedEventHandler? PropertyChanged;

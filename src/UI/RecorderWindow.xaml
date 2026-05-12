@@ -71,10 +71,25 @@
         <!-- Row 1: status pill -->
         <Border Grid.Row="1"
                 Background="{StaticResource RowBgBrush}"
-                BorderBrush="{StaticResource DividerBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
                 Padding="14,10">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource MagentaBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -83,8 +98,24 @@
                 <Ellipse Grid.Column="0"
                          Width="8" Height="8"
                          Margin="0,0,10,0"
-                         VerticalAlignment="Top"
-                         Fill="{StaticResource MutedTextBrush}" />
+                         VerticalAlignment="Top">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{StaticResource MutedTextBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                    <Setter Property="Fill" Value="{StaticResource MagentaBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                    <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
+                                    <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
                 <StackPanel Grid.Column="1">
                     <TextBlock Text="{Binding StatusLabel}"
                                FontFamily="{StaticResource DisplayFont}"
@@ -216,12 +247,24 @@
                                                     FontSize="10"
                                                     Command="{Binding DataContext.PlayMacroCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}" />
-                                            <TextBlock Grid.Column="2"
-                                                       Text="&#x22EF;"
-                                                       FontSize="14"
-                                                       Foreground="{StaticResource MutedTextBrush}"
-                                                       Margin="6,0,0,0"
-                                                       VerticalAlignment="Center" />
+                                            <Button Grid.Column="2"
+                                                    Content="&#x22EF;"
+                                                    FontSize="14"
+                                                    Foreground="{StaticResource MutedTextBrush}"
+                                                    Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Padding="6,0"
+                                                    Margin="6,0,0,0"
+                                                    VerticalAlignment="Center"
+                                                    Click="OnMacroOverflowClicked"
+                                                    Tag="{Binding}">
+                                                <Button.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
+                                                        <MenuItem Header="Delete" Click="OnMacroDeleteClicked" Tag="{Binding}" />
+                                                    </ContextMenu>
+                                                </Button.ContextMenu>
+                                            </Button>
                                         </Grid>
                                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
                                             <TextBlock FontSize="9" Foreground="{StaticResource MutedTextBrush}">

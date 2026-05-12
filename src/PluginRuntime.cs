@@ -39,6 +39,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public PluginRuntime()
     {
         Accounts = new AccountRegistry();
+        Accounts.AccountAdded += (_, info) =>
+            Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+        Accounts.AccountRemoved += (_, info) =>
+            Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground);
@@ -86,6 +90,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action? ConnectionChanged;
     public event Action? MacrosChanged;
     public event Action<SequenceProgress>? SequenceProgressed;
+
+    /// <summary>
+    /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
+    /// in-place mutations (Rename, Delete) that go directly through MacroStore.
+    /// </summary>
+    public void RaiseMacrosChanged() => RaiseUI(() => MacrosChanged?.Invoke());
 
     /// <summary>Foreground resolution at this instant. UI polls this on a 250ms timer.</summary>
     public AccountRegistry.AccountInfo? ResolveForegroundNow() => _foreground.ResolveForegroundAccount();

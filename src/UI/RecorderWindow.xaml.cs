@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
+using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.UI;
 
@@ -69,5 +71,46 @@ public partial class RecorderWindow : Window
     {
         if (DataContext is RecorderViewModel vm)
             vm.IsCompact = !vm.IsCompact;
+    }
+
+    private void OnMacroOverflowClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.ContextMenu is not null)
+        {
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
+    }
+
+    private void OnMacroRenameClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            var dlg = new RenameMacroDialog(macro.Name ?? "")
+            {
+                Owner = this,
+            };
+            if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.NewName))
+            {
+                vm.RenameMacro(macro, dlg.NewName.Trim());
+            }
+        }
+    }
+
+    private void OnMacroDeleteClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            var result = MessageBox.Show(this,
+                $"Delete macro \"{macro.Name ?? "(unnamed)"}\"?\nThis can't be undone.",
+                "Delete macro",
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (result == MessageBoxResult.OK)
+            {
+                vm.DeleteMacro(macro);
+            }
+        }
     }
 }
