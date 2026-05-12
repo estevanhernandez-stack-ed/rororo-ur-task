@@ -62,6 +62,9 @@ internal sealed class MacroPlayer : IMacroPlayer
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
 
+        var heldKeys = new HashSet<int>();      // VK codes currently down
+        var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
+
         try
         {
             var clock = Stopwatch.StartNew();
@@ -85,6 +88,7 @@ internal sealed class MacroPlayer : IMacroPlayer
                 }
 
                 SendMacroEvent(evt);
+                TrackHeldState(evt, heldKeys, heldButtons);
             }
             return PlaybackResult.Completed();
         }
@@ -94,6 +98,7 @@ internal sealed class MacroPlayer : IMacroPlayer
         }
         finally
         {
+            ReleaseHeldState(heldKeys, heldButtons);
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -113,6 +118,9 @@ internal sealed class MacroPlayer : IMacroPlayer
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, BoundAccount: null, TargetUserId: 0));
 
+        var heldKeys = new HashSet<int>();      // VK codes currently down
+        var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
+
         try
         {
             var clock = Stopwatch.StartNew();
@@ -122,12 +130,14 @@ internal sealed class MacroPlayer : IMacroPlayer
                 var wait = evt.TimestampMs - clock.ElapsedMilliseconds;
                 if (wait > 0) await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
                 SendMacroEvent(evt);
+                TrackHeldState(evt, heldKeys, heldButtons);
             }
             return PlaybackResult.Completed();
         }
         catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
         finally
         {
+            ReleaseHeldState(heldKeys, heldButtons);
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -145,6 +155,64 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (cts is null) return false;
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with finally */ }
         return true;
+    }
+
+    // ---------- Held-state tracking + release ----------
+
+    private static void TrackHeldState(MacroEvent evt, HashSet<int> heldKeys, HashSet<int> heldButtons)
+    {
+        switch (evt.Kind)
+        {
+            case MacroEventKind.KeyDown:
+                heldKeys.Add(evt.VirtualKeyCode);
+                break;
+            case MacroEventKind.KeyUp:
+                heldKeys.Remove(evt.VirtualKeyCode);
+                break;
+            case MacroEventKind.MouseDown:
+                heldButtons.Add(evt.MouseButton);
+                break;
+            case MacroEventKind.MouseUp:
+                heldButtons.Remove(evt.MouseButton);
+                break;
+            // MouseMove, MouseWheel don't change held state
+        }
+    }
+
+    private static void ReleaseHeldState(HashSet<int> heldKeys, HashSet<int> heldButtons)
+    {
+        // Fire KEYUP for any keys still held — protects against stuck modifiers
+        // (Ctrl, Shift, Alt, Win) after an aborted/refused playback.
+        foreach (var vk in heldKeys)
+        {
+            try { SendKey((ushort)vk, keyUp: true); } catch { /* best-effort cleanup */ }
+        }
+
+        // Fire mouse-button UP for any buttons still pressed. We don't have the
+        // original x,y — use the current cursor position so the event lands somewhere
+        // sane. If the cursor is now over a different window, the UP still cancels
+        // the held state in Windows' input layer, which is what we care about.
+        if (heldButtons.Count > 0)
+        {
+            var pos = GetCurrentCursorPos();
+            foreach (var btn in heldButtons)
+            {
+                try { SendMouseButton(pos.x, pos.y, btn, isDown: false); } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    private static (int x, int y) GetCurrentCursorPos()
+    {
+        if (GetCursorPos(out var pt)) return (pt.X, pt.Y);
+        return (0, 0);
     }
 
     private static void SendMacroEvent(MacroEvent evt)
