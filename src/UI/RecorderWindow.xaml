@@ -378,6 +378,38 @@
                                                         <Run Text="&#x00B7;" />
                                                         <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
                                                     </TextBlock>
+                                                    <!-- Ctrl+Shift+P chord chip — visible only on the last-played macro card -->
+                                                    <Border Background="{StaticResource RowBgBrush}"
+                                                            BorderBrush="{StaticResource CyanBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="3"
+                                                            Padding="5,1"
+                                                            Margin="10,0,0,0"
+                                                            VerticalAlignment="Center">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Setter Property="Tag">
+                                                                    <Setter.Value>
+                                                                        <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
+                                                                            <Binding Path="Id" />
+                                                                            <Binding Path="DataContext.LastMacroId"
+                                                                                     RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                                        </MultiBinding>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                                <Style.Triggers>
+                                                                    <Trigger Property="Tag" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </Trigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBlock Text="Ctrl+Shift+P"
+                                                                   FontFamily="{StaticResource MonoFont}"
+                                                                   FontSize="8"
+                                                                   Foreground="{StaticResource CyanBrush}" />
+                                                    </Border>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>

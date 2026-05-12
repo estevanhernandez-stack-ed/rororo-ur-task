@@ -64,6 +64,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(StatusMeta));
         };
         _runtime.CurrentlyPlayingMacroChanged += id => CurrentlyPlayingMacroId = id;
+        _runtime.LastMacroChanged += id => LastMacroId = id;
+        LastMacroId = _runtime.LastMacro?.Id;
 
         _runtime.SequenceProgressed += p =>
         {
@@ -232,6 +234,24 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         {
             if (_currentlyPlayingMacroId == value) return;
             _currentlyPlayingMacroId = value;
+            OnPropertyChanged();
+        }
+    }
+
+    // ---------- v0.2: LastMacroId (Ctrl+Shift+P chord chip) ----------
+
+    private string? _lastMacroId;
+    /// <summary>
+    /// The Id of the last-played/recorded macro. Drives the Ctrl+Shift+P
+    /// chord chip on the corresponding macro card via MacroIdEqualsCurrentConverter.
+    /// </summary>
+    public string? LastMacroId
+    {
+        get => _lastMacroId;
+        private set
+        {
+            if (_lastMacroId == value) return;
+            _lastMacroId = value;
             OnPropertyChanged();
         }
     }

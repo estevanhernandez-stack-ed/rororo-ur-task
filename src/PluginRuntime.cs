@@ -115,6 +115,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// alts so the badge stays lit across the inter-alt delay).
     /// </summary>
     public event Action<string?>? CurrentlyPlayingMacroChanged;
+    /// <summary>
+    /// Fires whenever _lastMacro changes — record-save, any play path,
+    /// and on app-start load. Drives the Ctrl+Shift+P chord chip on the
+    /// last-played macro card.
+    /// </summary>
+    public event Action<string?>? LastMacroChanged;
 
     /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
@@ -153,6 +159,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         var fg = _foreground.ResolveForegroundAccount();
 
         _lastMacro = macro;
+        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
 
         if (fg is not null)
         {
@@ -189,6 +196,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
 
         _lastMacro = macro;
+        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
         OpenPickerAndPlay(macro, alts, multiSelect: true);
     }
 
@@ -270,6 +278,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
 
         _lastMacro = macro;
+        RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
         _ = Task.Run(async () =>
         {
             var result = await _player.PlayAllWindowsRawAsync(macro);
@@ -294,6 +303,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             {
                 _lastMacro = loaded.Macros[^1];
                 RaiseUI(() => MacrosChanged?.Invoke());
+                RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
             }
 
             Log("Connecting to RoRoRo over named pipe...");
@@ -438,6 +448,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Store.Save(macro);
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
+            RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
             Log($"Saved macro: {events.Count} events, duration {macro.Duration.TotalSeconds:F1}s.");
 
             // Prompt for rename — user can Enter to accept the auto-name or type a new one.
@@ -466,6 +477,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                     Store.Save(renamed);
                     _lastMacro = renamed;
                     MacrosChanged?.Invoke();
+                    LastMacroChanged?.Invoke(_lastMacro?.Id);
                     Log($"Renamed to: {newName}");
                 }
             }
