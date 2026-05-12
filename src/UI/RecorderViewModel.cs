@@ -61,6 +61,18 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             () => _runtime.TriggerAbort(),
             () => IsRunnerActive);
 
+        // Single PLAY/STOP toggle — bound to the unified button. When runner is
+        // active, this calls abort (same as Esc); otherwise starts the loop.
+        // Prevents the rc11 trap where hitting PLAY again started a NEW round
+        // instead of stopping the current one.
+        TogglePlayStopCommand = new RelayCommand(
+            () =>
+            {
+                if (IsRunnerActive) _runtime.TriggerAbort();
+                else _runtime.TriggerPlayAssignments();
+            },
+            () => IsRunnerActive || Assignments.Count > 0);
+
         // Initialize pin state from saved prefs based on current compact mode.
         _isTopmost = _isCompact ? _prefs.TopmostInCompactMode : _prefs.TopmostInFullMode;
 
@@ -154,6 +166,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand ResetAssignmentsCommand { get; }
     public ICommand PlayAssignmentsCommand { get; }
     public ICommand StopAssignmentsCommand { get; }
+    public ICommand TogglePlayStopCommand { get; }
 
     // ---------- Existing state properties ----------
 
@@ -313,14 +326,31 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
     private void RecomputePairings()
     {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Build MacroId → ordered list of paired alt names. Multiple alts can share
+        // the same macro under the one-to-many pairing model; collapse the list to
+        // a single comma-joined string so the per-card chip can display it as
+        // "→ alt1, alt2, alt3" without needing nested ItemsControls.
+        var altsByMacroId = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var kv in _runtime.AllAssignments)
         {
             if (kv.Value is null) continue;
-            // Look up the alt's display name by PID.
             var row = Assignments.FirstOrDefault(r => r.Alt.Pid == kv.Key);
             if (row is null) continue;
-            map[kv.Value.Id] = row.Alt.DisplayName;
+            if (!altsByMacroId.TryGetValue(kv.Value.Id, out var list))
+            {
+                list = new List<string>();
+                altsByMacroId[kv.Value.Id] = list;
+            }
+            list.Add(row.Alt.DisplayName);
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (macroId, names) in altsByMacroId)
+        {
+            // Stable display order — sort alphabetically so the chip doesn't reorder
+            // on every reassignment.
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            map[macroId] = string.Join(", ", names);
         }
         PairedAltByMacroId = map;
     }
@@ -344,10 +374,15 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             // Refresh command CanExecute
             (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }
 
     public bool IsRunnerActive => _runnerProgress is { Phase: not AssignmentPhase.Stopped };
+
+    /// <summary>"STOP" when a round-robin is running, otherwise "PLAY ASSIGNMENTS". Drives the single toggle button label.</summary>
+    public string PlayStopButtonLabel => IsRunnerActive ? "STOP" : "PLAY ASSIGNMENTS";
 
     // ---------- v0.2: Status pill ----------
 

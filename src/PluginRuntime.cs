@@ -163,15 +163,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public void AssignMacroToAlt(int altPid, Macro? macro)
     {
-        var displaced = AssignmentMap.ApplyAssignment(_assignments, altPid, macro);
-
-        // Fire events for any alts that lost their pairing because of the 1:1 rule.
-        foreach (var otherPid in displaced)
-        {
-            Log($"assignment moved: pid {otherPid} → keep-alive (was {macro!.Name ?? "(unnamed)"})");
-            int capturedPid = otherPid;
-            RaiseUI(() => AssignmentChanged?.Invoke(capturedPid, null));
-        }
+        AssignmentMap.ApplyAssignment(_assignments, altPid, macro);
 
         Log(macro is null
             ? $"assignment cleared: pid {altPid} → keep-alive (Space)"
@@ -240,6 +232,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // Toggle: if a round-robin is already running, Ctrl+Shift+P stops it
+                // (same as Esc). Rescue affordance — the chord that started it can
+                // also stop it, so users aren't trapped if they reach for the chord
+                // out of muscle memory.
+                if (_runner.IsRunning)
+                {
+                    if (_runner.Abort()) Log("Assignment loop stopped (Ctrl+Shift+P toggle).");
+                    break;
+                }
+
                 var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
                 if (alts.Count == 0)
                 {

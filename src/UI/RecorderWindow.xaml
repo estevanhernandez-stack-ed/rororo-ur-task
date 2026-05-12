@@ -523,33 +523,31 @@
                             </ItemsControl>
                         </ScrollViewer>
 
-                        <!-- Footer: PLAY ASSIGNMENTS + STOP -->
+                        <!-- Footer: single PLAY/STOP toggle button -->
                         <Border Grid.Row="2" Padding="11,8,11,11">
-                          <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0"
-                                    Style="{StaticResource PrimaryButton}"
-                                    Padding="0,8"
-                                    Command="{Binding PlayAssignmentsCommand}">
+                            <Button Padding="0,10"
+                                    Command="{Binding TogglePlayStopCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+                                        <Style.Triggers>
+                                            <!-- Swap to outlined secondary look when running so STOP visually
+                                                 distinguishes from PLAY (cyan fill vs cyan outline). -->
+                                            <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
+                                                <Setter Property="Background" Value="Transparent" />
+                                                <Setter Property="Foreground" Value="{StaticResource MagentaBrush}" />
+                                                <Setter Property="BorderBrush" Value="{StaticResource MagentaBrush}" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
                                 <StackPanel>
-                                    <TextBlock Text="PLAY ASSIGNMENTS" FontSize="11" FontWeight="SemiBold" />
-                                    <TextBlock Text="Ctrl+Shift+P" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
+                                    <TextBlock Text="{Binding PlayStopButtonLabel}"
+                                               FontSize="12" FontWeight="SemiBold" />
+                                    <TextBlock Text="Ctrl+Shift+P · Esc"
+                                               FontSize="9" Opacity="0.7" Margin="0,3,0,0" />
                                 </StackPanel>
                             </Button>
-                            <Button Grid.Column="2"
-                                    Style="{StaticResource SecondaryButton}"
-                                    Padding="0,8"
-                                    Command="{Binding StopAssignmentsCommand}">
-                                <StackPanel>
-                                    <TextBlock Text="STOP" FontSize="11" />
-                                    <TextBlock Text="Esc" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
-                                </StackPanel>
-                            </Button>
-                          </Grid>
                         </Border>
                     </Grid>
                 </Border>

@@ -37,6 +37,14 @@ You need RoRoRo installed first ([v1.4 or later](https://github.com/estevanherna
 
 RoRoRo Ur Task starts in your system tray (its own icon, separate from RoRoRo's tray). Click the tray icon to surface the recorder window.
 
+## Stack your Roblox windows before running click-macros
+
+Recorded mouse clicks are captured at **absolute screen coordinates**, and playback sends them to the same screen position regardless of which window is currently in the foreground. Keyboard input works fine across alts (keystrokes route to the focused window), but mouse clicks only land correctly if each alt's window sits in the same screen position as the one you recorded against.
+
+**Practical guidance:** before starting a click-macro round-robin, snap all participating Roblox windows to the same screen quadrant (Win+Arrow, or a window-stacker utility). When the round-robin focuses an alt, the macro's recorded clicks will land on the same pixel — and since the windows occupy the same screen region, every alt receives the click on the right UI element.
+
+Window-relative coordinates (record once, replay at any window position) is planned for v0.3.
+
 ## Hotkeys
 
 | Key | Action | Scope |
