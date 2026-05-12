@@ -403,10 +403,11 @@
                                                             Margin="6,0,0,0"
                                                             VerticalAlignment="Center">
                                                         <Border.Visibility>
-                                                            <MultiBinding Converter="{StaticResource PairedAltVisibility}">
-                                                                <Binding Path="Id" />
+                                                            <MultiBinding Converter="{StaticResource PairedAltVisibility}" Mode="OneWay">
+                                                                <Binding Path="Id" Mode="OneWay" />
                                                                 <Binding Path="DataContext.PairedAltByMacroId"
-                                                                         RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                                         RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                         Mode="OneWay" />
                                                             </MultiBinding>
                                                         </Border.Visibility>
                                                         <TextBlock FontFamily="{StaticResource MonoFont}"
@@ -415,10 +416,11 @@
                                                             <Run Text="→ " />
                                                             <Run>
                                                                 <Run.Text>
-                                                                    <MultiBinding Converter="{StaticResource PairedAltForMacro}">
-                                                                        <Binding Path="Id" />
+                                                                    <MultiBinding Converter="{StaticResource PairedAltForMacro}" Mode="OneWay">
+                                                                        <Binding Path="Id" Mode="OneWay" />
                                                                         <Binding Path="DataContext.PairedAltByMacroId"
-                                                                                 RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                                                 RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                                 Mode="OneWay" />
                                                                     </MultiBinding>
                                                                 </Run.Text>
                                                             </Run>
