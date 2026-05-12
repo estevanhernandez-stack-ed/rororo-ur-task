@@ -324,10 +324,10 @@
                             <ItemsControl ItemsSource="{Binding Macros}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <!-- Clicking the card marks it as the active assignment macro -->
+                                        <!-- Clicking the card marks it as the active assignment macro.
+                                             Local Background/BorderThickness removed so the Style triggers can take effect
+                                             (local values override triggers per WPF DP precedence). -->
                                         <Border Margin="6"
-                                                Background="{StaticResource BgBrush}"
-                                                BorderThickness="1"
                                                 CornerRadius="6"
                                                 Padding="11,9"
                                                 Cursor="Hand"
@@ -337,24 +337,24 @@
                                                     <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
                                                     <Setter Property="BorderThickness" Value="1" />
                                                     <Setter Property="Background" Value="{StaticResource BgBrush}" />
-                                                    <Setter Property="Tag">
-                                                        <Setter.Value>
-                                                            <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}">
-                                                                <Binding Path="Id" />
-                                                                <Binding Path="DataContext.ActiveAssignmentMacroId"
-                                                                         RelativeSource="{RelativeSource AncestorType=Window}" />
-                                                            </MultiBinding>
-                                                        </Setter.Value>
-                                                    </Setter>
                                                     <Style.Triggers>
-                                                        <!-- Active painter: thick cyan border + tinted background so the
-                                                             "loaded for assign" state is unambiguous against other paired
-                                                             cards that have their own chips drawing attention. -->
-                                                        <Trigger Property="Tag" Value="True">
+                                                        <!-- Active painter: thick cyan border + tinted background.
+                                                             DataTrigger evaluates the MultiBinding directly (skipping
+                                                             the Tag-intermediate pattern) for cleaner re-evaluation
+                                                             when ActiveAssignmentMacroId changes. -->
+                                                        <DataTrigger Value="True">
+                                                            <DataTrigger.Binding>
+                                                                <MultiBinding Converter="{StaticResource MacroIdEqualsCurrent}" Mode="OneWay">
+                                                                    <Binding Path="Id" Mode="OneWay" />
+                                                                    <Binding Path="DataContext.ActiveAssignmentMacroId"
+                                                                             RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                             Mode="OneWay" />
+                                                                </MultiBinding>
+                                                            </DataTrigger.Binding>
                                                             <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
                                                             <Setter Property="BorderThickness" Value="2" />
                                                             <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
-                                                        </Trigger>
+                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
@@ -534,24 +534,23 @@
                                                     <Setter Property="Background" Value="{StaticResource BgBrush}" />
                                                     <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
                                                     <Setter Property="BorderThickness" Value="1" />
-                                                    <Setter Property="Tag">
-                                                        <Setter.Value>
-                                                            <MultiBinding Converter="{StaticResource IntEquals}" Mode="OneWay">
-                                                                <Binding Path="Alt.Pid" Mode="OneWay" />
-                                                                <Binding Path="DataContext.CurrentRunnerAltPid"
-                                                                         RelativeSource="{RelativeSource AncestorType=Window}"
-                                                                         Mode="OneWay" />
-                                                            </MultiBinding>
-                                                        </Setter.Value>
-                                                    </Setter>
                                                     <Style.Triggers>
                                                         <!-- Active alt during cycle: cyan outline + tint so the row
-                                                             being played reads at a glance without window-hopping. -->
-                                                        <Trigger Property="Tag" Value="True">
+                                                             being played reads at a glance without window-hopping.
+                                                             DataTrigger evaluates the MultiBinding directly. -->
+                                                        <DataTrigger Value="True">
+                                                            <DataTrigger.Binding>
+                                                                <MultiBinding Converter="{StaticResource IntEquals}" Mode="OneWay">
+                                                                    <Binding Path="Alt.Pid" Mode="OneWay" />
+                                                                    <Binding Path="DataContext.CurrentRunnerAltPid"
+                                                                             RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                             Mode="OneWay" />
+                                                                </MultiBinding>
+                                                            </DataTrigger.Binding>
                                                             <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
                                                             <Setter Property="BorderThickness" Value="2" />
                                                             <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
-                                                        </Trigger>
+                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
