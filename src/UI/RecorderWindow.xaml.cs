@@ -114,11 +114,8 @@ public partial class RecorderWindow : Window
         if (sender is MenuItem mi && mi.Tag is Macro macro
             && DataContext is RecorderViewModel vm)
         {
-            var result = MessageBox.Show(this,
-                $"Delete macro \"{macro.Name ?? "(unnamed)"}\"?\nThis can't be undone.",
-                "Delete macro",
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (result == MessageBoxResult.OK)
+            var dlg = new DeleteMacroConfirmDialog(macro.Name ?? "(unnamed)") { Owner = this };
+            if (dlg.ShowDialog() == true)
             {
                 vm.DeleteMacro(macro);
             }

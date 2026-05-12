@@ -9,7 +9,7 @@ public partial class RenameMacroDialog : Window
     {
         InitializeComponent();
         NameInput.Text = currentName;
-        Loaded += (_, _) => { NameInput.Focus(); NameInput.SelectAll(); };
+        Loaded += (_, _) => { Activate(); NameInput.Focus(); NameInput.SelectAll(); };
     }
 
     public string NewName => NameInput.Text;

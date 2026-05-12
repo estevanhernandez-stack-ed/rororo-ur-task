@@ -83,6 +83,9 @@ public partial class PlaybackTargetPickerWindow : Window
         // Pre-focus first row so ↑↓ works immediately.
         _focusedRowIndex = _vm.Alts.Count > 0 ? 0 : -1;
         SyncFocusHighlight();
+
+        // Ensure keyboard focus on open so Esc / Enter / arrows route through OnKeyDown.
+        Loaded += (_, _) => { Activate(); Focus(); Keyboard.Focus(this); };
     }
 
     internal IReadOnlyList<AccountRegistry.AccountInfo>? SelectedTargets { get; private set; }

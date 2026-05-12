@@ -207,7 +207,8 @@
                     </Grid.ColumnDefinitions>
                     <Button Grid.Column="0"
                             Style="{StaticResource PrimaryButton}"
-                            Command="{Binding RecordCommand}">
+                            Command="{Binding RecordCommand}"
+                            IsEnabled="{Binding IsNotPlaybackActive}">
                         <StackPanel>
                             <TextBlock Text="RECORD" />
                             <TextBlock Text="Ctrl+Shift+R" FontSize="9" Opacity="0.7" Margin="0,2,0,0" />
@@ -240,6 +241,7 @@
                         </Grid.ColumnDefinitions>
                         <CheckBox Grid.Column="0"
                                   IsChecked="{Binding IsRecordModeAllWindows, Mode=TwoWay}"
+                                  IsEnabled="{Binding IsNotPlaybackActive}"
                                   VerticalAlignment="Center"
                                   Margin="0,0,8,0" />
                         <TextBlock Grid.Column="1"
@@ -344,6 +346,9 @@
                                                                         <Setter Property="Content" Value="PLAYING" />
                                                                         <Setter Property="IsEnabled" Value="False" />
                                                                     </Trigger>
+                                                                    <DataTrigger Binding="{Binding DataContext.IsAnyPlaybackActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                                                        <Setter Property="IsEnabled" Value="False" />
+                                                                    </DataTrigger>
                                                                 </Style.Triggers>
                                                             </Style>
                                                         </Button.Style>
@@ -357,6 +362,7 @@
                                                             Padding="6,0"
                                                             Margin="6,0,0,0"
                                                             VerticalAlignment="Center"
+                                                            IsEnabled="{Binding DataContext.IsNotPlaybackActive, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             Click="OnMacroOverflowClicked"
                                                             Tag="{Binding}">
                                                         <Button.ContextMenu>

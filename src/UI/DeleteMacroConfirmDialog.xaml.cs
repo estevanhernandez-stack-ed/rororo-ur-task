@@ -3,16 +3,17 @@ using System.Windows.Input;
 
 namespace Labs626.UrTask.UI;
 
-public partial class MultiWindowConfirmDialog : Window
+public partial class DeleteMacroConfirmDialog : Window
 {
-    public MultiWindowConfirmDialog()
+    public DeleteMacroConfirmDialog(string macroName)
     {
         InitializeComponent();
+        MessageText.Text = $"Delete macro \"{macroName}\"?\nThis can't be undone.";
         Loaded += (_, _) => { Activate(); Focus(); Keyboard.Focus(this); };
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) { DialogResult = false; Close(); }
-    private void OnPlay(object sender, RoutedEventArgs e) { DialogResult = true; Close(); }
+    private void OnDelete(object sender, RoutedEventArgs e) { DialogResult = true; Close(); }
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {

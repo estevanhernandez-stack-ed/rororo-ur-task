@@ -40,6 +40,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(StateLabel));
             OnPropertyChanged(nameof(IsRecording));
             OnPropertyChanged(nameof(IsPlaying));
+            OnPropertyChanged(nameof(IsAnyPlaybackActive));
+            OnPropertyChanged(nameof(IsNotPlaybackActive));
             OnPropertyChanged(nameof(StatusLabel));
             OnPropertyChanged(nameof(StatusMeta));
         };
@@ -131,6 +133,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             _sequenceProgress = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsSequencePlaying));
+            OnPropertyChanged(nameof(IsAnyPlaybackActive));
+            OnPropertyChanged(nameof(IsNotPlaybackActive));
             OnPropertyChanged(nameof(StatusLabel));
             OnPropertyChanged(nameof(StatusMeta));
             OnPropertyChanged(nameof(SequenceProgressFraction));
@@ -138,6 +142,12 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     }
 
     public bool IsSequencePlaying => _sequenceProgress is { Phase: not SequencePhase.Done and not SequencePhase.Aborted };
+
+    /// <summary>True when any single-macro or multi-alt sequence playback is active.</summary>
+    public bool IsAnyPlaybackActive => IsPlaying || IsSequencePlaying;
+
+    /// <summary>Inverse of <see cref="IsAnyPlaybackActive"/> — drives IsEnabled bindings.</summary>
+    public bool IsNotPlaybackActive => !IsAnyPlaybackActive;
 
     public double SequenceProgressFraction
         => _sequenceProgress is null || _sequenceProgress.Total == 0
