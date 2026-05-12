@@ -236,8 +236,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
         {
             _ = Task.Run(async () =>
             {
-                var result = await _player.PlayAsync(macro, targets[0].RobloxUserId);
-                Log($"playback result on {targets[0].DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+                // Picker just closed → plugin recorder is foreground.
+                // AttachThreadInput flips focus to the chosen alt before preflight.
+                var target = targets[0];
+                Win32Focus.AttachAndFocus(target.Pid);
+                await Task.Delay(150).ConfigureAwait(false); // settle: give Windows time to register the flip
+                var result = await _player.PlayAsync(macro, target.RobloxUserId);
+                Log($"playback result on {target.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
             });
         }
         else

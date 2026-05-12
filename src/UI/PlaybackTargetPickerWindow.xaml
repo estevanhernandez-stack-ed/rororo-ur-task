@@ -12,6 +12,7 @@
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="NoResize"
+        Topmost="True"
         KeyDown="OnKeyDown">
 
     <Border Background="{StaticResource BgBrush}"

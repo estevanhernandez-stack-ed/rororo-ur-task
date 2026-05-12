@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Macros;
@@ -141,20 +140,6 @@ internal sealed class SequencePlayer
         try { Progress?.Invoke(this, p); } catch { /* swallow — subscriber bugs don't kill the sequence */ }
     }
 
-    private static (bool, string?) DefaultFocus(int pid)
-    {
-        try
-        {
-            var hwnd = Process.GetProcessById(pid).MainWindowHandle;
-            if (hwnd == IntPtr.Zero) return (false, "MainWindowHandle is null.");
-            SetForegroundWindow(hwnd);
-            return (true, null);
-        }
-        catch (ArgumentException) { return (false, "Process not found (pid stale)."); }
-        catch (Exception ex) { return (false, ex.Message); }
-    }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    // Delegates to Win32Focus so the AttachThreadInput P/Invokes live in one place.
+    private static (bool, string?) DefaultFocus(int pid) => Win32Focus.AttachAndFocus(pid);
 }

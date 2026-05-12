@@ -10,7 +10,8 @@
         FontFamily="{StaticResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
-        ResizeMode="NoResize">
+        ResizeMode="NoResize"
+        Topmost="True">
     <Border Background="{StaticResource BgBrush}"
             BorderBrush="{StaticResource DividerBrush}"
             BorderThickness="1"
