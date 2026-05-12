@@ -361,6 +361,8 @@
                                                             Tag="{Binding}">
                                                         <Button.ContextMenu>
                                                             <ContextMenu>
+                                                                <MenuItem Header="Play on multiple alts..." Click="OnMacroPlayOnMultipleClicked" Tag="{Binding}" />
+                                                                <Separator />
                                                                 <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
                                                                 <MenuItem Header="Delete" Click="OnMacroDeleteClicked" Tag="{Binding}" />
                                                             </ContextMenu>
@@ -408,7 +410,14 @@
                              Foreground="{StaticResource MutedTextBrush}"
                              FontFamily="{StaticResource MonoFont}"
                              FontSize="10"
-                             BorderThickness="0">
+                             BorderThickness="0"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Padding" Value="8,2" />

@@ -99,6 +99,78 @@
                 <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
                 <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
             </Style>
+
+            <!-- Slim dark scrollbar thumb — 8px, divider-color at rest, muted-text on hover. -->
+            <Style x:Key="SlimDarkScrollBarThumb" TargetType="Thumb">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Thumb">
+                            <Border x:Name="ThumbBorder"
+                                    Background="{StaticResource DividerBrush}"
+                                    CornerRadius="2" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{StaticResource MutedTextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Implicit ScrollBar override — picks up app-wide, no x:Key needed.
+                 Transparent track, slim thumb, no arrow buttons. -->
+            <Style TargetType="ScrollBar">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource DividerBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="Orientation" Value="Vertical">
+                        <Setter Property="Width" Value="8" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ScrollBar">
+                                    <Grid>
+                                        <Track Name="PART_Track" IsDirectionReversed="True">
+                                            <Track.Thumb>
+                                                <Thumb Style="{StaticResource SlimDarkScrollBarThumb}" />
+                                            </Track.Thumb>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" />
+                                            </Track.IncreaseRepeatButton>
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" />
+                                            </Track.DecreaseRepeatButton>
+                                        </Track>
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                    <Trigger Property="Orientation" Value="Horizontal">
+                        <Setter Property="Height" Value="8" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ScrollBar">
+                                    <Grid>
+                                        <Track Name="PART_Track">
+                                            <Track.Thumb>
+                                                <Thumb Style="{StaticResource SlimDarkScrollBarThumb}" />
+                                            </Track.Thumb>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageRightCommand" Opacity="0" />
+                                            </Track.IncreaseRepeatButton>
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" />
+                                            </Track.DecreaseRepeatButton>
+                                        </Track>
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

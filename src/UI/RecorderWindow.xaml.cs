@@ -82,6 +82,17 @@ public partial class RecorderWindow : Window
         }
     }
 
+    private void OnMacroPlayOnMultipleClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi
+            && DataContext is RecorderViewModel vm
+            && (mi.Tag as Labs626.UrTask.Macros.Macro
+                ?? ((mi.Parent as ContextMenu)?.PlacementTarget as FrameworkElement)?.Tag as Labs626.UrTask.Macros.Macro) is Labs626.UrTask.Macros.Macro macro)
+        {
+            vm.PlayMacroOnMultipleCommand.Execute(macro);
+        }
+    }
+
     private void OnMacroRenameClicked(object sender, RoutedEventArgs e)
     {
         if (sender is MenuItem mi && mi.Tag is Macro macro

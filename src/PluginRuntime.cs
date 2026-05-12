@@ -132,15 +132,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public void TriggerPlayLast() => OnHotkey(HotkeyKind.Play);
 
     /// <summary>
-    /// Invoke per-macro PLAY (from a card button click): always opens the target
-    /// picker so the user picks single or multi each time. Single → MacroPlayer
-    /// direct; multi → SequencePlayer batch.
+    /// Smart-default per-card PLAY: play on the focused alt if a Roblox alt is
+    /// foreground, else open the picker in single-select mode as fallback.
+    /// AllWindows macros still route through the pre-flight confirm regardless.
     /// </summary>
     public void TriggerPlayMacro(string macroId)
     {
-        var loaded = Store.LoadAll();
-        var macro = loaded.Macros.FirstOrDefault(m => m.Id == macroId);
-        if (macro is null) { Log($"PlayMacro({macroId}) — macro not found."); return; }
+        var macro = LoadMacroById(macroId);
+        if (macro is null) return;
 
         if (macro.RecordMode == "AllWindows")
         {
@@ -152,18 +151,68 @@ internal sealed class PluginRuntime : IAsyncDisposable
         if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
 
         var fg = _foreground.ResolveForegroundAccount();
-        long? preferredUserId = fg?.RobloxUserId ?? macro.RecordedAgainstUserId;
 
-        // Picker must run on the UI thread (it's a WPF Window).
+        _lastMacro = macro;
+
+        if (fg is not null)
+        {
+            // Smart default — play directly on focused alt, no modal.
+            _ = Task.Run(async () =>
+            {
+                var result = await _player.PlayAsync(macro, fg.RobloxUserId);
+                Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+            });
+            return;
+        }
+
+        // Fallback: picker in single-select.
+        OpenPickerAndPlay(macro, alts, multiSelect: false);
+    }
+
+    /// <summary>
+    /// Explicit batch path wired from the ⋯ → "Play on multiple alts..." menu.
+    /// Always opens picker in multi-select mode.
+    /// </summary>
+    public void TriggerPlayMacroOnMultiple(string macroId)
+    {
+        var macro = LoadMacroById(macroId);
+        if (macro is null) return;
+
+        if (macro.RecordMode == "AllWindows")
+        {
+            Log("Multi-window macros are played raw — multi-alt batch doesn't apply.");
+            PlayAllWindowsMacro(macro);
+            return;
+        }
+
+        var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+        if (alts.Count == 0) { Log("PlayMacro — no RoRoRo-managed alts running."); return; }
+
+        _lastMacro = macro;
+        OpenPickerAndPlay(macro, alts, multiSelect: true);
+    }
+
+    private Macro? LoadMacroById(string macroId)
+    {
+        var loaded = Store.LoadAll();
+        var macro = loaded.Macros.FirstOrDefault(m => m.Id == macroId);
+        if (macro is null) Log($"PlayMacro({macroId}) — macro not found.");
+        return macro;
+    }
+
+    private void OpenPickerAndPlay(Macro macro, List<AccountRegistry.AccountInfo> alts, bool multiSelect)
+    {
         IReadOnlyList<AccountRegistry.AccountInfo>? selected = null;
         var disp = Application.Current?.Dispatcher;
         if (disp is not null)
         {
             disp.Invoke(() =>
             {
-                var picker = new UI.PlaybackTargetPickerWindow(macro.Name ?? "macro", alts, preferredUserId, multiSelect: true);
+                var fg = _foreground.ResolveForegroundAccount();
+                long? preferredUserId = fg?.RobloxUserId ?? macro.RecordedAgainstUserId;
+                var picker = new UI.PlaybackTargetPickerWindow(macro.Name ?? "macro", alts, preferredUserId, multiSelect);
                 var owner = Application.Current?.MainWindow;
-                if (owner is not null && !ReferenceEquals(picker, owner)) picker.Owner = owner;
+                if (owner is not null) picker.Owner = owner;
                 if (picker.ShowDialog() == true) selected = picker.SelectedTargets;
             });
         }
@@ -175,8 +224,6 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
 
         var targets = selected.ToList();
-        _lastMacro = macro;
-
         if (targets.Count == 1)
         {
             _ = Task.Run(async () =>
@@ -392,10 +439,40 @@ internal sealed class PluginRuntime : IAsyncDisposable
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             Log($"Saved macro: {events.Count} events, duration {macro.Duration.TotalSeconds:F1}s.");
+
+            // Prompt for rename — user can Enter to accept the auto-name or type a new one.
+            RaiseUI(() => PromptRename(macro));
         }
         catch (Exception ex)
         {
             Log($"Save failed: {ex.Message}");
+        }
+    }
+
+    private void PromptRename(Macro macro)
+    {
+        try
+        {
+            var dlg = new UI.RenameMacroDialog(macro.Name ?? "")
+            {
+                Owner = Application.Current?.MainWindow,
+            };
+            if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.NewName))
+            {
+                var newName = dlg.NewName.Trim();
+                if (newName != macro.Name)
+                {
+                    var renamed = macro with { Name = newName };
+                    Store.Save(renamed);
+                    _lastMacro = renamed;
+                    MacrosChanged?.Invoke();
+                    Log($"Renamed to: {newName}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Rename prompt failed: {ex.Message}");
         }
     }
 
