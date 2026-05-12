@@ -30,6 +30,17 @@ internal sealed class PluginClient : IAsyncDisposable
     private Task? _launchedConsumer;
     private Task? _exitedConsumer;
     private CancellationTokenSource? _consumerCts;
+    private int _hostLostFired = 0;
+
+    /// <summary>
+    /// Fires when the gRPC connection to RoRoRo breaks unexpectedly mid-session
+    /// (host process killed, pipe closed without a clean Cancelled). Owner
+    /// (PluginRuntime) should abort any active playback and shut down the
+    /// plugin process — otherwise the AssignmentRunner happily keeps sending
+    /// input to cached Roblox PIDs indefinitely, creating a zombie plugin.
+    /// Guaranteed to fire at most once per PluginClient lifetime.
+    /// </summary>
+    public event Action? HostLost;
 
     public PluginClient(string pluginId, AccountRegistry accounts, string? pipeName = null)
     {
@@ -118,6 +129,12 @@ internal sealed class PluginClient : IAsyncDisposable
         {
             // host closed the stream; expected on shutdown.
         }
+        catch (Exception)
+        {
+            // Any other exception (Unavailable, Internal, IO) signals the host
+            // died unexpectedly — pipe broken, RoRoRo killed, etc.
+            SignalHostLost();
+        }
     }
 
     private async Task ConsumeExitedAsync(CancellationToken ct)
@@ -136,6 +153,22 @@ internal sealed class PluginClient : IAsyncDisposable
         {
             // host closed the stream; expected on shutdown.
         }
+        catch (Exception)
+        {
+            SignalHostLost();
+        }
+    }
+
+    /// <summary>
+    /// Fire HostLost exactly once, then cancel the other consumer so it
+    /// doesn't fire a duplicate. Safe to call from either consumer's catch
+    /// (or both racing).
+    /// </summary>
+    private void SignalHostLost()
+    {
+        if (Interlocked.CompareExchange(ref _hostLostFired, 1, 0) != 0) return;
+        try { _consumerCts?.Cancel(); } catch { /* race with dispose */ }
+        try { HostLost?.Invoke(); } catch { /* handler exceptions swallowed */ }
     }
 
     public async ValueTask DisposeAsync()

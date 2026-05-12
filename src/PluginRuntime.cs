@@ -73,6 +73,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Store = new MacroStore();
         _hotkeys = new HotkeyService();
         _client = new PluginClient(PluginId, Accounts);
+        _client.HostLost += OnHostLost;
 
         _hotkeys.HotkeyPressed += OnHotkey;
         _player.Started += (_, args) =>
@@ -218,6 +219,37 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
+    }
+
+    // ---------- Host-loss safety ----------
+
+    /// <summary>
+    /// Fires when the gRPC connection to RoRoRo breaks unexpectedly (RoRoRo
+    /// killed via Task Manager, pipe broken, etc.). Abort any active playback
+    /// FIRST so the runner stops sending input to cached Roblox PIDs, then
+    /// shut the plugin process down cleanly. Without this the plugin would
+    /// keep running as a zombie sending input forever.
+    /// </summary>
+    private void OnHostLost()
+    {
+        Log("Host RoRoRo connection lost — aborting playback and exiting plugin.");
+        try { _runner.Abort(); } catch { }
+        try { _sequence.Abort(); } catch { }
+        try { _player.Abort(); } catch { }
+
+        // Marshal to UI thread for the WPF shutdown. If we can't reach the
+        // dispatcher (rare race), fall back to a hard exit so we don't linger.
+        RaiseUI(() =>
+        {
+            try
+            {
+                System.Windows.Application.Current?.Shutdown(0);
+            }
+            catch
+            {
+                Environment.Exit(0);
+            }
+        });
     }
 
     // ---------- Hotkey handlers ----------
