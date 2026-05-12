@@ -113,4 +113,26 @@ public partial class RecorderWindow : Window
             }
         }
     }
+
+    // ── Custom title bar handlers ───────────────────────────────────────────
+
+    private void OnTitleBarDrag(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left)
+        {
+            try { DragMove(); } catch (InvalidOperationException) { /* ignore if not left-button or wrong state */ }
+        }
+    }
+
+    private void OnTitleBarMinimizeClicked(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void OnTitleBarMaximizeClicked(object sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    /// <summary>
+    /// Close button hides to tray — the OnClosing override below handles the
+    /// cancel-and-hide logic, so calling Close() here is correct. The tray
+    /// icon's Quit item calls Application.Current.Shutdown for real exit.
+    /// </summary>
+    private void OnTitleBarCloseClicked(object sender, RoutedEventArgs e) => Close();
 }

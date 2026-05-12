@@ -33,6 +33,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
     private bool _allWindowsConfirmedThisSession;
+    private bool _sequenceActive;
 
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
@@ -47,7 +48,19 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground);
         _sequence = new SequencePlayer(_player, _foreground);
-        _sequence.Progress += (_, p) => SequenceProgressed?.Invoke(p);
+        _sequence.Progress += (_, p) =>
+        {
+            SequenceProgressed?.Invoke(p);
+            // Track whether a sequence is active so _player.Ended doesn't clear
+            // the badge prematurely between alts.
+            if (p.Phase == SequencePhase.Focusing && p.Index == 0)
+                _sequenceActive = true;
+            else if (p.Phase == SequencePhase.Done || p.Phase == SequencePhase.Aborted)
+            {
+                _sequenceActive = false;
+                RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(null));
+            }
+        };
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         _hotkeys = new HotkeyService();
@@ -57,6 +70,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player.Started += (_, args) =>
         {
             State = PluginState.Playing;
+            RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
                 ? "playback start: multi-window (no target gating)"
                 : $"playback start: target user {args.TargetUserId} ({args.BoundAccount?.DisplayName ?? "(unknown)"})");
@@ -64,6 +78,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player.Ended += (_, _) =>
         {
             State = _recorder.IsRecording ? PluginState.Recording : PluginState.Idle;
+            // Only clear the badge on standalone play. During a sequence the badge
+            // should stay lit across the inter-alt delay; the sequence.Progress
+            // Done/Aborted handler clears it instead.
+            if (!_sequenceActive)
+                RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(null));
         };
     }
 
@@ -90,6 +109,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action? ConnectionChanged;
     public event Action? MacrosChanged;
     public event Action<SequenceProgress>? SequenceProgressed;
+    /// <summary>
+    /// Fires with the macro Id when playback starts, and with null when
+    /// playback ends (sequence-aware: null is suppressed between sequence
+    /// alts so the badge stays lit across the inter-alt delay).
+    /// </summary>
+    public event Action<string?>? CurrentlyPlayingMacroChanged;
 
     /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
@@ -258,18 +283,52 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
             case HotkeyKind.Play:
                 if (_lastMacro is null) { Log("Ctrl+Shift+P ignored — no macro to play."); break; }
+                var lastMacro = _lastMacro;
                 _ = Task.Run(async () =>
                 {
-                    // Smart default: play on whatever's in foreground if it's a RoRoRo-managed
-                    // alt. Phase D (target picker) wires up the fallback modal when not.
                     var fg = _foreground.ResolveForegroundAccount();
-                    if (fg is null)
+                    if (fg is not null)
                     {
-                        Log("Ctrl+Shift+P ignored — no RoRoRo alt in foreground (target picker lands in Phase D).");
+                        // Smart default: play on whatever RoRoRo-managed alt is in foreground.
+                        var result = await _player.PlayAsync(lastMacro, fg.RobloxUserId);
+                        Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
                         return;
                     }
-                    var result = await _player.PlayAsync(_lastMacro, fg.RobloxUserId);
-                    Log($"playback result on {fg.DisplayName}: {result.Outcome}{(result.Reason is null ? "" : " — " + result.Reason)}");
+
+                    // Fallback: open picker in single-select mode so the user can choose a target.
+                    var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+                    if (alts.Count == 0)
+                    {
+                        Log("Ctrl+Shift+P ignored — no RoRoRo-managed alts running.");
+                        return;
+                    }
+
+                    AccountRegistry.AccountInfo? picked = null;
+                    var disp = Application.Current?.Dispatcher;
+                    if (disp is not null)
+                    {
+                        disp.Invoke(() =>
+                        {
+                            var picker = new UI.PlaybackTargetPickerWindow(
+                                lastMacro.Name ?? "macro",
+                                alts,
+                                preferredUserId: lastMacro.RecordedAgainstUserId,
+                                multiSelect: false);
+                            var owner = Application.Current?.MainWindow;
+                            if (owner is not null) picker.Owner = owner;
+                            if (picker.ShowDialog() == true && picker.SelectedTargets is { Count: > 0 } sel)
+                                picked = sel[0];
+                        });
+                    }
+
+                    if (picked is null)
+                    {
+                        Log("Ctrl+Shift+P — picker cancelled.");
+                        return;
+                    }
+
+                    var fallbackResult = await _player.PlayAsync(lastMacro, picked.RobloxUserId);
+                    Log($"playback result on {picked.DisplayName}: {fallbackResult.Outcome}{(fallbackResult.Reason is null ? "" : " — " + fallbackResult.Reason)}");
                 });
                 break;
             case HotkeyKind.Abort:

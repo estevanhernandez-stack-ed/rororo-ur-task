@@ -36,8 +36,17 @@ internal sealed class AltRowItem : INotifyPropertyChanged
     public string OrderTag
     {
         get => _orderTag;
-        set { _orderTag = value; OnPropertyChanged(); }
+        set
+        {
+            if (_orderTag == value) return;
+            _orderTag = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(OrderTagVisible));
+        }
     }
+
+    /// <summary>True when OrderTag has a value — drives Visibility in the picker DataTemplate.</summary>
+    public bool OrderTagVisible => !string.IsNullOrEmpty(_orderTag);
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)

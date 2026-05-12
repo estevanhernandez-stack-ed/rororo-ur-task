@@ -62,6 +62,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(HasNoMacros));
             OnPropertyChanged(nameof(StatusMeta));
         };
+        _runtime.CurrentlyPlayingMacroChanged += id => CurrentlyPlayingMacroId = id;
+
         _runtime.SequenceProgressed += p =>
         {
             SequenceProgress = p;
@@ -213,6 +215,24 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         (_, true) => $"alt {_sequenceProgress!.Index + 1} of {_sequenceProgress.Total} · {_sequenceProgress.Completed} succeeded, {_sequenceProgress.Failed} failed",
         _ => $"{Macros.Count} macros",
     };
+
+    // ---------- v0.2: CurrentlyPlayingMacroId ----------
+
+    private string? _currentlyPlayingMacroId;
+    /// <summary>
+    /// The Id of the macro currently playing, or null when idle. Drives the
+    /// card cyan outline and PLAY → PLAYING badge via MacroIdEqualsCurrentConverter.
+    /// </summary>
+    public string? CurrentlyPlayingMacroId
+    {
+        get => _currentlyPlayingMacroId;
+        private set
+        {
+            if (_currentlyPlayingMacroId == value) return;
+            _currentlyPlayingMacroId = value;
+            OnPropertyChanged();
+        }
+    }
 
     // ---------- v0.2: Empty-state helpers ----------
 

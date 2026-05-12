@@ -1,6 +1,7 @@
 <Application x:Class="Labs626.UrTask.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Labs626.UrTask.UI"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <ResourceDictionary>
@@ -87,6 +88,9 @@
 
             <!-- Built-in converter: bool → Visibility (True=Visible, False=Collapsed). -->
             <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+
+            <!-- Multi-value converter: macro row Id == CurrentlyPlayingMacroId → bool. -->
+            <local:MacroIdEqualsCurrentConverter x:Key="MacroIdEqualsCurrent" />
 
             <!-- Small uppercase label, tracked. JetBrains-Mono-shaped vibe. -->
             <Style x:Key="MetaLabel" TargetType="TextBlock">

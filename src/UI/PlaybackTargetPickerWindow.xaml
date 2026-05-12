@@ -95,6 +95,13 @@
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
+                                        <TextBlock FontSize="9"
+                                                   FontWeight="Bold"
+                                                   Foreground="{StaticResource BgBrush}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}}"
+                                                   Text="&#x2713;" />
                                     </Border>
 
                                     <!-- Avatar placeholder -->
@@ -118,9 +125,10 @@
                                         </TextBlock>
                                     </StackPanel>
 
-                                    <!-- Order tag (multi-select only) -->
+                                    <!-- Order tag (multi-select, selected rows only) -->
                                     <TextBlock Grid.Column="3"
                                                Text="{Binding OrderTag}"
+                                               Visibility="{Binding OrderTagVisible, Converter={StaticResource BoolToVisibility}}"
                                                FontSize="9"
                                                FontWeight="Bold"
                                                Foreground="{StaticResource CyanBrush}"
