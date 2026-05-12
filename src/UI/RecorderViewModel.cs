@@ -118,8 +118,16 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         };
 
         // Assignment event handlers
-        _runtime.AssignmentChanged += (pid, macro) => RaiseUI(() => RefreshAssignmentRow(pid, macro));
-        _runtime.AssignmentsReset += () => RaiseUI(() => { foreach (var r in Assignments) r.AssignedMacro = null; });
+        _runtime.AssignmentChanged += (pid, macro) => RaiseUI(() =>
+        {
+            RefreshAssignmentRow(pid, macro);
+            RecomputePairings();
+        });
+        _runtime.AssignmentsReset += () => RaiseUI(() =>
+        {
+            foreach (var r in Assignments) r.AssignedMacro = null;
+            RecomputePairings();
+        });
         _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
 
         // Account add/remove updates rows live
@@ -280,6 +288,43 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public bool HasActiveAssignment => _activeAssignmentMacro is not null;
     public string ActiveAssignmentName => _activeAssignmentMacro?.Name ?? "(none)";
 
+    // ---------- Assignment: paired-alt visibility (1:1 multi-pair display) ----------
+
+    // Map of MacroId → paired alt DisplayName. Re-issued as a new instance whenever
+    // assignments change so MultiBindings on PairedAltByMacroId re-evaluate.
+    private IReadOnlyDictionary<string, string> _pairedAltByMacroId =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, string> PairedAltByMacroId
+    {
+        get => _pairedAltByMacroId;
+        private set
+        {
+            _pairedAltByMacroId = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PairingCount));
+            OnPropertyChanged(nameof(StatusLabel));
+            OnPropertyChanged(nameof(StatusMeta));
+        }
+    }
+
+    /// <summary>Count of macros currently paired with an alt (1:1 enforced upstream).</summary>
+    public int PairingCount => _pairedAltByMacroId.Count;
+
+    private void RecomputePairings()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kv in _runtime.AllAssignments)
+        {
+            if (kv.Value is null) continue;
+            // Look up the alt's display name by PID.
+            var row = Assignments.FirstOrDefault(r => r.Alt.Pid == kv.Key);
+            if (row is null) continue;
+            map[kv.Value.Id] = row.Alt.DisplayName;
+        }
+        PairedAltByMacroId = map;
+    }
+
     // ---------- Assignment: RunnerProgress ----------
 
     private AssignmentProgress? _runnerProgress;
@@ -312,7 +357,9 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         (_, true, _, _) => $"Running · {_runnerProgress!.Current?.Alt.DisplayName ?? "..."}",
         (_, _, true, _) => $"Playing {_sequenceProgress!.CurrentAlt?.DisplayName ?? "..."}",
         (_, _, _, true) => "Playing",
-        _ => HasActiveAssignment ? $"Ready · {ActiveAssignmentName} loaded" : "Idle",
+        _ => PairingCount > 0
+            ? $"Ready · {PairingCount} paired"
+            : (HasActiveAssignment ? $"Ready · {ActiveAssignmentName} selected" : "Idle"),
     };
 
     public string StatusMeta => (IsRecording, IsRunnerActive, IsSequencePlaying) switch
@@ -321,7 +368,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         (_, true, _) => $"cycle {_runnerProgress!.Cycle} · alt {_runnerProgress.IndexInCycle + 1}/{_runnerProgress.TotalInCycle} · "
                         + (_runnerProgress.Current?.Macro?.Name ?? "keep-alive"),
         (_, _, true) => $"alt {_sequenceProgress!.Index + 1} of {_sequenceProgress.Total} · {_sequenceProgress.Completed} succeeded, {_sequenceProgress.Failed} failed",
-        _ => HasActiveAssignment ? "Ctrl+Shift+P starts the loop · Esc stops" : $"{Macros.Count} macros · pick one to assign",
+        _ => PairingCount > 0
+            ? "Ctrl+Shift+P starts the loop · Esc stops"
+            : HasActiveAssignment
+                ? "Click an alt row to pair it · unpaired alts get keep-alive"
+                : $"{Macros.Count} macros · pick one to assign",
     };
 
     // ---------- v0.2: Empty-state helpers ----------

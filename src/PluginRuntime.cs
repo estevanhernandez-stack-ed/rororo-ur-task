@@ -163,8 +163,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public void AssignMacroToAlt(int altPid, Macro? macro)
     {
-        if (macro is null) _assignments.Remove(altPid);
-        else _assignments[altPid] = macro;
+        var displaced = AssignmentMap.ApplyAssignment(_assignments, altPid, macro);
+
+        // Fire events for any alts that lost their pairing because of the 1:1 rule.
+        foreach (var otherPid in displaced)
+        {
+            Log($"assignment moved: pid {otherPid} → keep-alive (was {macro!.Name ?? "(unnamed)"})");
+            int capturedPid = otherPid;
+            RaiseUI(() => AssignmentChanged?.Invoke(capturedPid, null));
+        }
+
         Log(macro is null
             ? $"assignment cleared: pid {altPid} → keep-alive (Space)"
             : $"assignment: pid {altPid} → {macro.Name ?? "(unnamed)"}");

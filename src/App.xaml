@@ -170,6 +170,11 @@
             <!-- Multi-value converter: macro row Id == CurrentlyPlayingMacroId → bool. -->
             <local:MacroIdEqualsCurrentConverter x:Key="MacroIdEqualsCurrent" />
 
+            <!-- Multi-value converters: per-card paired-alt name + visibility.
+                 Drive the "→ AltName" chip that shows all paired macros simultaneously. -->
+            <local:PairedAltForMacroConverter x:Key="PairedAltForMacro" />
+            <local:PairedAltVisibilityConverter x:Key="PairedAltVisibility" />
+
             <!-- Small uppercase label, tracked. JetBrains-Mono-shaped vibe. -->
             <Style x:Key="MetaLabel" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />

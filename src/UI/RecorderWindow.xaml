@@ -392,6 +392,38 @@
                                                                    FontSize="8"
                                                                    Foreground="{StaticResource CyanBrush}" />
                                                     </Border>
+                                                    <!-- Paired-alt chip — visible when this macro is paired with an alt.
+                                                         Always visible (not just when this card is the painter) so all
+                                                         current pairings show simultaneously. -->
+                                                    <Border Background="{StaticResource BgBrush}"
+                                                            BorderBrush="{StaticResource CyanBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="3"
+                                                            Padding="5,1"
+                                                            Margin="6,0,0,0"
+                                                            VerticalAlignment="Center">
+                                                        <Border.Visibility>
+                                                            <MultiBinding Converter="{StaticResource PairedAltVisibility}">
+                                                                <Binding Path="Id" />
+                                                                <Binding Path="DataContext.PairedAltByMacroId"
+                                                                         RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                            </MultiBinding>
+                                                        </Border.Visibility>
+                                                        <TextBlock FontFamily="{StaticResource MonoFont}"
+                                                                   FontSize="8"
+                                                                   Foreground="{StaticResource CyanBrush}">
+                                                            <Run Text="→ " />
+                                                            <Run>
+                                                                <Run.Text>
+                                                                    <MultiBinding Converter="{StaticResource PairedAltForMacro}">
+                                                                        <Binding Path="Id" />
+                                                                        <Binding Path="DataContext.PairedAltByMacroId"
+                                                                                 RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                                    </MultiBinding>
+                                                                </Run.Text>
+                                                            </Run>
+                                                        </TextBlock>
+                                                    </Border>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
