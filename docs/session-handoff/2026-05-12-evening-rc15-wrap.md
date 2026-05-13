@@ -2,6 +2,20 @@
 
 > Paste this whole file as the opening prompt for the next session.
 
+> **Addendum 2026-05-13 — captcha bug was NOT the plugin.** The "captcha showed
+> avoided account name, then loaded that account on dismiss" symptom that haunted
+> rc9→rc15 turned out to be a ROROROblox-side bug, not an Ur Task issue. Root
+> cause: Roblox brands the captcha gate from `Username`/`DisplayName` in
+> `%LOCALAPPDATA%\Roblox\LocalStorage\appStorage.json`, but each spawned
+> `RobloxPlayerBeta.exe` writes its own identity to that file ~3-5s after attach.
+> During multi-launch, a captcha rendered for launch N was reading identity from
+> launch N+1's RPB write. Fix shipped in ROROROblox **v1.4.2.0** — new
+> `AppStorageDefender` stamps identity on dispatch + defends for 12s via
+> `FileSystemWatcher`, plus inter-launch delay bumped 1500ms → 5000ms. Smoke
+> confirmed clean: re-stamps per defender dropped from 11/11/8/7 (internal
+> thrash) to 6/6/6/2/4 (legitimate external defenses only). Plugin is cleared.
+> Task #65 → close as fixed in ROROROblox v1.4.2.0.
+
 ## TL;DR
 
 Long afternoon session: rc9 → **rc15** in one stretch. Multiple major redesigns: pairing model flipped from 1:1 to one-to-many, PLAY/STOP turned into a real toggle, zombie-plugin fix, keyboard-only recording default, visual treatment for active-painter and active-alt-row. Awaiting Este's smoke of **rc15** to validate the last visual fixes (rc14 shipped them but they didn't land due to a WPF property-precedence quirk; rc15 refactors with DataTrigger pattern).
@@ -107,7 +121,7 @@ If active-alt still doesn't fire: instrument with a log line in `PluginRuntime` 
 - **#41 H4 — Tag + push v0.2.0 stable (Este)** [pending] — gated on H3 green
 - **#42 I6 — MEMORY.md + dashboard + Discord (Este)** [pending] — gated on H4
 - **#56 ROROROblox follow-up — warn before restart with Roblox open** [pending, deferred]
-- **#65 ROROROblox bug — captcha showed avoided account name, then loaded that account on dismiss** [pending] — got WORSE this afternoon: two crossover-captchas, two windows of the same wrong account on dismiss. Another agent is investigating; #65 has the screenshot path at `C:\Users\estev\OneDrive\Pictures\Screenshots 1\Screenshot 2026-05-12 160942.png`
+- **#65 ROROROblox bug — captcha showed avoided account name, then loaded that account on dismiss** [FIXED in ROROROblox v1.4.2.0, 2026-05-13] — root cause was appStorage.json identity contention between sibling RPB processes; `AppStorageDefender` stamps + defends per-launch identity. Smoke green. Close on next session sweep. Screenshot at `C:\Users\estev\OneDrive\Pictures\Screenshots 1\Screenshot 2026-05-12 160942.png` preserved for archive.
 - **#66 ROROROblox UX — add per-plugin Launch button on Plugins window rows** [pending] — Este hit the no-Launch gap multiple times; fresh install autostart-off requires the toggle-then-restart dance
 - **#67 rc14 UX — active-painter card needs stronger visual** [pending] — rc15 attempts the fix; close if rc15 smoke confirms
 - **#68 rc14 UX — highlight active alt row during cycle** [pending] — rc15 attempts the fix; close if rc15 smoke confirms
