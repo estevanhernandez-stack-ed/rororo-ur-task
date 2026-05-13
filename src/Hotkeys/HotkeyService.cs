@@ -3,26 +3,34 @@ using System.Runtime.InteropServices;
 namespace Labs626.UrTask.Hotkeys;
 
 /// <summary>
-/// Registers F8 (record toggle) + F5 (play) + Esc (abort) as Win32 global
-/// hotkeys, fires <see cref="HotkeyPressed"/> on each. Listens on its own
-/// background thread with a message pump — same pattern as MacroRecorder,
-/// because RegisterHotKey delivers WM_HOTKEY through the thread's message
-/// queue and needs a GetMessage loop somewhere.
+/// Registers Ctrl+Shift+R (record toggle), Ctrl+Shift+P (play last), and bare
+/// Esc (abort) as Win32 global hotkeys. v0.1 used bare F8/F5/Esc, which
+/// hijacked those keys system-wide (browser refresh, IDE reload, Roblox
+/// Studio play). v0.2 uses chord defaults — same pattern modern TinyTask
+/// uses for the same reason.
 ///
-/// Configurable hotkey assignment lands in v0.2; v0.1 ships fixed F8/F5/Esc
-/// to match TinyTask muscle memory. The vkCodes are exposed via
-/// <see cref="RegisteredVkCodes"/> so MacroRecorder can filter them out at
-/// recording time (otherwise pressing F8 to stop a recording would bake
-/// the F8 keypress into the macro).
+/// Listens on its own background thread with a message pump — RegisterHotKey
+/// delivers WM_HOTKEY through the thread's message queue and needs a
+/// GetMessage loop somewhere.
+///
+/// Future: hotkey rebinding lands in v0.3 as a settings panel. v0.2 ships
+/// fixed chord defaults.
 /// </summary>
 internal sealed class HotkeyService : IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
     private const int WM_QUIT = 0x0012;
 
+    // Modifier flags for RegisterHotKey
+    private const uint MOD_NONE    = 0x0000;
+    private const uint MOD_ALT     = 0x0001;
+    private const uint MOD_CONTROL = 0x0002;
+    private const uint MOD_SHIFT   = 0x0004;
+    private const uint MOD_WIN     = 0x0008;
+
     // VK codes
-    private const int VK_F5 = 0x74;
-    private const int VK_F8 = 0x77;
+    private const int VK_R = 0x52;
+    private const int VK_P = 0x50;
     private const int VK_ESCAPE = 0x1B;
 
     // Hotkey ids — opaque to Win32; we use them to discriminate WM_HOTKEY wParam.
@@ -39,8 +47,15 @@ internal sealed class HotkeyService : IDisposable
 
     public event Action<HotkeyKind>? HotkeyPressed;
 
-    /// <summary>VK codes the service has registered. MacroRecorder consults this to skip them at record time.</summary>
-    public static IReadOnlyCollection<int> RegisteredVkCodes { get; } = new[] { VK_F8, VK_F5, VK_ESCAPE };
+    /// <summary>
+    /// VK codes the service has registered as chord hotkeys. MacroRecorder consults
+    /// this to skip them at record time — but only when Ctrl+Shift is held
+    /// (otherwise lowercase 'r'/'p' typing would get eaten).
+    /// </summary>
+    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P };
+
+    /// <summary>VK code for the bare Esc hotkey — always filtered at record time.</summary>
+    public static int AbortVkCode => VK_ESCAPE;
 
     public void Start()
     {
@@ -84,15 +99,17 @@ internal sealed class HotkeyService : IDisposable
         var registered = new List<int>();
         try
         {
-            if (!RegisterHotKey(IntPtr.Zero, ID_RECORD_TOGGLE, 0, VK_F8))
-                throw new InvalidOperationException($"RegisterHotKey(F8) failed, win32 error {Marshal.GetLastWin32Error()}");
+            const uint chord = MOD_CONTROL | MOD_SHIFT;
+
+            if (!RegisterHotKey(IntPtr.Zero, ID_RECORD_TOGGLE, chord, VK_R))
+                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+R) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_RECORD_TOGGLE);
 
-            if (!RegisterHotKey(IntPtr.Zero, ID_PLAY, 0, VK_F5))
-                throw new InvalidOperationException($"RegisterHotKey(F5) failed, win32 error {Marshal.GetLastWin32Error()}");
+            if (!RegisterHotKey(IntPtr.Zero, ID_PLAY, chord, VK_P))
+                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+P) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_PLAY);
 
-            if (!RegisterHotKey(IntPtr.Zero, ID_ABORT, 0, VK_ESCAPE))
+            if (!RegisterHotKey(IntPtr.Zero, ID_ABORT, MOD_NONE, VK_ESCAPE))
                 throw new InvalidOperationException($"RegisterHotKey(Esc) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_ABORT);
 

@@ -10,7 +10,7 @@ namespace Labs626.UrTask.PluginHost;
 /// the window belongs to. RoRoRo emits the binding because it launched the
 /// alt and remembers.
 /// </summary>
-internal sealed class AccountRegistry
+public sealed class AccountRegistry
 {
     private readonly ConcurrentDictionary<int, AccountInfo> _byPid = new();
 

@@ -1,6 +1,7 @@
 <Application x:Class="Labs626.UrTask.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Labs626.UrTask.UI"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <ResourceDictionary>
@@ -85,12 +86,177 @@
                 </Setter>
             </Style>
 
+            <!-- ContextMenu — dark navy bg with brand border + rounded corners -->
+            <Style TargetType="ContextMenu">
+                <Setter Property="Background" Value="{StaticResource BgBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{StaticResource WhiteBrush}" />
+                <Setter Property="Padding" Value="4" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContextMenu">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}">
+                                <ItemsPresenter />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- MenuItem — light text, cyan hover -->
+            <Style TargetType="MenuItem">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource WhiteBrush}" />
+                <Setter Property="FontFamily" Value="{StaticResource BodyFont}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Padding" Value="10,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="MenuItem">
+                            <Border x:Name="ItemBorder"
+                                    Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}"
+                                    CornerRadius="3">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="0"
+                                                      ContentSource="Header"
+                                                      VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{TemplateBinding InputGestureText}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="14,0,0,0" />
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource RowBgBrush}" />
+                                    <Setter Property="Foreground" Value="{StaticResource CyanBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.4" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Separator inside a MenuItem context — picks up automatically via WPF-internal key -->
+            <Style TargetType="Separator" x:Key="{x:Static MenuItem.SeparatorStyleKey}">
+                <Setter Property="Margin" Value="6,4" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Separator">
+                            <Border Height="1" Background="{StaticResource DividerBrush}" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Built-in converter: bool → Visibility (True=Visible, False=Collapsed). -->
+            <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+
+            <!-- Multi-value converter: macro row Id == CurrentlyPlayingMacroId → bool. -->
+            <local:MacroIdEqualsCurrentConverter x:Key="MacroIdEqualsCurrent" />
+
+            <!-- Multi-value converters: per-card paired-alt name + visibility.
+                 Drive the "→ AltName" chip that shows all paired macros simultaneously. -->
+            <local:PairedAltForMacroConverter x:Key="PairedAltForMacro" />
+            <local:PairedAltVisibilityConverter x:Key="PairedAltVisibility" />
+
+            <!-- Multi-value converter: row int == current int → bool.
+                 Drives the active-alt-row outline during round-robin playback. -->
+            <local:IntEqualsConverter x:Key="IntEquals" />
+
             <!-- Small uppercase label, tracked. JetBrains-Mono-shaped vibe. -->
             <Style x:Key="MetaLabel" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
                 <Setter Property="FontSize" Value="10" />
                 <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
                 <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+            </Style>
+
+            <!-- Slim dark scrollbar thumb — 8px, divider-color at rest, muted-text on hover. -->
+            <Style x:Key="SlimDarkScrollBarThumb" TargetType="Thumb">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Thumb">
+                            <Border x:Name="ThumbBorder"
+                                    Background="{StaticResource DividerBrush}"
+                                    CornerRadius="2" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{StaticResource MutedTextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Implicit ScrollBar override — picks up app-wide, no x:Key needed.
+                 Transparent track, slim thumb, no arrow buttons. -->
+            <Style TargetType="ScrollBar">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource DividerBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="Orientation" Value="Vertical">
+                        <Setter Property="Width" Value="8" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ScrollBar">
+                                    <Grid>
+                                        <Track Name="PART_Track" IsDirectionReversed="True">
+                                            <Track.Thumb>
+                                                <Thumb Style="{StaticResource SlimDarkScrollBarThumb}" />
+                                            </Track.Thumb>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" />
+                                            </Track.IncreaseRepeatButton>
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" />
+                                            </Track.DecreaseRepeatButton>
+                                        </Track>
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                    <Trigger Property="Orientation" Value="Horizontal">
+                        <Setter Property="Height" Value="8" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ScrollBar">
+                                    <Grid>
+                                        <Track Name="PART_Track">
+                                            <Track.Thumb>
+                                                <Thumb Style="{StaticResource SlimDarkScrollBarThumb}" />
+                                            </Track.Thumb>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageRightCommand" Opacity="0" />
+                                            </Track.IncreaseRepeatButton>
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" />
+                                            </Track.DecreaseRepeatButton>
+                                        </Track>
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                </Style.Triggers>
             </Style>
         </ResourceDictionary>
     </Application.Resources>

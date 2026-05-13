@@ -16,21 +16,21 @@ namespace Labs626.UrTask.Macros;
 internal sealed class AutoStopCoordinator
 {
     private readonly MacroPlayer _player;
-    private long? _activeBoundUserId;
+    private long? _activeTargetUserId;
 
     public AutoStopCoordinator(MacroPlayer player, AccountRegistry accounts)
     {
         _player = player ?? throw new ArgumentNullException(nameof(player));
         if (accounts is null) throw new ArgumentNullException(nameof(accounts));
 
-        _player.Started += (_, args) => _activeBoundUserId = args.Macro.BoundUserId;
-        _player.Ended += (_, _) => _activeBoundUserId = null;
+        _player.Started += (_, args) => _activeTargetUserId = args.TargetUserId == 0 ? null : args.TargetUserId;
+        _player.Ended += (_, _) => _activeTargetUserId = null;
         accounts.AccountRemoved += OnAccountRemoved;
     }
 
     private void OnAccountRemoved(object? sender, AccountRegistry.AccountInfo info)
     {
-        if (_activeBoundUserId == info.RobloxUserId)
+        if (_activeTargetUserId == info.RobloxUserId)
         {
             // Active playback was bound to the user-id whose window just closed.
             // Abort. The PlayAsync loop catches OperationCanceledException and

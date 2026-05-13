@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "11111111-2222-3333-4444-555555555555",
+  "name": "test-jump-jump",
+  "boundUserId": 47821334,
+  "boundAccountId": "acct-abc-123",
+  "boundDisplayName": "Goldnail8",
+  "recordedAtUnixMs": 1746000000000,
+  "events": [
+    { "kind": 0, "timestampMs": 0, "virtualKeyCode": 32 },
+    { "kind": 1, "timestampMs": 80, "virtualKeyCode": 32 }
+  ]
+}

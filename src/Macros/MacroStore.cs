@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Labs626.UrTask.Macros;
 
@@ -17,6 +18,11 @@ public sealed class MacroStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // String-form enums match MacroV1Migrator's read-side options for symmetry —
+        // direct-deserialize code paths (not going through the migrator) don't have
+        // to repeat the converter setup. The migrator's converter accepts both string
+        // and integer forms, so v0.1 macros (integer enums) still load fine.
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly string _directory;
@@ -39,6 +45,8 @@ public sealed class MacroStore
     /// <summary>
     /// Load every macro file in the directory. Returns successes and failures
     /// separately so the UI can surface invalid files without breaking the load.
+    /// v0.1 macros are auto-migrated to v2 via <see cref="MacroV1Migrator"/>;
+    /// the migration is sticky — the next save persists in v2 shape.
     /// </summary>
     public LoadResult LoadAll()
     {
@@ -50,16 +58,10 @@ public sealed class MacroStore
             try
             {
                 var json = File.ReadAllText(path);
-                var macro = JsonSerializer.Deserialize<Macro>(json, JsonOptions);
+                var macro = MacroV1Migrator.LoadAndMigrate(json);
                 if (macro is null)
                 {
-                    failures.Add(new LoadFailure(path, "Deserialization returned null."));
-                    continue;
-                }
-                if (macro.SchemaVersion != Macro.CurrentSchemaVersion)
-                {
-                    failures.Add(new LoadFailure(path,
-                        $"Schema version {macro.SchemaVersion} not supported (current: {Macro.CurrentSchemaVersion})."));
+                    failures.Add(new LoadFailure(path, "Migration returned null."));
                     continue;
                 }
                 loaded.Add(macro);

@@ -1,12 +1,16 @@
 # RoRoRo Ur Task
 
-> Per-window-aware macro recording for [RoRoRo](https://github.com/estevanhernandez-stack-ed/ROROROblox)-managed Roblox alts. Record once on one account; playback refuses to fire unless the foreground window matches.
+> Portable macro recording for [RoRoRo](https://github.com/estevanhernandez-stack-ed/ROROROblox)-managed Roblox alts. Record once, play on any alt — now with multi-select sequential playback, multi-window mode, and compact view for long sequences.
 
-The killer beat is the user-id binding: when you start recording, RoRoRo Ur Task captures the user id of the foreground Roblox window. Playback won't fire keys or clicks into any other window — alt-tab away mid-playback and the macro stops cold. Auto-stop also triggers when the bound alt's window closes.
+Macros are now **fully portable** — no account binding. Pick one or more alts at play time and the macro runs on each in sequence. Multi-window recording mode (experimental) captures across multiple windows for flows that switch alts themselves. Compact mode collapses to a slim always-on-top strip so you can watch the alts while the sequence plays.
 
 ## How it works
 
-RoRoRo Ur Task is a [RoRoRo plugin](https://github.com/estevanhernandez-stack-ed/ROROROblox/blob/main/docs/plugins/AUTHOR_GUIDE.md). It runs as a separate Windows EXE, connects to RoRoRo over a named pipe (`\\.\pipe\rororo-plugin-host`), and subscribes to RoRoRo's `account-launched` + `account-exited` events to maintain a live (pid → user-id) map. When you record, the foreground window's pid resolves through that map to a user id; the macro stores that binding. When you play, the same lookup runs every event — mismatch aborts.
+RoRoRo Ur Task is a [RoRoRo plugin](https://github.com/estevanhernandez-stack-ed/ROROROblox/blob/main/docs/plugins/AUTHOR_GUIDE.md). It runs as a separate Windows EXE, connects to RoRoRo over a named pipe (`\\.\pipe\rororo-plugin-host`), and subscribes to RoRoRo's `account-launched` + `account-exited` events.
+
+**Recording:** captures keyboard + mouse events (globally, even across windows if multi-window mode is enabled). Stores the current foreground alt's user-id as metadata (for reference only — not enforced at playback).
+
+**Playback:** opens a target picker; you pick one or more alts and the macro runs on each in sequence. Multi-window mode replays raw events without foreground gating; single-window (default) gates every event to the active foreground window. Skip-on-failure: if one alt's window closes mid-sequence, playback continues on the rest. End-of-sequence summary logs to the activity view.
 
 ## Capabilities declared
 
@@ -27,21 +31,30 @@ The four `system.*` capabilities are disclosure-only — they don't gate calls, 
 You need RoRoRo installed first ([v1.4 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)).
 
 1. Open RoRoRo → Plugins → Install.
-2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.1.0/`
+2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.2.0/`
 3. Walk the consent sheet. The four `system.*` capabilities are required for the plugin to function.
 4. Click Install.
 
 RoRoRo Ur Task starts in your system tray (its own icon, separate from RoRoRo's tray). Click the tray icon to surface the recorder window.
 
+## Recording mode and the mouse-click caveat
+
+**By default, recording is keyboard-only** — mouse events (clicks, moves, wheel) are dropped during capture. This is the safe default because mouse coordinates are absolute screen pixels: a recorded click only lands correctly if the target alt's window is at the same screen position it was when you recorded. For the dominant use case (jumps, walks, key-combo grinding) this isn't a problem at all — keyboard events route to whichever window has focus, and the plugin handles per-alt focus during the round-robin.
+
+If you need mouse capture (drag flows, click-precision sequences), untick "Record keyboard only" in the recorder window. A magenta warning appears: **stack all participating Roblox windows at the same screen quadrant** before playback. Win+Arrow snaps to halves/quadrants; a window-manager utility can stack them precisely. The round-robin will then send recorded clicks to the same pixel each cycle, and since the windows occupy the same screen region, every alt receives clicks on the right UI element.
+
+Window-relative coordinates (record once, replay at any window position) is planned for v0.3.
+
 ## Hotkeys
 
-| Key | Action |
-|---|---|
-| `F8` | Start recording (or stop if already recording). |
-| `F5` | Play the selected macro. |
-| `Esc` | Abort current playback. |
+| Key | Action | Scope |
+|---|---|---|
+| `Ctrl+Shift+R` | Start recording (or stop if already recording). | Global |
+| `Ctrl+Shift+P` | Play the last macro on the smart-default target (foreground alt). | Global |
+| `Ctrl+Shift+M` | Toggle compact mode (always-on-top strip). | Window-level |
+| `Esc` | Abort current playback. | Global |
 
-Hotkey collision: F8 + F5 are registered globally while the plugin runs. Configurable bindings land in v0.2.
+**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. Per-macro PLAY buttons in the recorder UI show the updated labels.
 
 ## License
 

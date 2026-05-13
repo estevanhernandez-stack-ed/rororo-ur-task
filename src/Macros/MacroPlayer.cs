@@ -7,19 +7,30 @@ namespace Labs626.UrTask.Macros;
 /// <summary>
 /// Plays back recorded macros via SendInput, preserving original timing.
 /// The structural feature: pre-flight + continuous foreground checks against
-/// the macro's <see cref="Macro.BoundUserId"/>. Mismatch at pre-flight
-/// refuses the playback outright; mismatch mid-playback aborts immediately.
+/// the explicit <c>targetUserId</c> passed to <see cref="PlayAsync"/>. Mismatch
+/// at pre-flight refuses the playback outright; mismatch mid-playback aborts
+/// immediately.
 ///
 /// Threading: <see cref="PlayAsync"/> runs as a regular async Task. The
 /// SendInput calls happen on whichever thread Task.Delay continues on
 /// (thread pool by default) — Win32 doesn't care which thread sends input.
 /// </summary>
-internal sealed class MacroPlayer
+internal interface IMacroPlayer
 {
-    private readonly ForegroundWatcher _foreground;
+    bool IsPlaying { get; }
+    Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default);
+    Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default);
+    bool Abort();
+    event EventHandler<PlaybackStartedArgs>? Started;
+    event EventHandler<PlaybackEndedArgs>? Ended;
+}
+
+internal sealed class MacroPlayer : IMacroPlayer
+{
+    private readonly IForegroundWatcher _foreground;
     private CancellationTokenSource? _activeCts;
 
-    public MacroPlayer(ForegroundWatcher foreground)
+    public MacroPlayer(IForegroundWatcher foreground)
     {
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
     }
@@ -30,11 +41,12 @@ internal sealed class MacroPlayer
     public event EventHandler<PlaybackEndedArgs>? Ended;
 
     /// <summary>
-    /// Play the given macro. Pre-flight check: foreground window's user-id
-    /// must match macro.BoundUserId. Mid-playback check: same, on every event.
-    /// Returns a <see cref="PlaybackResult"/> indicating outcome.
+    /// Play the given macro against the specified target user-id. Pre-flight check:
+    /// foreground window's user-id must match <paramref name="targetUserId"/>.
+    /// Mid-playback check: same, on every event. Returns a <see cref="PlaybackResult"/>
+    /// indicating outcome.
     /// </summary>
-    public async Task<PlaybackResult> PlayAsync(Macro macro, CancellationToken external = default)
+    public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
@@ -42,13 +54,16 @@ internal sealed class MacroPlayer
         var preflight = _foreground.ResolveForegroundAccount();
         if (preflight is null)
             return PlaybackResult.Refused("No RoRoRo-managed window is currently in the foreground.");
-        if (preflight.RobloxUserId != macro.BoundUserId)
+        if (preflight.RobloxUserId != targetUserId)
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
-                $"macro is bound to user {macro.BoundUserId} ({macro.BoundDisplayName}).");
+                $"target is user {targetUserId}.");
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
-        Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight));
+        Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
+
+        var heldKeys = new HashSet<int>();      // VK codes currently down
+        var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
 
         try
         {
@@ -63,16 +78,17 @@ internal sealed class MacroPlayer
                     await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
                 }
 
-                // Continuous foreground check. If the user alt-tabs to a non-bound
+                // Continuous foreground check. If the user alt-tabs to a non-target
                 // window mid-playback, refuse to send the input.
                 var fg = _foreground.ResolveForegroundAccount();
-                if (fg is null || fg.RobloxUserId != macro.BoundUserId)
+                if (fg is null || fg.RobloxUserId != targetUserId)
                 {
                     return PlaybackResult.Aborted(
                         $"Foreground shifted to {(fg?.DisplayName ?? "non-RoRoRo window")} at event {i + 1}/{macro.Events.Count}.");
                 }
 
                 SendMacroEvent(evt);
+                TrackHeldState(evt, heldKeys, heldButtons);
             }
             return PlaybackResult.Completed();
         }
@@ -82,6 +98,46 @@ internal sealed class MacroPlayer
         }
         finally
         {
+            ReleaseHeldState(heldKeys, heldButtons);
+            Ended?.Invoke(this, new PlaybackEndedArgs(macro));
+            _activeCts?.Dispose();
+            _activeCts = null;
+        }
+    }
+
+    /// <summary>
+    /// Play an AllWindows macro raw — no foreground gating, no auto-stop. Replays
+    /// the recorded events as-is, including any window-switching clicks the user
+    /// captured during recording. Esc still aborts via <see cref="Abort"/>.
+    /// </summary>
+    public async Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
+    {
+        if (macro is null) throw new ArgumentNullException(nameof(macro));
+        if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
+
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        Started?.Invoke(this, new PlaybackStartedArgs(macro, BoundAccount: null, TargetUserId: 0));
+
+        var heldKeys = new HashSet<int>();      // VK codes currently down
+        var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
+
+        try
+        {
+            var clock = Stopwatch.StartNew();
+            for (int i = 0; i < macro.Events.Count; i++)
+            {
+                var evt = macro.Events[i];
+                var wait = evt.TimestampMs - clock.ElapsedMilliseconds;
+                if (wait > 0) await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
+                SendMacroEvent(evt);
+                TrackHeldState(evt, heldKeys, heldButtons);
+            }
+            return PlaybackResult.Completed();
+        }
+        catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
+        finally
+        {
+            ReleaseHeldState(heldKeys, heldButtons);
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -99,6 +155,64 @@ internal sealed class MacroPlayer
         if (cts is null) return false;
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with finally */ }
         return true;
+    }
+
+    // ---------- Held-state tracking + release ----------
+
+    private static void TrackHeldState(MacroEvent evt, HashSet<int> heldKeys, HashSet<int> heldButtons)
+    {
+        switch (evt.Kind)
+        {
+            case MacroEventKind.KeyDown:
+                heldKeys.Add(evt.VirtualKeyCode);
+                break;
+            case MacroEventKind.KeyUp:
+                heldKeys.Remove(evt.VirtualKeyCode);
+                break;
+            case MacroEventKind.MouseDown:
+                heldButtons.Add(evt.MouseButton);
+                break;
+            case MacroEventKind.MouseUp:
+                heldButtons.Remove(evt.MouseButton);
+                break;
+            // MouseMove, MouseWheel don't change held state
+        }
+    }
+
+    private static void ReleaseHeldState(HashSet<int> heldKeys, HashSet<int> heldButtons)
+    {
+        // Fire KEYUP for any keys still held — protects against stuck modifiers
+        // (Ctrl, Shift, Alt, Win) after an aborted/refused playback.
+        foreach (var vk in heldKeys)
+        {
+            try { SendKey((ushort)vk, keyUp: true); } catch { /* best-effort cleanup */ }
+        }
+
+        // Fire mouse-button UP for any buttons still pressed. We don't have the
+        // original x,y — use the current cursor position so the event lands somewhere
+        // sane. If the cursor is now over a different window, the UP still cancels
+        // the held state in Windows' input layer, which is what we care about.
+        if (heldButtons.Count > 0)
+        {
+            var pos = GetCurrentCursorPos();
+            foreach (var btn in heldButtons)
+            {
+                try { SendMouseButton(pos.x, pos.y, btn, isDown: false); } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    private static (int x, int y) GetCurrentCursorPos()
+    {
+        if (GetCursorPos(out var pt)) return (pt.X, pt.Y);
+        return (0, 0);
     }
 
     private static void SendMacroEvent(MacroEvent evt)
@@ -342,14 +456,15 @@ internal sealed class MacroPlayer
     private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 }
 
-internal enum PlaybackOutcome { Refused, Completed, Aborted }
+public enum PlaybackOutcome { Refused, Completed, Aborted, Skipped }
 
-internal sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
+public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
 {
     public static PlaybackResult Refused(string reason) => new(PlaybackOutcome.Refused, reason);
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
+    public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
 }
 
-internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo BoundAccount);
+internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo? BoundAccount, long TargetUserId);
 internal sealed record PlaybackEndedArgs(Macro Macro);

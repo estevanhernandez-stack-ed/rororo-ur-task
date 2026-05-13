@@ -32,4 +32,12 @@
     <ProjectReference Include="..\..\..\ROROROblox\src\ROROROblox.PluginContract\ROROROblox.PluginContract.csproj" />
   </ItemGroup>
 
+
+  <ItemGroup>
+    <None Include="..\fixtures\macro-v1.json">
+      <Link>fixtures\macro-v1.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

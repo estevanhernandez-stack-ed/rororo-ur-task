@@ -1,0 +1,171 @@
+<Window x:Class="Labs626.UrTask.UI.PlaybackTargetPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Play macro"
+        Width="440" Height="540"
+        MinWidth="380" MinHeight="380"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{StaticResource BgBrush}"
+        Foreground="{StaticResource WhiteBrush}"
+        FontFamily="{StaticResource BodyFont}"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        ResizeMode="NoResize"
+        Topmost="True"
+        KeyDown="OnKeyDown">
+
+    <Border Background="{StaticResource BgBrush}"
+            BorderBrush="{StaticResource DividerBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Sticky header -->
+            <Border Grid.Row="0"
+                    Padding="18,16,18,12"
+                    BorderBrush="{StaticResource DividerBrush}"
+                    BorderThickness="0,0,0,1">
+                <StackPanel>
+                    <TextBlock x:Name="TitleText"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource WhiteBrush}" />
+                    <TextBlock x:Name="SubtitleText"
+                               FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
+            <!-- Scrollable alt list -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="14,8,14,8">
+                <ItemsControl x:Name="AltList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,3"
+                                    CornerRadius="5"
+                                    BorderThickness="1"
+                                    Background="{StaticResource RowBgBrush}"
+                                    Padding="10,8"
+                                    Cursor="Hand"
+                                    MouseLeftButtonDown="OnAltRowClicked"
+                                    Tag="{Binding}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Checkbox / dot -->
+                                    <Border Grid.Column="0"
+                                            Width="14" Height="14"
+                                            CornerRadius="3"
+                                            BorderThickness="1.5"
+                                            Margin="0,0,10,0"
+                                            VerticalAlignment="Center">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                <Setter Property="Background" Value="Transparent" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                        <Setter Property="Background" Value="{StaticResource CyanBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock FontSize="9"
+                                                   FontWeight="Bold"
+                                                   Foreground="{StaticResource BgBrush}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}}"
+                                                   Text="&#x2713;" />
+                                    </Border>
+
+                                    <!-- Avatar placeholder -->
+                                    <Border Grid.Column="1"
+                                            Width="26" Height="26"
+                                            CornerRadius="13"
+                                            Background="{StaticResource CyanBrush}"
+                                            Margin="0,0,10,0"
+                                            Opacity="0.35" />
+
+                                    <!-- Name + meta -->
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource WhiteBrush}" />
+                                        <TextBlock FontSize="9"
+                                                   Foreground="{StaticResource MutedTextBrush}">
+                                            <Run Text="user " />
+                                            <Run Text="{Binding RobloxUserId, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <!-- Order tag (multi-select, selected rows only) -->
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding OrderTag}"
+                                               Visibility="{Binding OrderTagVisible, Converter={StaticResource BoolToVisibility}}"
+                                               FontSize="9"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource CyanBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Sticky footer -->
+            <Border Grid.Row="2"
+                    Padding="14,10"
+                    BorderBrush="{StaticResource DividerBrush}"
+                    BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="EscHint"
+                               Grid.Column="0"
+                               FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               VerticalAlignment="Center"
+                               Text="Esc to cancel · ↑↓ to move · ↵ to play" />
+                    <Button x:Name="PlayButton"
+                            Grid.Column="1"
+                            Style="{StaticResource PrimaryButton}"
+                            Click="OnPlayClicked"
+                            Padding="14,6"
+                            FontSize="11" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

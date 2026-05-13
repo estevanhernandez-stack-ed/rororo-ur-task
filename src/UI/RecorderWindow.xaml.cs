@@ -1,5 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.UI;
 
@@ -8,6 +11,14 @@ public partial class RecorderWindow : Window
     public RecorderWindow()
     {
         InitializeComponent();
+        Loaded += (_, _) =>
+        {
+            if (DataContext is RecorderViewModel vm)
+            {
+                vm.PropertyChanged += OnViewModelPropertyChanged;
+                ApplyCompactState(vm.IsCompact);
+            }
+        };
     }
 
     /// <summary>
@@ -21,4 +32,135 @@ public partial class RecorderWindow : Window
         Hide();
         base.OnClosing(e);
     }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel vm && e.PropertyName == nameof(vm.IsCompact))
+        {
+            ApplyCompactState(vm.IsCompact);
+        }
+    }
+
+    private void ApplyCompactState(bool compact)
+    {
+        if (compact)
+        {
+            MinWidth = 320;
+            MinHeight = 80;
+            Width = 380;
+            Height = 110;
+            SizeToContent = SizeToContent.Manual;
+        }
+        else
+        {
+            MinWidth = 440;
+            MinHeight = 580;
+            Width = 520;
+            Height = 720;
+            SizeToContent = SizeToContent.Manual;
+        }
+    }
+
+    private void OnTogglePinClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel vm)
+            vm.IsTopmost = !vm.IsTopmost;
+    }
+
+    private void OnToggleCompactClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel vm)
+            vm.IsCompact = !vm.IsCompact;
+    }
+
+    // ── Macro card handlers ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Clicking anywhere on a macro card marks it as the active assignment macro
+    /// (cyan outline, "ACTIVE" chip). The card click replaces the old per-card
+    /// PLAY button — left-clicking = "I want to assign this macro."
+    /// </summary>
+    private void OnMacroCardClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is Labs626.UrTask.Macros.Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.MarkMacroActiveCommand.Execute(macro);
+        }
+    }
+
+    private void OnMacroOverflowClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.ContextMenu is not null)
+        {
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
+    }
+
+    private void OnMacroRenameClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            var dlg = new RenameMacroDialog(macro.Name ?? "")
+            {
+                Owner = this,
+            };
+            if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.NewName))
+            {
+                vm.RenameMacro(macro, dlg.NewName.Trim());
+            }
+        }
+    }
+
+    private void OnMacroDeleteClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            var dlg = new DeleteMacroConfirmDialog(macro.Name ?? "(unnamed)") { Owner = this };
+            if (dlg.ShowDialog() == true)
+            {
+                vm.DeleteMacro(macro);
+            }
+        }
+    }
+
+    // ── Assignment row handler ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Clicking an alt row in the assignment panel commits (or clears) the active
+    /// macro to that alt. The toggle logic lives in ToggleAltAssignmentCommand.
+    /// </summary>
+    private void OnAssignmentRowClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is AssignmentRow row
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.ToggleAltAssignmentCommand.Execute(row);
+        }
+    }
+
+    // ── Custom title bar handlers ───────────────────────────────────────────
+
+    private void OnTitleBarDrag(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left)
+        {
+            try { DragMove(); } catch (InvalidOperationException) { /* ignore if not left-button or wrong state */ }
+        }
+    }
+
+    private void OnTitleBarMinimizeClicked(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void OnTitleBarMaximizeClicked(object sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    /// <summary>
+    /// Close button hides to tray — the OnClosing override below handles the
+    /// cancel-and-hide logic, so calling Close() here is correct. The tray
+    /// icon's Quit item calls Application.Current.Shutdown for real exit.
+    /// </summary>
+    private void OnTitleBarCloseClicked(object sender, RoutedEventArgs e) => Close();
 }
