@@ -20,18 +20,6 @@ jobs:
         with:
           path: rororo-ur-task
 
-      # ProjectReference in the csproj points at ..\ROROROblox\src\... so the
-      # PluginContract has to be on disk as a sibling repo. Until the contract
-      # publishes as a NuGet, this is the way. Tracks main now that v1.4 merged
-      # — the contract project lives at src/ROROROblox.PluginContract/ on every
-      # commit going forward. When PluginContract publishes as a NuGet, this
-      # whole sibling-checkout dance retires.
-      - name: Checkout ROROROblox (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: estevanhernandez-stack-ed/ROROROblox
-          path: ROROROblox
-
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
