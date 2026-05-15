@@ -2,6 +2,14 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.2.1 — 2026-05-15
+
+### Changed
+
+- **Build now consumes `ROROROblox.PluginContract` from nuget.org** instead of the on-disk `ProjectReference`. Plugin authors can now `dotnet add package ROROROblox.PluginContract` exactly as `AUTHOR_GUIDE.md` describes. Release CI drops the sibling-repo checkout step — the NuGet-only pipeline produces this build end-to-end.
+
+No user-facing functional changes. Same binary shape as v0.2.0.
+
 ## 0.2.0 — 2026-05-11
 
 ### Added
