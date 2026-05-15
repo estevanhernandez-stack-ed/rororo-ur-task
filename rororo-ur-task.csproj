@@ -64,10 +64,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- ProjectReference until the PluginContract NuGet publishes to nuget.org.
-         Matches the rororo-hello-plugin stub pattern. Requires sibling ROROROblox
-         repo on disk for build (CI documents this in the workflow). -->
-    <ProjectReference Include="..\ROROROblox\src\ROROROblox.PluginContract\ROROROblox.PluginContract.csproj" />
+    <!-- The gRPC plugin contract, published from the ROROROblox repo to nuget.org. -->
+    <PackageReference Include="ROROROblox.PluginContract" Version="0.1.0" />
   </ItemGroup>
 
 </Project>
