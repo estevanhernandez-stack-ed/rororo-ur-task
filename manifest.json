@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "626labs.ur-task",
   "name": "RoRoRo Ur Task",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "contractVersion": "1.0",
   "publisher": "626 Labs LLC",
   "description": "Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account; playback refuses unless the foreground window matches.",
@@ -16,5 +16,8 @@
     "host.ui.tray-menu"
   ],
   "icon": "icon.png",
-  "updateFeed": "https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases.atom"
+  "updateFeed": "https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases.atom",
+  "autostartDefault": "on",
+  "minHostVersion": "1.4.3",
+  "entrypoint": "626labs.ur-task.exe"
 }

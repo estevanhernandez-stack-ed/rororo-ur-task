@@ -28,14 +28,14 @@ The four `system.*` capabilities are disclosure-only — they don't gate calls, 
 
 ## Install
 
-You need RoRoRo installed first ([v1.4 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)).
+You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Older hosts will refuse the install with a clear "Update RoRoRo" message.
 
 1. Open RoRoRo → Plugins → Install.
-2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.2.0/`
+2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.2.2/`
 3. Walk the consent sheet. The four `system.*` capabilities are required for the plugin to function.
 4. Click Install.
 
-RoRoRo Ur Task starts in your system tray (its own icon, separate from RoRoRo's tray). Click the tray icon to surface the recorder window.
+RoRoRo Ur Task starts in your system tray immediately on install (its own icon, separate from RoRoRo's tray). Click the tray icon to surface the recorder window.
 
 ## Recording mode and the mouse-click caveat
 

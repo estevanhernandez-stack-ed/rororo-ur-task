@@ -2,6 +2,16 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.2.2 — 2026-05-16
+
+### Changed
+
+- **Requires RoRoRo v1.4.3.0 or newer.** Older hosts now get a clear "Update RoRoRo" error at install time instead of the silent failure-to-start mode that v0.2.1 fell into on v1.4.2.0.
+- **Fresh installs start automatically.** New `autostartDefault: "on"` manifest flag tells the v1.4.3+ host to default the autostart preference to on for first-time installs — no more toggle-and-restart dance after install. Re-installs preserve the existing consent record (user choice always wins).
+- Manifest now declares `entrypoint: "626labs.ur-task.exe"` explicitly. Redundant with the host's default guess for single-EXE plugins like this one, but documents intent.
+
+No code changes. Same binary shape as v0.2.1.
+
 ## 0.2.1 — 2026-05-15
 
 ### Changed
