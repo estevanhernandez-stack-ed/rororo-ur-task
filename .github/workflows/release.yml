@@ -16,12 +16,12 @@ jobs:
 
     steps:
       - name: Checkout rororo-ur-task
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: rororo-ur-task
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -38,7 +38,7 @@ jobs:
           Get-Content artifacts/manifest.sha256
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             rororo-ur-task/artifacts/manifest.json
