@@ -237,6 +237,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         try { _bridgeCts.Cancel(); } catch { }
+        try { _bridgeCts.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);

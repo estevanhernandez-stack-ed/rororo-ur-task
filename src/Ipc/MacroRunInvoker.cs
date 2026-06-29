@@ -12,7 +12,7 @@ namespace Labs626.UrTask.Ipc;
 /// </summary>
 internal sealed class MacroRunInvoker : IMacroRunInvoker
 {
-    public const string ForegroundSentinel = "foreground";
+    internal const string ForegroundSentinel = "foreground";
 
     private readonly Func<IReadOnlyList<Macro>> _loadMacros;
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
@@ -68,10 +68,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
     private IReadOnlyList<AccountRegistry.AccountInfo> ResolveTargets(IReadOnlyList<string>? requested)
     {
+        requested ??= Array.Empty<string>();
         var running = _snapshot();
 
         // Null/omitted or explicit ["foreground"] ⇒ the current foreground alt.
-        bool isForeground = requested is null || requested.Count == 0
+        bool isForeground = requested.Count == 0
             || (requested.Count == 1 && string.Equals(requested[0], ForegroundSentinel, StringComparison.OrdinalIgnoreCase));
         if (isForeground)
         {
@@ -83,8 +84,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         }
 
         // Explicit user-ids — preserve requested order, drop unresolved.
-        // requested is non-null here: isForeground covers the null/empty/foreground-sentinel cases above.
-        var resolved = new List<AccountRegistry.AccountInfo>(requested!.Count);
+        var resolved = new List<AccountRegistry.AccountInfo>(requested.Count);
         foreach (var t in requested)
         {
             if (long.TryParse(t, NumberStyles.Integer, CultureInfo.InvariantCulture, out var userId))

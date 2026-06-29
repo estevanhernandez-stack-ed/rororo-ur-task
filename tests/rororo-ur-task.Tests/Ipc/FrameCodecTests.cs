@@ -36,5 +36,6 @@ public class FrameCodecTests
         using var ms = new MemoryStream();
         await Assert.ThrowsAsync<InvalidDataException>(
             async () => await FrameCodec.WriteFrameAsync(ms, tooBig, default));
+        Assert.Equal(0, ms.Length);
     }
 }

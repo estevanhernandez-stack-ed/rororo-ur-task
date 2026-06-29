@@ -1,6 +1,5 @@
 // tests/rororo-ur-task.Tests/Ipc/MacroRunnerServerTests.cs
 using System.IO.Pipes;
-using System.Text;
 using System.Text.Json;
 using Labs626.UrTask.Ipc;
 

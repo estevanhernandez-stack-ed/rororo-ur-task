@@ -38,6 +38,7 @@ public class MacroRunInvokerTests
         var inv = Build(macros: Array.Empty<Macro>(), running: new[] { Alt(123) }, busy: false);
         var req = new RunMacroRequest("1.0", "RunMacro", Guid.NewGuid().ToString(), new[] { "123" }, null, "626labs.ur-ocr");
         var r = await inv.RunAsync(req, default);
+        Assert.False(r.Ok);
         Assert.Equal("unknown-macro", r.Reason);
     }
 
@@ -48,6 +49,7 @@ public class MacroRunInvokerTests
         var inv = Build(new[] { m }, new[] { Alt(123) }, busy: true);
         var req = new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr");
         var r = await inv.RunAsync(req, default);
+        Assert.False(r.Ok);
         Assert.Equal("busy", r.Reason);
     }
 
@@ -58,6 +60,7 @@ public class MacroRunInvokerTests
         var inv = Build(new[] { m }, running: new[] { Alt(123) }, busy: false);
         var req = new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "999" }, null, "626labs.ur-ocr"); // 999 not running
         var r = await inv.RunAsync(req, default);
+        Assert.False(r.Ok);
         Assert.Equal("no-targets-resolved", r.Reason);
     }
 

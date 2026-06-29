@@ -29,7 +29,7 @@ internal sealed class MacroRunnerServer
         {
             try
             {
-                using var pipe = CreateServerPipe();
+                await using var pipe = CreateServerPipe();
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
                 await HandleConnectionAsync(pipe, ct).ConfigureAwait(false);
             }
