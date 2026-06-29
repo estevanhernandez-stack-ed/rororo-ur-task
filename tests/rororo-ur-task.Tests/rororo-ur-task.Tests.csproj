@@ -23,13 +23,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Plugin under test -->
+    <!-- Plugin under test. Pulls ROROROblox.PluginContract from nuget.org
+         transitively, so the unit tests need nothing on disk but this repo. -->
     <ProjectReference Include="..\..\rororo-ur-task.csproj" />
-    <!-- ROROROblox.App for the host plumbing (PluginHostStartupService,
-         CapabilityInterceptor, PluginHostService, the registry interfaces).
-         Same shape ROROROblox.PluginTestHarness uses to spin up a real host. -->
+  </ItemGroup>
+
+  <!-- PluginClientIntegrationTests drives a real ROROROblox host via project
+       references to the sibling repo's on-disk checkout (ROROROblox.App for the
+       host plumbing: PluginHostStartupService, CapabilityInterceptor,
+       PluginHostService, the registry interfaces). CI never checks that repo out,
+       so a `-p:StandaloneTestsOnly=true` build drops both the host references AND
+       the integration test file, leaving only tests that depend on the plugin +
+       nuget contract. Local full runs (sibling repo present) keep everything. -->
+  <ItemGroup Condition="'$(StandaloneTestsOnly)' != 'true'">
     <ProjectReference Include="..\..\..\ROROROblox\src\ROROROblox.App\ROROROblox.App.csproj" />
     <ProjectReference Include="..\..\..\ROROROblox\src\ROROROblox.PluginContract\ROROROblox.PluginContract.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(StandaloneTestsOnly)' == 'true'">
+    <Compile Remove="PluginClientIntegrationTests.cs" />
   </ItemGroup>
 
 
