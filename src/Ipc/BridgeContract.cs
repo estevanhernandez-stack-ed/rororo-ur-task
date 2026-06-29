@@ -19,7 +19,7 @@ public sealed record RunMacroResponse(
     string? Reason,
     string? Detail)
 {
-    public static RunMacroResponse Accepted(string playbackId) => new(true, playbackId, false, null, null);
+    public static RunMacroResponse Accepted(string playbackId) => new(true, playbackId, false, null, null); // Queued=false: contract refuses-when-busy, no server-side queue path
     public static RunMacroResponse Refused(string reason, string? detail = null) => new(false, null, false, reason, detail);
 }
 

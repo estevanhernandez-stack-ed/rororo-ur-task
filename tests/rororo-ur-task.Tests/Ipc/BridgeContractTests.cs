@@ -38,4 +38,14 @@ public class BridgeContractTests
         Assert.Equal("busy", r.Reason);
         Assert.Null(r.PlaybackId);
     }
+
+    [Fact]
+    public void Accepted_SetsOkAndPlaybackId()
+    {
+        var r = RunMacroResponse.Accepted("pb-001");
+        Assert.True(r.Ok);
+        Assert.Equal("pb-001", r.PlaybackId);
+        Assert.False(r.Queued);
+        Assert.Null(r.Reason);
+    }
 }
