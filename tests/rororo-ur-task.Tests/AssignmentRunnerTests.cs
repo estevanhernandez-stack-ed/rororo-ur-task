@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.PluginHost;
 
@@ -5,6 +6,46 @@ namespace Labs626.UrTask.Tests;
 
 public class AssignmentRunnerTests
 {
+    // ---- Reference Win32 INPUT: union sized to its largest member (MOUSEINPUT). ----
+    // This is the size SendInput validates cbSize against. The keep-alive path
+    // must match it exactly or every injected Space is silently rejected.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RefInput { public uint type; public RefUnion union; }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct RefUnion
+    {
+        [FieldOffset(0)] public RefMouse mouse;
+        [FieldOffset(0)] public RefKeybd keyboard;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RefMouse { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RefKeybd { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr extra; }
+
+    // ---- The OLD buggy layout: union holds only the keyboard field. ----
+    // 32 bytes on x64 / 20 on x86 — 8 (or 4) short of canonical. The fix must
+    // never regress to this size.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RefInputBuggy { public uint type; public RefUnionBuggy union; }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct RefUnionBuggy { [FieldOffset(0)] public RefKeybd keyboard; }
+
+    /// <summary>
+    /// Regression for the keep-alive no-op bug (shipped through v0.2.2): the
+    /// runner's pared-down INPUT struct dropped the MOUSEINPUT member, so its
+    /// cbSize came up 8 bytes short (32 vs 40 on x64). SendInput rejects any
+    /// call whose cbSize != sizeof(INPUT), so the keep-alive Space was never
+    /// injected — and the discarded return value hid the failure. Lock the size.
+    /// </summary>
+    [Fact]
+    public void KeepAliveInputStructSize_MatchesCanonicalWin32InputSize()
+    {
+        var canonical = Marshal.SizeOf<RefInput>();
+        Assert.Equal(canonical, AssignmentRunner.KeepAliveInputStructSize);
+        // The old buggy size must never come back.
+        Assert.NotEqual(Marshal.SizeOf<RefInputBuggy>(), AssignmentRunner.KeepAliveInputStructSize);
+    }
+
     private static Macro NewMacro(string name = "test") => new(
         SchemaVersion: 2,
         Id: Guid.NewGuid().ToString(),

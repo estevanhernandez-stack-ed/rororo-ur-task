@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>626labs.ur-task</AssemblyName>
     <RootNamespace>Labs626.UrTask</RootNamespace>
-    <Version>0.2.2</Version>
+    <Version>0.2.3</Version>
     <Company>626 Labs LLC</Company>
     <Product>RoRoRo Ur Task</Product>
     <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account, refuse playback on any other.</Description>

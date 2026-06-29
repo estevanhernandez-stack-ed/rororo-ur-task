@@ -2,6 +2,14 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.2.3 — 2026-06-29
+
+### Fixed
+
+- **Default keep-alive now actually works.** Unassigned alts in the round-robin send a Space jump to dodge AFK kicks — but the keypress was never reaching Roblox, a silent no-op since v0.2.0. The keep-alive's `SendInput` call passed a too-small `INPUT` struct: the self-contained interop copy had dropped the mouse field, so its `cbSize` measured 32 bytes instead of the canonical 40. Windows rejects any `SendInput` whose `cbSize` doesn't match `sizeof(INPUT)`, and the rejected return value was discarded — so the failure was invisible. Recorded macros were never affected; they use a separate, correctly-sized code path. Restored the struct, stopped swallowing the `SendInput` return, and added a regression test that locks the struct size.
+
+Same manifest shape and host requirement as v0.2.2 — RoRoRo v1.4.3.0+.
+
 ## 0.2.2 — 2026-05-16
 
 ### Changed

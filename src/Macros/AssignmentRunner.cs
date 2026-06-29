@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Labs626.UrTask.PluginHost;
 
@@ -117,38 +118,69 @@ internal sealed class AssignmentRunner
         try { Progress?.Invoke(this, p); } catch { /* swallow */ }
     }
 
-    private static void SendSpaceKeepAlive()
+    private static bool SendSpaceKeepAlive()
     {
         const ushort VK_SPACE = 0x20;
-        SendKeyEvent(VK_SPACE, keyUp: false);
+        var down = SendKeyEvent(VK_SPACE, keyUp: false);
         Thread.Sleep(50); // briefly held
-        SendKeyEvent(VK_SPACE, keyUp: true);
+        var up = SendKeyEvent(VK_SPACE, keyUp: true);
+
+        // SendInput returns the number of events inserted; 0 means Windows
+        // rejected the call (e.g. cbSize mismatch). Surface it instead of
+        // swallowing — a silent 0 here is exactly the bug that made keep-alive
+        // a no-op for every release through v0.2.2.
+        var ok = down == 1 && up == 1;
+        if (!ok)
+            Debug.WriteLine($"[AssignmentRunner] keep-alive Space rejected by SendInput (down={down}, up={up}).");
+        return ok;
     }
 
-    private static void SendKeyEvent(ushort vk, bool keyUp)
+    private static uint SendKeyEvent(ushort vk, bool keyUp)
     {
         var scanCode = (ushort)MapVirtualKey(vk, 0);
         var flags = keyUp ? 0x0002u : 0u; // KEYEVENTF_KEYUP
 
         var input = new INPUT { type = 1 };
         input.union.keyboard = new KEYBDINPUT { wVk = vk, wScan = scanCode, dwFlags = flags };
-        SendOne(ref input);
+        return SendOne(ref input);
     }
 
-    private static unsafe void SendOne(ref INPUT input)
+    private static unsafe uint SendOne(ref INPUT input)
     {
-        fixed (INPUT* p = &input) { _ = SendInput(1, p, Marshal.SizeOf<INPUT>()); }
+        fixed (INPUT* p = &input) { return SendInput(1, p, Marshal.SizeOf<INPUT>()); }
     }
 
-    // ---------- Win32 (minimal — duplicates MacroPlayer's interop for self-containment) ----------
+    /// <summary>
+    /// Test seam: the cbSize this runner passes to SendInput. MUST equal the
+    /// canonical Win32 INPUT size, or SendInput rejects every keep-alive event.
+    /// </summary>
+    internal static int KeepAliveInputStructSize => Marshal.SizeOf<INPUT>();
+
+    // ---------- Win32 (minimal — mirrors MacroPlayer's interop for self-containment) ----------
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT { public uint type; public InputUnion union; }
 
+    // The union MUST be sized to its largest member (MOUSEINPUT). The keep-alive
+    // only ever writes the keyboard field, but Win32 SendInput validates cbSize
+    // against the full INPUT size — drop MOUSEINPUT and cbSize comes up 8 bytes
+    // short (32 vs 40 on x64), SendInput fails, and the Space is never injected.
     [StructLayout(LayoutKind.Explicit)]
     private struct InputUnion
     {
+        [FieldOffset(0)] public MOUSEINPUT mouse;
         [FieldOffset(0)] public KEYBDINPUT keyboard;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
     }
 
     [StructLayout(LayoutKind.Sequential)]
