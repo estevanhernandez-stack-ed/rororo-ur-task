@@ -1,0 +1,36 @@
+name: test
+
+# Runs the standalone unit tests on every PR and every push to main.
+#
+# `StandaloneTestsOnly=true` drops PluginClientIntegrationTests and its
+# project references to the sibling ROROROblox repo, which is never checked
+# out in CI. Those integration tests run locally (and in ROROROblox's own
+# full-solution test gate), not here. See rororo-ur-task.Tests.csproj.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true
+
+      - name: Test (standalone units)
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -p:StandaloneTestsOnly=true
+          -c Release
+          --no-restore
+          --nologo

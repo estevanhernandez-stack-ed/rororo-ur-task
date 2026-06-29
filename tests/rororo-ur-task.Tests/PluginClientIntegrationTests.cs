@@ -162,6 +162,16 @@ public class PluginClientIntegrationTests
     {
         public Task<(bool ok, string? failureReason, int processId)> RequestLaunchAsync(string accountId)
             => Task.FromResult<(bool, string?, int)>((false, "test stub", 0));
+
+        // Brought into conformance with the host's IPluginLaunchInvoker, which
+        // grew launch-to-target + current-server queries in RoRoRo v1.7.0.0.
+        // Mirrors ROROROblox.PluginTestHarness's reference stub.
+        public Task<(bool ok, string? failureReason, int processId)> RequestLaunchTargetAsync(
+            string accountId, string? shareUrl, long? followUserId)
+            => Task.FromResult<(bool, string?, int)>((false, "test stub", 0));
+
+        public Task<CurrentServerInfo?> GetCurrentServerAsync()
+            => Task.FromResult<CurrentServerInfo?>(null);
     }
 
     private sealed class NullUIHost : IPluginUIHost
