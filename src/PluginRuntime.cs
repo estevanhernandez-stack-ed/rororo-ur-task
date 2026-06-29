@@ -31,6 +31,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
 
+    private readonly CancellationTokenSource _bridgeCts = new();
+    private Ipc.MacroRunnerServer? _bridgeServer;
+
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
     private bool _sequenceActive;
@@ -59,6 +62,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player = new MacroPlayer(_foreground);
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
+
+        // Action bridge: accept RunMacro requests from sibling plugins (Ur-OCR).
+        // Gated by the user preference; default on. The macro source is the same
+        // on-disk library the recorder/sequence player use.
+        if (UI.UserPreferences.Load().AcceptPluginRunRequests)
+        {
+            var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker);
+            _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
+        }
 
         _sequence.Progress += (_, p) =>
         {
@@ -223,6 +236,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        try { _bridgeCts.Cancel(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
@@ -240,6 +254,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private void OnHostLost()
     {
         Log("Host RoRoRo connection lost — aborting playback and exiting plugin.");
+        try { _bridgeCts.Cancel(); } catch { }
         try { _runner.Abort(); } catch { }
         try { _sequence.Abort(); } catch { }
         try { _player.Abort(); } catch { }
