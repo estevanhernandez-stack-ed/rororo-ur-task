@@ -18,6 +18,7 @@ internal sealed class UserPreferences
     public bool TopmostInFullMode { get; set; }            // default: false (don't be obnoxious in full mode)
     public bool TopmostInCompactMode { get; set; } = true; // default: true (whole point of compact)
     public bool KeyboardOnlyRecording { get; set; } = true; // default: true (mouse coords are absolute-screen; safer keyboard-only)
+    public bool AcceptPluginRunRequests { get; set; } = true; // default: true (sibling plugins like Ur-OCR can fire macros)
 
     public static UserPreferences Load()
     {
