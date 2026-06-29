@@ -57,7 +57,7 @@ Resolve the open question in the contract doc in favor of a `["foreground"]` sen
 
 - **`src/Ipc/MacroRunnerServer.cs`** — owns the `NamedPipeServerStream`, accepts one client at a time, deserializes `RunMacro`, resolves `targets` (user-ids → running alts) via `AccountRegistry`, calls into `SequencePlayer`. Dedicated background thread; cancellation hooked to app shutdown. No changes to `MacroStore` / `MacroPlayer` / `SequencePlayer`.
 - **Settings toggle** "Accept run requests from other plugins" (default on; lets a user opt out).
-- **Consent / manifest** — document the IPC on the install consent sheet ("Accepts macro-run requests from other 626 Labs plugins on this PC"). Confirm whether a new capability string is warranted vs. documenting same-user/same-machine IPC; lean toward an explicit capability for honesty.
+- **Consent / manifest (explicit capability — decided).** Declare an explicit capability string and surface it on the install consent sheet ("Accepts macro-run requests from other 626 Labs plugins on this PC"). Suggested pair: Ur Task declares `plugins.accept-run-requests` (server), Ur-OCR declares `plugins.send-run-requests` (client) — exact identifiers TBD with the host. This overrides the companion contract's lean toward consent-text-only, and carries a host dependency (see §10).
 - **Wire-up** in `App.xaml.cs` startup, behind the settings toggle.
 
 ## 5. Ur-OCR side (companion repo)
@@ -121,7 +121,7 @@ Goal: when the event drops, day-one is *execution* of a known-good rig, not disc
 ## 10. Risks & open questions
 
 - **Cross-repo version pairing.** The contract lives in two repos. Pair `contractVersion` bumps across Ur-OCR and Ur Task; never drift them (same discipline as the csproj/manifest version pair).
-- **Consent surface.** Confirm whether the sibling-bridge IPC needs a declared capability on both manifests or just consent-sheet documentation. Lean toward an explicit capability.
+- **Consent surface — RESOLVED: explicit capability on both manifests** (Ur Task server + Ur-OCR client), not consent-text-only. Consequence: the ROROROblox host enforces and renders capabilities on the consent sheet, so it must *recognize* the new strings — otherwise they show as unknown or are rejected. This makes the feature a **three-repo touch** (Ur Task manifest, Ur-OCR manifest, ROROROblox capability registry). Exact capability identifiers to be agreed with the host before the manifests are cut.
 - **Multi-alt reactive limits.** Screen-reading only works on a rendered window, so a reactive trigger is inherently single-active-window; the bridge's `targets` list is most meaningful for the *action* (fan a recovery macro across alts), not for running N detectors at once. Document this expectation.
 - **Detection on the active alt only.** The account-aware gate already restricts firing to when an alt is foreground; confirm that matches the intended UX (detect-on-active, act-on-targets).
 

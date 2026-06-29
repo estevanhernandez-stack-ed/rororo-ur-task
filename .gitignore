@@ -35,6 +35,12 @@ $RECYCLE.BIN/
 *.env
 .env.local
 secrets/
+# .mcp.json holds a 626 agent bearer token — never commit
+.mcp.json
+
+# Community AutoHotkey reference macros — kept locally as design specs,
+# third-party authored, not published into this repo
+*.ahk
 
 # Superpowers brainstorming companion (local mockups)
 .superpowers/
