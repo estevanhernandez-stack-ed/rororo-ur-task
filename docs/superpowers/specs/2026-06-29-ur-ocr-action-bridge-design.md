@@ -86,12 +86,13 @@ K0ii decomposes to: a color trigger on the `0xFF115F` region → fires a "double
 
 ## 8. Testing & validation
 
-The live event that K0ii targets is over; its `0xFF115F` won't appear in-game now. This blocks **tuning the event-specific config**, not **building or validating the machine**. Split accordingly.
+The specific *double-hatch event* K0ii targets is over, but it's fundamentally an **egg-hatching** macro — the **current egg** may present the same hatch UI, which would make it a live test target *now* rather than waiting for the next event. Either way the split holds: building/validating the machine never needed a specific event; only the event-specific config (color/region/coords) does.
 
 **Testable now, no event required:**
 - **Bridge (CI).** Unit-test `MacroRunnerServer` against an in-process `NamedPipeServerStream`/`Client` pair: accept, `busy`, `unknown-macro`, `version-mismatch`, target resolution via a fake `AccountRegistry`. Runs in the standalone unit-test CI added in v0.2.3 (`StandaloneTestsOnly`), no ROROROblox dependency.
 - **Detection.** Point an Ur-OCR color trigger at a controllable on-screen swatch — a WPF window filled with the target color, or a static image. Showing the swatch is the simulated event; assert the trigger fires (rising edge) and respects cooldown.
 - **End-to-end dev loop.** Swatch on screen → Ur-OCR detects → `RunMacro` over the pipe → Ur Task plays a harmless test macro into a throwaway window. Proves the full chain without the game.
+- **Current egg (candidate live target).** K0ii is an egg-hatcher; the current egg may present the same hatch UI. Verify whether its `0xFF115F` indicator + recovery coords still match — if so, run real end-to-end against the live game *now*; if the egg differs, fall back to synthetic and author fresh values. Do not assume the old numbers transfer.
 
 **Waits for the next live event (event-specific, never hardcoded):**
 - The real indicator color value + region rect.
