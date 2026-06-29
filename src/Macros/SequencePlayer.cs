@@ -45,7 +45,15 @@ internal sealed class SequencePlayer
 
         var delay = interAltDelayMs ?? macro.InterAltDelayMs ?? DefaultInterAltDelayMs;
 
-        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        // Atomic single-flight claim. Only one sequence may run at a time. A second
+        // concurrent entry must NOT clobber the in-flight sequence's token — it
+        // refuses (returns an empty result) and runs nothing.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        if (Interlocked.CompareExchange(ref _activeCts, cts, null) is not null)
+        {
+            cts.Dispose();
+            return new SequenceResult(Array.Empty<AltOutcome>(), 0, 0, 0, TimeSpan.Zero);
+        }
         var clock = Stopwatch.StartNew();
         var perAlt = new List<AltOutcome>(orderedTargets.Count);
         int completed = 0, failed = 0, skipped = 0;
