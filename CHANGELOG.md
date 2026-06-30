@@ -2,6 +2,14 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.3.1 — 2026-06-30
+
+### Fixed
+
+- **Esc no longer hijacked system-wide while the plugin runs.** The abort hotkey was a *global* bare-Esc registration held for the plugin's entire lifetime — so whenever Ur Task was running, Windows routed every Esc press to the plugin's message queue and never to the foreground app. Plain Esc looked dead in every program; only Shift+Esc (an unregistered chord) slipped through to apps. Reported in the wild during a tourney week of heavy plugin use — Esc that "needs Shift to work." Two changes close it: (1) abort is now the chord **Ctrl+Shift+A**, registered for the plugin's lifetime and never stealing a bare key — matching what v0.2.0 already did for record/play (bare F8/F5 → chords); (2) bare **Esc** is still an abort key, but registered on demand *only while a macro is actually playing* and unregistered the instant playback stops, so Esc belongs to you the rest of the time. The on-demand (un)registration runs on the hotkey pump thread via posted messages, since `RegisterHotKey` binds the hotkey to the calling thread.
+
+Same manifest shape and host requirement as v0.3.0 — RoRoRo v1.4.3.0+.
+
 ## 0.3.0 — 2026-06-29
 
 ### Added
