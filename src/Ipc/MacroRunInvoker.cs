@@ -18,7 +18,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
     private readonly Func<long?> _resolveForegroundUserId;
     private readonly Func<bool> _isBusy;
-    private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<string>> _play;
+    private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task> _play;
 
     // Production ctor wires the real collaborators.
     public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player)
@@ -27,11 +27,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             snapshot: () => accounts.Snapshot().ToList(),
             resolveForegroundUserId: () => foreground.ResolveForegroundAccount()?.RobloxUserId,
             isBusy: () => player.IsRunning,
-            play: async (macro, targets, delay, ct) =>
-            {
-                await player.PlayAsync(macro, targets, delay, ct).ConfigureAwait(false);
-                return Guid.NewGuid().ToString("N"); // playback id for the ack
-            })
+            play: (macro, targets, delay, ct) => player.PlayAsync(macro, targets, delay, ct))
     { }
 
     // Test ctor.
@@ -40,7 +36,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
         Func<long?> resolveForegroundUserId,
         Func<bool> isBusy,
-        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<string>> play)
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task> play)
     {
         _loadMacros = loadMacros;
         _snapshot = snapshot;
@@ -49,21 +45,31 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         _play = play;
     }
 
-    public async Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
+    public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
         if (_isBusy())
-            return RunMacroResponse.Refused("busy", "A sequence is already running.");
+            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
 
         var macro = _loadMacros().FirstOrDefault(m => string.Equals(m.Id, request.MacroId, StringComparison.OrdinalIgnoreCase));
         if (macro is null)
-            return RunMacroResponse.Refused("unknown-macro", $"No macro with id '{request.MacroId}'.");
+            return Task.FromResult(RunMacroResponse.Refused("unknown-macro", $"No macro with id '{request.MacroId}'."));
 
         var targets = ResolveTargets(request.Targets);
         if (targets.Count == 0)
-            return RunMacroResponse.Refused("no-targets-resolved", "None of the requested targets are running.");
+            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", "None of the requested targets are running."));
 
-        var playbackId = await _play(macro, targets, request.InterAltDelayMs, ct).ConfigureAwait(false);
-        return RunMacroResponse.Accepted(playbackId);
+        // Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not
+        // block the caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in
+        // the detached playback are swallowed here — they surface on the Ur Task playback side.
+        var playbackId = Guid.NewGuid().ToString("N");
+        _ = ObservePlaybackAsync(macro, targets, request.InterAltDelayMs, ct);
+        return Task.FromResult(RunMacroResponse.Accepted(playbackId));
+    }
+
+    private async Task ObservePlaybackAsync(Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets, int? delay, CancellationToken ct)
+    {
+        try { await _play(macro, targets, delay, ct).ConfigureAwait(false); }
+        catch { /* fire-and-forget; playback errors surface on the Ur Task side */ }
     }
 
     private IReadOnlyList<AccountRegistry.AccountInfo> ResolveTargets(IReadOnlyList<string>? requested)
