@@ -2,6 +2,16 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.3.0 — 2026-06-29
+
+### Added
+
+- **Action bridge — Ur Task runs macros on request from sibling plugins.** A named-pipe server (`\\.\pipe\626labs-ur-task`, current-user only) accepts a `RunMacro` request and plays a stored macro on resolved alts. This is what lets RoRoRo Ur OCR fire a specific macro when a screen trigger matches — the perception→action loop, native and account-safe. Pref-gated ("Accept run requests from other plugins", default on). Acks on accept — playback runs fire-and-forget, so a long macro never blocks the caller.
+
+### Fixed
+
+- **Atomic re-entry guard on the sequence player.** A hotkey-driven sequence and a bridge request arriving in the same window can no longer interleave input — the second is refused rather than clobbering the first.
+
 ## 0.2.3 — 2026-06-29
 
 ### Fixed
