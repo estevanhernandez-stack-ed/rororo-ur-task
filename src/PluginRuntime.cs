@@ -9,7 +9,8 @@ namespace Labs626.UrTask;
 /// <summary>
 /// Owns all the moving parts (gRPC client, account registry, foreground
 /// watcher, macro recorder + player + store, auto-stop coordinator,
-/// hotkeys) and wires the Ctrl+Shift+R / Ctrl+Shift+P / Esc hotkey handlers. The ViewModel
+/// hotkeys) and wires the Ctrl+Shift+R / Ctrl+Shift+P / Ctrl+Shift+A (+ bare Esc
+/// while playing) hotkey handlers. The ViewModel
 /// observes this runtime — runtime knows nothing about UI.
 ///
 /// Public events surface state changes for the VM to bind against. All
@@ -37,6 +38,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private Macro? _lastMacro;
     private bool _sequenceActive;
+    private volatile bool _playerActive;
 
     // ---------- Assignment state ----------
     private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
@@ -79,11 +81,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // Track whether a sequence is active so _player.Ended doesn't clear
             // the badge prematurely between alts.
             if (p.Phase == SequencePhase.Focusing && p.Index == 0)
+            {
                 _sequenceActive = true;
+                _hotkeys.EnableAbortKey(); // Esc aborts for the whole sequence, incl. inter-alt delays
+            }
             else if (p.Phase == SequencePhase.Done || p.Phase == SequencePhase.Aborted)
             {
                 _sequenceActive = false;
                 RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(null));
+                RefreshAbortKey();
             }
         };
 
@@ -98,6 +104,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _hotkeys.HotkeyPressed += OnHotkey;
         _player.Started += (_, args) =>
         {
+            _playerActive = true;
+            _hotkeys.EnableAbortKey(); // bare Esc aborts only while a macro is playing
             State = PluginState.Playing;
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
@@ -106,12 +114,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
         };
         _player.Ended += (_, _) =>
         {
+            _playerActive = false;
             State = _recorder.IsRecording ? PluginState.Recording : PluginState.Idle;
             // Only clear the badge on standalone play. During a sequence the badge
             // should stay lit across the inter-alt delay; the sequence.Progress
             // Done/Aborted handler clears it instead.
             if (!_sequenceActive)
                 RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(null));
+            RefreshAbortKey(); // release Esc unless a sequence/runner is still active
         };
     }
 
@@ -206,7 +216,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Esc abort.");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+A abort (Esc also aborts while playing).");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -311,8 +321,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
                 var explicitCount = assignments.Count(a => a.Macro is not null);
                 var keepAliveCount = assignments.Count(a => a.Macro is null);
-                Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc to stop.");
+                Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
 
+                _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
                 _ = Task.Run(async () =>
                 {
                     try
@@ -324,14 +335,32 @@ internal sealed class PluginRuntime : IAsyncDisposable
                     {
                         Log($"Assignment loop error: {ex.Message}");
                     }
+                    finally
+                    {
+                        RefreshAbortKey();
+                    }
                 });
                 break;
 
             case HotkeyKind.Abort:
                 bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort();
-                Log(aborted ? "Aborted (Esc)." : "Esc ignored — nothing playing.");
+                Log(aborted ? "Aborted." : "Abort ignored — nothing playing.");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Register the bare-Esc abort hotkey iff something is playing, else release
+    /// it. Called on every playback start/end transition so Esc is grabbed only
+    /// while a macro/sequence/runner is active and free for other apps otherwise.
+    /// Enable/Disable are idempotent, so over-calling is harmless.
+    /// </summary>
+    private void RefreshAbortKey()
+    {
+        if (_runner.IsRunning || _sequenceActive || _playerActive)
+            _hotkeys.EnableAbortKey();
+        else
+            _hotkeys.DisableAbortKey();
     }
 
     private void StartRecording()
