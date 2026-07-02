@@ -31,11 +31,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly AssignmentRunner _runner;
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
+    private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
 
     private readonly CancellationTokenSource _bridgeCts = new();
     private Ipc.MacroRunnerServer? _bridgeServer;
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
+    private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
+    private (int W, int H)? _recordingClientSize;
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
@@ -376,10 +379,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // Esc is always filtered (so Esc during record doesn't bake into the macro).
             // VK_R / VK_P are chord-only — the recorder handles the modifier check via
             // HotkeyService.ChordHotkeyVkCodes.
+            // Per-window recordings anchor mouse coords to the bound window's client
+            // area (v3 client space). AllWindows keeps absolute screen pixels.
+            var anchorHwnd = CurrentRecordMode == RecordMode.PerWindow && account is not null
+                ? _metrics.HwndForPid(account.Pid)
+                : IntPtr.Zero;
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes,
-                ignoreMouseEvents: RecordKeyboardOnly);
+                ignoreMouseEvents: RecordKeyboardOnly,
+                clientAnchorHwnd: anchorHwnd);
+            _recordingAnchorHwnd = anchorHwnd;
+            _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingBoundAccount = account;
             State = PluginState.Recording;
             Log(CurrentRecordMode == RecordMode.AllWindows
@@ -396,10 +407,23 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         var events = _recorder.Stop();
         var bound = _recordingBoundAccount;
+        var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;
+        _recordingAnchorHwnd = IntPtr.Zero;
+        // _recordingClientSize is read below for the macro fields; clear after construction.
         State = PluginState.Idle;
 
         if (events.Count == 0) { Log("Stop — 0 events captured."); return; }
+
+        // Mid-recording resizes are unsupported: coords stay correct per-event, but
+        // the stored client size is the record-start size. Warn so the user re-records.
+        if (anchorHwnd != IntPtr.Zero && _recordingClientSize is { } startSize)
+        {
+            var endSize = _metrics.ClientSize(anchorHwnd);
+            if (endSize is { } es && es != startSize)
+                Log($"Warning: window was resized during recording ({startSize.W}x{startSize.H} → {es.W}x{es.H}) — mouse positions may be off; consider re-recording.");
+        }
+        var isClientSpace = CurrentRecordMode == RecordMode.PerWindow;
 
         var macro = new Macro(
             SchemaVersion: Macro.CurrentSchemaVersion,
@@ -410,11 +434,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             RecordedAgainstDisplayName: bound?.DisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Events: events.ToList());
+            Events: events.ToList(),
+            CoordSpace: isClientSpace ? Macro.CoordSpaceClient : Macro.CoordSpaceScreen,
+            RecordedClientW: isClientSpace ? _recordingClientSize?.W : null,
+            RecordedClientH: isClientSpace ? _recordingClientSize?.H : null);
 
         try
         {
             Store.Save(macro);
+            _recordingClientSize = null;
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
