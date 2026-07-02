@@ -83,7 +83,16 @@ internal sealed class AssignmentRunner
                     {
                         try
                         {
-                            await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                            var playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                            // Preflight refusals (e.g. client-space resize failed) and
+                            // mid-playback aborts (e.g. foreground shifted) return
+                            // before the player's Started/Ended events fire — without
+                            // this, they vanish silently on the round-robin path.
+                            if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted)
+                            {
+                                EmitProgress(new AssignmentProgress(
+                                    cycle, i, assignments.Count, asn, AssignmentPhase.Refused, playResult.Reason));
+                            }
                         }
                         catch (OperationCanceledException) { break; }
                     }
@@ -202,11 +211,16 @@ internal sealed class AssignmentRunner
 
 public sealed record Assignment(AccountRegistry.AccountInfo Alt, Macro? Macro);
 
-public enum AssignmentPhase { Focusing, Playing, Skipped, Stopped }
+// Refused covers both PlaybackOutcome.Refused (preflight declined, e.g. client-space
+// resize failed) and PlaybackOutcome.Aborted (mid-playback foreground shift) from the
+// player — from the round-robin's perspective both mean "this alt's macro didn't play
+// to completion," surfaced with Reason so it isn't silently swallowed.
+public enum AssignmentPhase { Focusing, Playing, Skipped, Refused, Stopped }
 
 public sealed record AssignmentProgress(
     int Cycle,
     int IndexInCycle,       // -1 = no current alt (Stopped state)
     int TotalInCycle,
     Assignment? Current,
-    AssignmentPhase Phase);
+    AssignmentPhase Phase,
+    string? Reason = null); // set on Phase == Refused; carries PlaybackResult.Reason

@@ -98,7 +98,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
             }
         };
 
-        _runner.Progress += (_, p) => RaiseUI(() => AssignmentProgressed?.Invoke(p));
+        _runner.Progress += (_, p) =>
+        {
+            RaiseUI(() => AssignmentProgressed?.Invoke(p));
+            if (p.Phase == AssignmentPhase.Refused)
+                Log($"Assignment playback refused for {p.Current?.Alt.DisplayName ?? "(unknown alt)"}: {p.Reason}");
+        };
 
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
@@ -444,7 +449,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
             if (endSize is { } es && es != startSize)
                 Log($"Warning: window was resized during recording ({startSize.W}x{startSize.H} → {es.W}x{es.H}) — mouse positions may be off; consider re-recording.");
         }
-        var isClientSpace = CurrentRecordMode == RecordMode.PerWindow;
+        // Client-space is only correct when the recording actually contains mouse
+        // events AND the anchor window resolved during recording. Keyboard-only
+        // PerWindow recordings (the default — RecordKeyboardOnly is true) have no
+        // coordinates to be relative to; tagging them client-space would force a
+        // resize (and a possible refusal) on playback for zero benefit — regressing
+        // the dominant keyboard-only round-robin use case and fighting GRID. The
+        // `_recordingClientSize is not null` clause also closes the HwndForPid==Zero
+        // edge (anchor never resolved): screen space, honest schema.
+        bool hasMouseEvents = events.Any(e => e.Kind is MacroEventKind.MouseMove
+            or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel);
+        var isClientSpace = CurrentRecordMode == RecordMode.PerWindow && hasMouseEvents && _recordingClientSize is not null;
 
         var macro = new Macro(
             SchemaVersion: Macro.CurrentSchemaVersion,

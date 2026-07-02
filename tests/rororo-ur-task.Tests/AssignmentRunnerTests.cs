@@ -65,13 +65,17 @@ public class AssignmentRunnerTests
         public List<(long userId, string? macroName)> Calls { get; } = new();
         public bool IsPlaying => false;
 
+        // Configurable per test — defaults to the happy path. Tests that need to
+        // exercise refusal/abort surfacing set this to a Refused/Aborted result.
+        public PlaybackResult Result = PlaybackResult.Completed();
+
         public event EventHandler<PlaybackStartedArgs>? Started;
         public event EventHandler<PlaybackEndedArgs>? Ended;
 
         public Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
         {
             Calls.Add((targetUserId, macro.Name));
-            return Task.FromResult(PlaybackResult.Completed());
+            return Task.FromResult(Result);
         }
 
         public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
@@ -217,5 +221,45 @@ public class AssignmentRunnerTests
         // alt2 should have been played (focus succeeded) at least once
         Assert.True(player.Calls.Count >= 1, $"Expected at least 1 PlayAsync call for alt2, got {player.Calls.Count}");
         Assert.All(player.Calls, call => Assert.Equal(alt2.RobloxUserId, call.userId));
+    }
+
+    /// <summary>
+    /// A client-space preflight refusal (or a mid-playback abort) previously vanished
+    /// silently on the round-robin path — the runner discarded PlayAsync's result and
+    /// preflight refusals return before the player's Started/Ended events fire, so
+    /// nothing ever logged it. The runner must capture the PlaybackResult and surface
+    /// Refused/Aborted outcomes (with their Reason) through the same Progress
+    /// mechanism it already uses for Focusing/Playing/Skipped.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_PlayerRefusesPlayback_EmitsRefusedProgressWithReason()
+    {
+        var macro = NewMacro("client-space-macro");
+        var alt1 = Alt(1001, 47821334, "Goldnail8");
+
+        var player = new FakePlayer { Result = PlaybackResult.Refused("Target window handle unavailable.") };
+        var fg = new FakeForeground { Resolver = () => alt1 };
+        var runner = new AssignmentRunner(player, fg, _ => (true, null));
+
+        var assignments = new List<Assignment> { new(alt1, macro) };
+
+        var progressed = new List<AssignmentProgress>();
+        var cts = new CancellationTokenSource();
+        runner.Progress += (_, p) =>
+        {
+            progressed.Add(p);
+            if (p.Cycle == 2 && p.Phase == AssignmentPhase.Focusing) cts.Cancel();
+        };
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, timeout.Token);
+
+        try { await runner.RunAsync(assignments, linked.Token); }
+        catch (OperationCanceledException) { }
+
+        var refused = Assert.Single(progressed, p => p.Phase == AssignmentPhase.Refused);
+        Assert.Equal(0, refused.IndexInCycle);
+        Assert.Equal("Target window handle unavailable.", refused.Reason);
+        Assert.Same(alt1, refused.Current?.Alt);
     }
 }

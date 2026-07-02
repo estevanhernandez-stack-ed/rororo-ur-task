@@ -62,7 +62,14 @@ internal sealed class MacroPlayer : IMacroPlayer
                 $"target is user {targetUserId}.");
 
         IntPtr clientHwnd = IntPtr.Zero;
-        if (macro.IsClientSpace)
+        // Client-space preflight (resize + hwnd resolution) only applies when the
+        // macro actually contains mouse events. A client-tagged macro with zero
+        // mouse events (keyboard-only) has no coordinates to be relative to — it
+        // must stay completely coordinate-inert, exactly like a screen macro. This
+        // is belt-and-suspenders against any already-saved client-tagged
+        // keyboard-only macro; the recorder (PluginRuntime) is the primary fix.
+        if (macro.IsClientSpace && macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
+            or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
         {
             clientHwnd = _metrics.HwndForPid(preflight.Pid);
             if (clientHwnd == IntPtr.Zero)
