@@ -88,10 +88,14 @@ internal sealed class AssignmentRunner
                             // mid-playback aborts (e.g. foreground shifted) return
                             // before the player's Started/Ended events fire — without
                             // this, they vanish silently on the round-robin path.
+                            // Skip emit if this is a user-initiated cancellation, not a genuine refusal/abort.
                             if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted)
                             {
-                                EmitProgress(new AssignmentProgress(
-                                    cycle, i, assignments.Count, asn, AssignmentPhase.Refused, playResult.Reason));
+                                if (!ct.IsCancellationRequested)
+                                {
+                                    EmitProgress(new AssignmentProgress(
+                                        cycle, i, assignments.Count, asn, AssignmentPhase.Refused, playResult.Reason));
+                                }
                             }
                         }
                         catch (OperationCanceledException) { break; }

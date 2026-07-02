@@ -68,7 +68,7 @@ public class MacroPlayerClientSpaceTests
     /// proves "sizes already matched, no resize call" without synthesizing real input.
     /// </summary>
     [Fact]
-    public async Task ClientMacro_SizeAlreadyMatches_PlaysWithoutResize()
+    public async Task ClientMacro_SizeAlreadyMatches_NoResizeCall_AbortsBeforeInject()
     {
         var metrics = new FakeMetrics { Client = (816, 638), Origin = null };
         var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
@@ -81,7 +81,7 @@ public class MacroPlayerClientSpaceTests
     /// <summary>Same technique as above — proves the resize call fires, then aborts
     /// before real input via ClientOrigin() = null instead of completing the play.</summary>
     [Fact]
-    public async Task ClientMacro_SizeMismatch_ResizesByClientDelta_ThenPlays()
+    public async Task ClientMacro_SizeMismatch_ResizesByClientDelta_AbortsBeforeInject()
     {
         var metrics = new FakeMetrics
         {
