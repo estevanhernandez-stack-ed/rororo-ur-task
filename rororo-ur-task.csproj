@@ -7,10 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>626labs.ur-task</AssemblyName>
     <RootNamespace>Labs626.UrTask</RootNamespace>
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <Company>626 Labs LLC</Company>
     <Product>RoRoRo Ur Task</Product>
-    <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record on one account, refuse playback on any other.</Description>
+    <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record once, play on any alt — round-robin assignments, keep-alive, window-relative mouse macros, and an action bridge for sibling plugins.</Description>
 
     <!-- WPF on for the recorder window (task 9). Tray icon (task 10) uses
          Hardcodet.NotifyIcon.Wpf which is WPF-native — no WinForms needed. -->

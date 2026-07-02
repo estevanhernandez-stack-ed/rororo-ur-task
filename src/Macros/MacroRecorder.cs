@@ -53,6 +53,7 @@ public sealed class MacroRecorder
     private HashSet<int>? _alwaysIgnoredVkCodes;
     private HashSet<int>? _chordIgnoredVkCodes;
     private bool _ignoreMouseEvents;
+    private IntPtr _clientAnchorHwnd = IntPtr.Zero;
     private long _lastMouseMoveMs;
     private Thread? _hookThread;
     private uint _hookThreadId;
@@ -85,11 +86,16 @@ public sealed class MacroRecorder
     /// window not stacked at that same position — and worse, mis-clicks steal
     /// foreground from the intended alt during round-robin replay. Users who
     /// want mouse capture (with the stacking requirement) untick the toggle.
+    ///
+    /// <paramref name="clientAnchorHwnd"/> — when set, mouse coordinates are
+    /// recorded relative to this window's client area (v3 client-space macros);
+    /// when default, absolute screen pixels (legacy/AllWindows).
     /// </summary>
     public void Start(
         IReadOnlyCollection<int>? alwaysIgnore = null,
         IReadOnlyCollection<int>? chordIgnore = null,
-        bool ignoreMouseEvents = true)
+        bool ignoreMouseEvents = true,
+        IntPtr clientAnchorHwnd = default)
     {
         lock (_lock)
         {
@@ -104,6 +110,7 @@ public sealed class MacroRecorder
                 ? new HashSet<int>(chordIgnore)
                 : null;
             _ignoreMouseEvents = ignoreMouseEvents;
+            _clientAnchorHwnd = clientAnchorHwnd;
             _lastMouseMoveMs = -MouseMoveMinIntervalMs; // ensure the first move always records
             _readySignal = new ManualResetEventSlim(false);
             _installError = null;
@@ -247,59 +254,63 @@ public sealed class MacroRecorder
         {
             var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
             var msg = wParam.ToInt32();
-            switch (msg)
+            var nowMs = _clock.ElapsedMilliseconds;
+
+            // ~30Hz thinning applies to moves only (see MouseMoveMinIntervalMs doc).
+            bool record = true;
+            if (msg == WM_MOUSEMOVE)
             {
-                case WM_MOUSEMOVE:
-                    var nowMs = _clock.ElapsedMilliseconds;
-                    if (nowMs - _lastMouseMoveMs >= MouseMoveMinIntervalMs)
-                    {
-                        _lastMouseMoveMs = nowMs;
-                        _events.Add(new MacroEvent(nowMs,
-                            MacroEventKind.MouseMove, 0, info.pt.x, info.pt.y, 0, 0));
-                    }
-                    break;
-                case WM_LBUTTONDOWN:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseDown, 0, info.pt.x, info.pt.y, 1, 0));
-                    break;
-                case WM_LBUTTONUP:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseUp, 0, info.pt.x, info.pt.y, 1, 0));
-                    break;
-                case WM_RBUTTONDOWN:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseDown, 0, info.pt.x, info.pt.y, 2, 0));
-                    break;
-                case WM_RBUTTONUP:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseUp, 0, info.pt.x, info.pt.y, 2, 0));
-                    break;
-                case WM_MBUTTONDOWN:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseDown, 0, info.pt.x, info.pt.y, 3, 0));
-                    break;
-                case WM_MBUTTONUP:
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseUp, 0, info.pt.x, info.pt.y, 3, 0));
-                    break;
-                case WM_MOUSEWHEEL:
-                    // High word of mouseData is the wheel delta (signed short).
-                    var delta = (short)((info.mouseData >> 16) & 0xFFFF);
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        MacroEventKind.MouseWheel, 0, info.pt.x, info.pt.y, 0, delta));
-                    break;
-                case WM_XBUTTONDOWN:
-                case WM_XBUTTONUP:
-                    // High word of mouseData identifies which X button (1 or 2).
-                    var xbtn = (short)((info.mouseData >> 16) & 0xFFFF);
-                    var btnId = 3 + xbtn; // 4 = X1, 5 = X2
-                    var k = msg == WM_XBUTTONDOWN ? MacroEventKind.MouseDown : MacroEventKind.MouseUp;
-                    _events.Add(new MacroEvent(_clock.ElapsedMilliseconds,
-                        k, 0, info.pt.x, info.pt.y, btnId, 0));
-                    break;
+                record = nowMs - _lastMouseMoveMs >= MouseMoveMinIntervalMs;
+                if (record) _lastMouseMoveMs = nowMs;
+            }
+
+            if (record)
+            {
+                // Anchored recording where the anchor window has vanished: drop the
+                // event rather than record a lie — auto-stop lands moments later.
+                var origin = ResolveClientOrigin();
+                if (_clientAnchorHwnd == IntPtr.Zero || origin is not null)
+                {
+                    var evt = BuildMouseEvent(msg, info.pt.x, info.pt.y, info.mouseData, nowMs, origin);
+                    if (evt is not null) _events.Add(evt);
+                }
             }
         }
         return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// Map one WH_MOUSE_LL message to a MacroEvent, converting to client-relative
+    /// coordinates when <paramref name="clientOrigin"/> is provided. Pure — the
+    /// test seam for capture-time conversion. Returns null for unhandled messages.
+    /// Move-thinning stays in <see cref="OnMouseEvent"/> (it's stateful).
+    /// </summary>
+    internal static MacroEvent? BuildMouseEvent(int msg, int x, int y, uint mouseData, long timestampMs, (int X, int Y)? clientOrigin)
+    {
+        var (px, py) = clientOrigin is { } o ? WindowSpaceMath.ToClient((x, y), o) : (x, y);
+        return msg switch
+        {
+            WM_MOUSEMOVE => new MacroEvent(timestampMs, MacroEventKind.MouseMove, 0, px, py, 0, 0),
+            WM_LBUTTONDOWN => new MacroEvent(timestampMs, MacroEventKind.MouseDown, 0, px, py, 1, 0),
+            WM_LBUTTONUP => new MacroEvent(timestampMs, MacroEventKind.MouseUp, 0, px, py, 1, 0),
+            WM_RBUTTONDOWN => new MacroEvent(timestampMs, MacroEventKind.MouseDown, 0, px, py, 2, 0),
+            WM_RBUTTONUP => new MacroEvent(timestampMs, MacroEventKind.MouseUp, 0, px, py, 2, 0),
+            WM_MBUTTONDOWN => new MacroEvent(timestampMs, MacroEventKind.MouseDown, 0, px, py, 3, 0),
+            WM_MBUTTONUP => new MacroEvent(timestampMs, MacroEventKind.MouseUp, 0, px, py, 3, 0),
+            WM_MOUSEWHEEL => new MacroEvent(timestampMs, MacroEventKind.MouseWheel, 0, px, py, 0,
+                (short)((mouseData >> 16) & 0xFFFF)),
+            WM_XBUTTONDOWN or WM_XBUTTONUP => new MacroEvent(timestampMs,
+                msg == WM_XBUTTONDOWN ? MacroEventKind.MouseDown : MacroEventKind.MouseUp,
+                0, px, py, 3 + (short)((mouseData >> 16) & 0xFFFF), 0),
+            _ => null,
+        };
+    }
+
+    private (int X, int Y)? ResolveClientOrigin()
+    {
+        if (_clientAnchorHwnd == IntPtr.Zero) return null;
+        var pt = new POINT { x = 0, y = 0 };
+        return ClientToScreen(_clientAnchorHwnd, ref pt) ? (pt.x, pt.y) : null;
     }
 
     // ---------- Win32 interop ----------
@@ -367,6 +378,10 @@ public sealed class MacroRecorder
 
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
     private const int VK_CONTROL = 0x11;
     private const int VK_SHIFT = 0x10;

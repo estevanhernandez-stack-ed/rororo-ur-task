@@ -31,11 +31,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly AssignmentRunner _runner;
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
+    private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
+    private readonly PluginHost.WindowArrangeService _arranger;
 
     private readonly CancellationTokenSource _bridgeCts = new();
     private Ipc.MacroRunnerServer? _bridgeServer;
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
+    private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
+    private (int W, int H)? _recordingClientSize;
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
@@ -61,9 +65,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
-        _player = new MacroPlayer(_foreground);
+        _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
+        _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
 
         // Action bridge: accept RunMacro requests from sibling plugins (Ur-OCR).
         // Gated by the user preference; default on. The macro source is the same
@@ -93,7 +98,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
             }
         };
 
-        _runner.Progress += (_, p) => RaiseUI(() => AssignmentProgressed?.Invoke(p));
+        _runner.Progress += (_, p) =>
+        {
+            RaiseUI(() => AssignmentProgressed?.Invoke(p));
+            if (p.Phase == AssignmentPhase.Refused)
+                Log($"Assignment playback refused for {p.Current?.Alt.DisplayName ?? "(unknown alt)"}: {p.Reason}");
+        };
 
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
@@ -107,6 +117,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
             _playerActive = true;
             _hotkeys.EnableAbortKey(); // bare Esc aborts only while a macro is playing
             State = PluginState.Playing;
+            if (!args.Macro.IsClientSpace && args.Macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
+                or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
+            {
+                Log("Legacy screen-coordinate macro — window position matters; use STACK or re-record for window-relative playback.");
+            }
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
                 ? "playback start: multi-window (no target gating)"
@@ -207,6 +222,20 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _assignments.Clear();
         Log("all assignments cleared.");
         RaiseUI(() => AssignmentsReset?.Invoke());
+    }
+
+    /// <summary>STACK button: every alt window moved to the anchor rect.</summary>
+    public void ArrangeStack()
+    {
+        var (moved, note) = _arranger.StackAll();
+        Log(note is null ? $"Stacked {moved} alt window(s)." : $"Stack: {note}");
+    }
+
+    /// <summary>GRID button: alt windows tiled over the anchor monitor's work area.</summary>
+    public void ArrangeGrid()
+    {
+        var (moved, note) = _arranger.GridAll();
+        Log(note is null ? $"Arranged {moved} alt window(s) in a grid." : $"Grid ({moved} moved): {note}");
     }
 
     // ---------- Lifecycle ----------
@@ -376,10 +405,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // Esc is always filtered (so Esc during record doesn't bake into the macro).
             // VK_R / VK_P are chord-only — the recorder handles the modifier check via
             // HotkeyService.ChordHotkeyVkCodes.
+            // Per-window recordings anchor mouse coords to the bound window's client
+            // area (v3 client space). AllWindows keeps absolute screen pixels.
+            var anchorHwnd = CurrentRecordMode == RecordMode.PerWindow && account is not null
+                ? _metrics.HwndForPid(account.Pid)
+                : IntPtr.Zero;
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes,
-                ignoreMouseEvents: RecordKeyboardOnly);
+                ignoreMouseEvents: RecordKeyboardOnly,
+                clientAnchorHwnd: anchorHwnd);
+            _recordingAnchorHwnd = anchorHwnd;
+            _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingBoundAccount = account;
             State = PluginState.Recording;
             Log(CurrentRecordMode == RecordMode.AllWindows
@@ -396,10 +433,33 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         var events = _recorder.Stop();
         var bound = _recordingBoundAccount;
+        var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;
+        _recordingAnchorHwnd = IntPtr.Zero;
+        // _recordingClientSize is read below for the macro fields; clear after construction.
         State = PluginState.Idle;
 
         if (events.Count == 0) { Log("Stop — 0 events captured."); return; }
+
+        // Mid-recording resizes are unsupported: coords stay correct per-event, but
+        // the stored client size is the record-start size. Warn so the user re-records.
+        if (anchorHwnd != IntPtr.Zero && _recordingClientSize is { } startSize)
+        {
+            var endSize = _metrics.ClientSize(anchorHwnd);
+            if (endSize is { } es && es != startSize)
+                Log($"Warning: window was resized during recording ({startSize.W}x{startSize.H} → {es.W}x{es.H}) — mouse positions may be off; consider re-recording.");
+        }
+        // Client-space is only correct when the recording actually contains mouse
+        // events AND the anchor window resolved during recording. Keyboard-only
+        // PerWindow recordings (the default — RecordKeyboardOnly is true) have no
+        // coordinates to be relative to; tagging them client-space would force a
+        // resize (and a possible refusal) on playback for zero benefit — regressing
+        // the dominant keyboard-only round-robin use case and fighting GRID. The
+        // `_recordingClientSize is not null` clause also closes the HwndForPid==Zero
+        // edge (anchor never resolved): screen space, honest schema.
+        bool hasMouseEvents = events.Any(e => e.Kind is MacroEventKind.MouseMove
+            or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel);
+        var isClientSpace = CurrentRecordMode == RecordMode.PerWindow && hasMouseEvents && _recordingClientSize is not null;
 
         var macro = new Macro(
             SchemaVersion: Macro.CurrentSchemaVersion,
@@ -410,11 +470,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             RecordedAgainstDisplayName: bound?.DisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Events: events.ToList());
+            Events: events.ToList(),
+            CoordSpace: isClientSpace ? Macro.CoordSpaceClient : Macro.CoordSpaceScreen,
+            RecordedClientW: isClientSpace ? _recordingClientSize?.W : null,
+            RecordedClientH: isClientSpace ? _recordingClientSize?.H : null);
 
         try
         {
             Store.Save(macro);
+            _recordingClientSize = null;
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));

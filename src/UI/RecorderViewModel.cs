@@ -53,6 +53,9 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         ResetAssignmentsCommand = new RelayCommand(() => _runtime.ResetAssignments());
 
+        StackWindowsCommand = new RelayCommand(() => _runtime.ArrangeStack(), CanArrange);
+        GridWindowsCommand = new RelayCommand(() => _runtime.ArrangeGrid(), CanArrange);
+
         PlayAssignmentsCommand = new RelayCommand(
             () => _runtime.TriggerPlayAssignments(),
             () => Assignments.Count > 0 && !IsRunnerActive);
@@ -146,9 +149,21 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
         _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
 
-        // Account add/remove updates rows live
-        _runtime.Accounts.AccountAdded += (_, info) => RaiseUI(() => AddAssignmentRow(info));
-        _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() => RemoveAssignmentRow(info.Pid));
+        // Account add/remove updates rows live. Also refresh Stack/Grid CanExecute
+        // here — this (not RunnerProgress) is the actual trigger for "no alts
+        // running" per spec; RelayCommand doesn't auto-requery like RelayCommand<T>.
+        _runtime.Accounts.AccountAdded += (_, info) => RaiseUI(() =>
+        {
+            AddAssignmentRow(info);
+            (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        });
+        _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() =>
+        {
+            RemoveAssignmentRow(info.Pid);
+            (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        });
 
         // Seed current alts on construction
         foreach (var alt in _runtime.Accounts.Snapshot()) AddAssignmentRow(alt);
@@ -171,6 +186,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand PlayAssignmentsCommand { get; }
     public ICommand StopAssignmentsCommand { get; }
     public ICommand TogglePlayStopCommand { get; }
+    public ICommand StackWindowsCommand { get; }
+    public ICommand GridWindowsCommand { get; }
+
+    private bool CanArrange() => _runtime.Accounts.Snapshot().Count > 0;
 
     // ---------- Existing state properties ----------
 
@@ -404,6 +423,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }

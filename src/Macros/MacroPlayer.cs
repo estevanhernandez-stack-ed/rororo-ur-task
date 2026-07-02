@@ -28,11 +28,13 @@ internal interface IMacroPlayer
 internal sealed class MacroPlayer : IMacroPlayer
 {
     private readonly IForegroundWatcher _foreground;
+    private readonly IWindowMetrics _metrics;
     private CancellationTokenSource? _activeCts;
 
-    public MacroPlayer(IForegroundWatcher foreground)
+    public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics)
     {
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
+        _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
     }
 
     public bool IsPlaying => _activeCts is not null;
@@ -58,6 +60,23 @@ internal sealed class MacroPlayer : IMacroPlayer
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
                 $"target is user {targetUserId}.");
+
+        IntPtr clientHwnd = IntPtr.Zero;
+        // Client-space preflight (resize + hwnd resolution) only applies when the
+        // macro actually contains mouse events. A client-tagged macro with zero
+        // mouse events (keyboard-only) has no coordinates to be relative to — it
+        // must stay completely coordinate-inert, exactly like a screen macro. This
+        // is belt-and-suspenders against any already-saved client-tagged
+        // keyboard-only macro; the recorder (PluginRuntime) is the primary fix.
+        if (macro.IsClientSpace && macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
+            or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
+        {
+            clientHwnd = _metrics.HwndForPid(preflight.Pid);
+            if (clientHwnd == IntPtr.Zero)
+                return PlaybackResult.Refused("Target window handle unavailable.");
+            var sizeRefusal = EnsureClientSize(clientHwnd, macro);
+            if (sizeRefusal is not null) return sizeRefusal;
+        }
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
@@ -87,8 +106,19 @@ internal sealed class MacroPlayer : IMacroPlayer
                         $"Foreground shifted to {(fg?.DisplayName ?? "non-RoRoRo window")} at event {i + 1}/{macro.Events.Count}.");
                 }
 
-                SendMacroEvent(evt);
-                TrackHeldState(evt, heldKeys, heldButtons);
+                var toSend = evt;
+                if (clientHwnd != IntPtr.Zero && evt.Kind is MacroEventKind.MouseMove
+                    or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel)
+                {
+                    // Client → screen at inject time: mid-playback window moves stay correct.
+                    var origin = _metrics.ClientOrigin(clientHwnd);
+                    if (origin is null)
+                        return PlaybackResult.Aborted($"Target window vanished at event {i + 1}/{macro.Events.Count}.");
+                    var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
+                    toSend = evt with { X = sx, Y = sy };
+                }
+                SendMacroEvent(toSend);
+                TrackHeldState(toSend, heldKeys, heldButtons);
             }
             return PlaybackResult.Completed();
         }
@@ -155,6 +185,33 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (cts is null) return false;
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with finally */ }
         return true;
+    }
+
+    /// <summary>
+    /// Ensure the target window's client area matches the macro's recorded size.
+    /// One SetWindowPos sized by the client delta, then re-measure — chrome is
+    /// constant per style+DPI, so one pass converges. The window is intentionally
+    /// left resized (round-robin then resizes each alt once, not per cycle).
+    /// Returns null to proceed, or a Refused result.
+    /// </summary>
+    private PlaybackResult? EnsureClientSize(IntPtr hwnd, Macro macro)
+    {
+        if (macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
+            return PlaybackResult.Refused("Client-space macro is missing its recorded client size — re-record it.");
+        var current = _metrics.ClientSize(hwnd);
+        if (current is null) return PlaybackResult.Refused("Could not read target window size.");
+        if (current.Value == (rw, rh)) return null;
+
+        var outer = _metrics.OuterRect(hwnd);
+        if (outer is null) return PlaybackResult.Refused("Could not read target window rect.");
+        var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), current.Value, (rw, rh));
+        _metrics.SetOuterRect(hwnd, outer.Value.X, outer.Value.Y, tw, th);
+
+        var after = _metrics.ClientSize(hwnd);
+        if (after != (rw, rh))
+            return PlaybackResult.Refused(
+                $"Couldn't resize target to recorded client size {rw}x{rh} (got {after?.W}x{after?.H}) — monitor too small or window minimum.");
+        return null;
     }
 
     // ---------- Held-state tracking + release ----------

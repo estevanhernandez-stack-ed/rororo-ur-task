@@ -7,13 +7,13 @@ namespace Labs626.UrTask.Tests;
 public class MacroV1MigrationTests
 {
     [Fact]
-    public void Migrate_V1Json_ProducesV2MacroWithRecordedAgainstFields()
+    public void Migrate_V1Json_ProducesV3MacroWithRecordedAgainstFields()
     {
         var json = File.ReadAllText(Path.Combine("fixtures", "macro-v1.json"));
 
         var macro = MacroV1Migrator.LoadAndMigrate(json);
 
-        Assert.Equal(2, macro.SchemaVersion);
+        Assert.Equal(3, macro.SchemaVersion);
         Assert.Equal("11111111-2222-3333-4444-555555555555", macro.Id);
         Assert.Equal("test-jump-jump", macro.Name);
         Assert.Equal("PerWindow", macro.RecordMode);
@@ -21,10 +21,11 @@ public class MacroV1MigrationTests
         Assert.Equal("Goldnail8", macro.RecordedAgainstDisplayName);
         Assert.Null(macro.InterAltDelayMs);
         Assert.Equal(2, macro.Events.Count);
+        Assert.Equal(Macro.CoordSpaceScreen, macro.CoordSpace);
     }
 
     [Fact]
-    public void Migrate_V2Json_PassesThrough()
+    public void Migrate_V2Json_UpgradesToV3()
     {
         var v2 = new Macro(
             SchemaVersion: 2,
@@ -40,8 +41,9 @@ public class MacroV1MigrationTests
 
         var result = MacroV1Migrator.LoadAndMigrate(json);
 
-        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(3, result.SchemaVersion);
         Assert.Equal("already-v2", result.Name);
         Assert.Equal("PinkPotatoChip", result.RecordedAgainstDisplayName);
+        Assert.Equal(Macro.CoordSpaceScreen, result.CoordSpace);
     }
 }
