@@ -31,7 +31,7 @@ The four `system.*` capabilities are disclosure-only — they don't gate calls, 
 You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Older hosts will refuse the install with a clear "Update RoRoRo" message.
 
 1. Open RoRoRo → Plugins → Install.
-2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.3.1/`
+2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/latest/download/` — this always resolves to the newest stable release (GitHub redirects `latest/download/`), so it never needs bumping per version.
 3. Walk the consent sheet. The four `system.*` capabilities are required for the plugin to function.
 4. Click Install.
 
