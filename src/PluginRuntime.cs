@@ -32,6 +32,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
+    private readonly PluginHost.WindowArrangeService _arranger;
 
     private readonly CancellationTokenSource _bridgeCts = new();
     private Ipc.MacroRunnerServer? _bridgeServer;
@@ -67,6 +68,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
+        _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
 
         // Action bridge: accept RunMacro requests from sibling plugins (Ur-OCR).
         // Gated by the user preference; default on. The macro source is the same
@@ -215,6 +217,20 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _assignments.Clear();
         Log("all assignments cleared.");
         RaiseUI(() => AssignmentsReset?.Invoke());
+    }
+
+    /// <summary>STACK button: every alt window moved to the anchor rect.</summary>
+    public void ArrangeStack()
+    {
+        var (moved, note) = _arranger.StackAll();
+        Log(note is null ? $"Stacked {moved} alt window(s)." : $"Stack: {note}");
+    }
+
+    /// <summary>GRID button: alt windows tiled over the anchor monitor's work area.</summary>
+    public void ArrangeGrid()
+    {
+        var (moved, note) = _arranger.GridAll();
+        Log(note is null ? $"Arranged {moved} alt window(s) in a grid." : $"Grid ({moved} moved): {note}");
     }
 
     // ---------- Lifecycle ----------

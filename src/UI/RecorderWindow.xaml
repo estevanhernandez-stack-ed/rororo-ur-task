@@ -511,11 +511,24 @@
                                            Margin="0,3,0,0"
                                            TextWrapping="Wrap" />
                             </StackPanel>
-                            <Button Grid.Column="1"
-                                    Content="RESET"
-                                    FontSize="9"
-                                    Padding="9,3"
-                                    Command="{Binding ResetAssignmentsCommand}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Content="STACK"
+                                        ToolTip="Move all running alt windows to the same position and size (for legacy screen-coordinate mouse macros)"
+                                        FontSize="9"
+                                        Padding="9,3"
+                                        Margin="0,0,6,0"
+                                        Command="{Binding StackWindowsCommand}" />
+                                <Button Content="GRID"
+                                        ToolTip="Tile all running alt windows in a grid to watch the round-robin"
+                                        FontSize="9"
+                                        Padding="9,3"
+                                        Margin="0,0,6,0"
+                                        Command="{Binding GridWindowsCommand}" />
+                                <Button Content="RESET"
+                                        FontSize="9"
+                                        Padding="9,3"
+                                        Command="{Binding ResetAssignmentsCommand}" />
+                            </StackPanel>
                           </Grid>
                         </Border>
 
