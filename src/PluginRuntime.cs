@@ -64,7 +64,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
-        _player = new MacroPlayer(_foreground);
+        _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
 
@@ -110,6 +110,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
             _playerActive = true;
             _hotkeys.EnableAbortKey(); // bare Esc aborts only while a macro is playing
             State = PluginState.Playing;
+            if (!args.Macro.IsClientSpace && args.Macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
+                or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
+            {
+                Log("Legacy screen-coordinate macro — window position matters; use STACK or re-record for window-relative playback.");
+            }
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
                 ? "playback start: multi-window (no target gating)"
