@@ -43,11 +43,20 @@ RoRoRo Ur Task starts in your system tray immediately on install (its own icon, 
 
 ## Recording mode and the mouse-click caveat
 
-**By default, recording is keyboard-only** — mouse events (clicks, moves, wheel) are dropped during capture. This is the safe default because mouse coordinates are absolute screen pixels: a recorded click only lands correctly if the target alt's window is at the same screen position it was when you recorded. For the dominant use case (jumps, walks, key-combo grinding) this isn't a problem at all — keyboard events route to whichever window has focus, and the plugin handles per-alt focus during the round-robin.
+**By default, recording is keyboard-only** — mouse events (clicks, moves, wheel) are dropped during capture. Keyboard events route to whichever window has focus, which is exactly right for the dominant use case (jumps, walks, key-combo grinding).
 
-If you need mouse capture (drag flows, click-precision sequences), untick "Record keyboard only" in the recorder window. A magenta warning appears: **stack all participating Roblox windows at the same screen quadrant** before playback. Win+Arrow snaps to halves/quadrants; a window-manager utility can stack them precisely. The round-robin will then send recorded clicks to the same pixel each cycle, and since the windows occupy the same screen region, every alt receives clicks on the right UI element.
+If you need mouse capture (drag flows, click-precision sequences), untick "Record keyboard only" in the recorder window. As of **v0.4.0**, per-window mouse recordings are **window-relative**: positions are stored relative to the recorded window's client area, and playback resizes the target window to match and lands every click in the right spot — wherever the window sits, on any monitor. No window stacking required.
 
-Window-relative coordinates (record once, replay at any window position) is planned for a future release.
+**Legacy mouse macros** (recorded before v0.4.0) still use absolute screen coordinates: they play exactly as before, and the target window must occupy the same screen region as at record time. Use the **STACK** button to line windows up for them — or just re-record to upgrade.
+
+Playback of a window-relative macro refuses cleanly (and skips to the next alt) when the target window can't reach the recorded size — monitor too small, or below the window's minimum.
+
+## Window arranging
+
+Two buttons in the recorder window operate on all running alts:
+
+- **STACK** — moves every alt window to the same position and size (anchored on the foreground alt). What legacy screen-coordinate mouse macros need.
+- **GRID** — tiles all alt windows across the monitor's work area so you can watch the round-robin visit each one. If they can't fit at minimum size, they overlap in cascade order (the activity log says so).
 
 ## Hotkeys
 

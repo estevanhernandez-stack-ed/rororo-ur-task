@@ -2,6 +2,19 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.4.0 — 2026-07-02
+
+### Added
+
+- **Window-relative mouse macros (schema v3).** Per-window recordings now store mouse positions relative to the recorded window's client area, plus the recorded client size. Playback resizes the target window once to match (refusing with a clear reason when it can't — monitor too small or window minimum) and maps every event onto the target window wherever it sits, on any monitor. No more stacking windows for mouse macros. Existing macros keep playing exactly as before (absolute screen coordinates) with a one-line advisory in the activity log; re-record to upgrade. Multi-window recordings keep raw absolute replay. v1/v2 macro files migrate to v3 on load; migration is sticky on save.
+- **Window arranging suite.** Two new buttons in the recorder window: **STACK** moves every running alt window to the same position and size (what legacy screen-coordinate mouse macros need); **GRID** tiles all running alts across the monitor's work area so you can watch the round-robin. Taskbar-aware; grids that can't fit at minimum window size overlap in cascade order and say so in the activity log.
+
+### Fixed
+
+- **Manifest description no longer claims v0.1 bound-playback behavior** ("playback refuses unless the foreground window matches" — binding was removed in v0.2).
+
+Same host requirement as v0.3.x — RoRoRo v1.4.3.0+.
+
 ## 0.3.1 — 2026-06-30
 
 ### Fixed
