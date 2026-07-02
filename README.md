@@ -31,7 +31,7 @@ The four `system.*` capabilities are disclosure-only — they don't gate calls, 
 You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Older hosts will refuse the install with a clear "Update RoRoRo" message.
 
 1. Open RoRoRo → Plugins → Install.
-2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.2.2/`
+2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/download/v0.3.1/`
 3. Walk the consent sheet. The four `system.*` capabilities are required for the plugin to function.
 4. Click Install.
 
@@ -51,10 +51,11 @@ Window-relative coordinates (record once, replay at any window position) is plan
 |---|---|---|
 | `Ctrl+Shift+R` | Start recording (or stop if already recording). | Global |
 | `Ctrl+Shift+P` | Play the last macro on the smart-default target (foreground alt). | Global |
+| `Ctrl+Shift+A` | Abort current playback. | Global |
 | `Ctrl+Shift+M` | Toggle compact mode (always-on-top strip). | Window-level |
-| `Esc` | Abort current playback. | Global |
+| `Esc` | Abort current playback — but only while a macro is playing, so Esc stays yours the rest of the time. | Global (during playback only) |
 
-**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. Per-macro PLAY buttons in the recorder UI show the updated labels.
+**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, abort is `Ctrl+Shift+A`; bare `Esc` still aborts but is only claimed while a macro is playing, so it no longer intercepts Esc system-wide. Per-macro PLAY buttons in the recorder UI show the updated labels.
 
 ## License
 
