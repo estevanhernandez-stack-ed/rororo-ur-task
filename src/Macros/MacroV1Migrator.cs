@@ -3,10 +3,10 @@ using System.Text.Json;
 namespace Labs626.UrTask.Macros;
 
 /// <summary>
-/// Pure migration function: reads any-version macro JSON and returns a v2 Macro.
+/// Pure migration function: reads any-version macro JSON and returns a v3 Macro.
 /// v1 macros (SchemaVersion = 1) get their Bound* fields mapped to
 /// RecordedAgainst* metadata and RecordMode defaulted to "PerWindow".
-/// v2 macros pass through unchanged.
+/// v2 macros are upgraded to v3.
 /// </summary>
 public static class MacroV1Migrator
 {
@@ -17,8 +17,8 @@ public static class MacroV1Migrator
     };
 
     /// <summary>
-    /// Parse macro JSON and return it as v2. The migration is sticky — re-save
-    /// the returned Macro and the on-disk file persists in v2 shape.
+    /// Parse macro JSON and return it as v3. The migration is sticky — re-save
+    /// the returned Macro and the on-disk file persists in v3 shape.
     /// </summary>
     public static Macro LoadAndMigrate(string json)
     {
@@ -29,11 +29,18 @@ public static class MacroV1Migrator
 
         if (schemaVersion >= 2)
         {
-            return JsonSerializer.Deserialize<Macro>(json, JsonOptions)
-                ?? throw new InvalidOperationException("v2 macro deserialized as null.");
+            var m = JsonSerializer.Deserialize<Macro>(json, JsonOptions)
+                ?? throw new InvalidOperationException("Macro deserialized as null.");
+            // v2 → v3 (and defensive default for v3 files missing coordSpace):
+            // pre-v3 recordings are absolute screen pixels.
+            return m with
+            {
+                SchemaVersion = Macro.CurrentSchemaVersion,
+                CoordSpace = m.CoordSpace ?? Macro.CoordSpaceScreen,
+            };
         }
 
-        // v1 → v2 mapping.
+        // v1 → v3 mapping (Bound* fields → RecordedAgainst* metadata).
         var id = root.GetProperty("id").GetString()!;
         var name = root.TryGetProperty("name", out var n) && n.ValueKind != JsonValueKind.Null ? n.GetString() : null;
         var recordedAgainstUserId = root.TryGetProperty("boundUserId", out var bu) ? bu.GetInt64() : (long?)null;
@@ -50,7 +57,7 @@ public static class MacroV1Migrator
         }
 
         return new Macro(
-            SchemaVersion: 2,
+            SchemaVersion: Macro.CurrentSchemaVersion,
             Id: id,
             Name: name,
             RecordMode: "PerWindow",
@@ -58,6 +65,7 @@ public static class MacroV1Migrator
             RecordedAgainstDisplayName: recordedAgainstDisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: recordedAtUnixMs,
-            Events: events);
+            Events: events,
+            CoordSpace: Macro.CoordSpaceScreen);
     }
 }
