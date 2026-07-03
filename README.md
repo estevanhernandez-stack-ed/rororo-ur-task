@@ -32,7 +32,7 @@ The three `system.*` capabilities are disclosure-only — they don't gate calls,
 
 ## Install
 
-You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Older hosts will refuse the install with a clear "Update RoRoRo" message.
+You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Hosts 1.4.3+ refuse a too-new plugin with a clear "Update RoRoRo" message — but **hosts older than 1.4.3 (1.4.0–1.4.2) silently accept the install and then ask you to restart RoRoRo, and that restart is known to fail.** If installing ends with a "Restart RoRoRo" prompt, your RoRoRo is outdated: update it from the Microsoft Store, relaunch, and reinstall the plugin.
 
 1. Open RoRoRo → Plugins → Install.
 2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/latest/download/` — this always resolves to the newest stable release (GitHub redirects `latest/download/`), so it never needs bumping per version.
@@ -69,6 +69,11 @@ Two buttons in the recorder window operate on all running alts:
 | `Esc` | Abort current playback — but only while a macro is playing, so Esc stays yours the rest of the time. | Global (during playback only) |
 
 **Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, abort is `Ctrl+Shift+A`; bare `Esc` still aborts but is only claimed while a macro is playing, so it no longer intercepts Esc system-wide. Per-macro PLAY buttons in the recorder UI show the updated labels.
+
+## Troubleshooting
+
+- **The install told me to "Restart RoRoRo" (and restarting did nothing).** Your RoRoRo host is older than v1.4.3. Update RoRoRo from the Microsoft Store, relaunch it, and reinstall the plugin — on current hosts the plugin starts immediately after install, with no restart step.
+- **Something crashed, hung, or silently stopped?** The plugin keeps a diagnostic log: right-click the Ur Task tray icon → **Open log folder** → drop `ur-task.log` into the Discord support thread. The log lives at `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\logs` (2 files × 1 MB max).
 
 ## License
 
