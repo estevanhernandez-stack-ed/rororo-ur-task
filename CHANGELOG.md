@@ -2,6 +2,12 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.4.1 — 2026-07-03
+
+### Changed
+
+- **Plugin icon joins the Ur family set.** Ur Task previously used the generic 626 Labs brain logo; it now has its own mark in the shared family style (flat-top hexagon, cyan stroke, cyan/magenta swoosh): a record dot and play triangle under a repeat arc — record once, replay anywhere. Matches Ur OCR (scan) and Ur AFK (heartbeat over a keyboard). No code changes.
+
 ## 0.4.0 — 2026-07-03
 
 ### Added
