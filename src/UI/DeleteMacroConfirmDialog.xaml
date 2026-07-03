@@ -5,16 +5,16 @@
         Width="380" Height="200"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
-        Background="{StaticResource BgBrush}"
-        Foreground="{StaticResource WhiteBrush}"
+        Background="{DynamicResource BgBrush}"
+        Foreground="{DynamicResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="NoResize"
         Topmost="True"
         KeyDown="OnKeyDown">
-    <Border Background="{StaticResource BgBrush}"
-            BorderBrush="{StaticResource DividerBrush}"
+    <Border Background="{DynamicResource BgBrush}"
+            BorderBrush="{DynamicResource DividerBrush}"
             BorderThickness="1"
             CornerRadius="8">
         <Grid Margin="22">
@@ -27,14 +27,14 @@
                        Text="DELETE MACRO"
                        FontFamily="{StaticResource MonoFont}"
                        FontSize="9"
-                       Foreground="{StaticResource MagentaBrush}"
+                       Foreground="{DynamicResource MagentaBrush}"
                        Margin="0,0,0,8" />
             <TextBlock Grid.Row="1"
                        x:Name="MessageText"
                        FontSize="12"
                        TextWrapping="Wrap"
                        LineHeight="18"
-                       Foreground="{StaticResource WhiteBrush}" />
+                       Foreground="{DynamicResource WhiteBrush}" />
             <StackPanel Grid.Row="2"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"

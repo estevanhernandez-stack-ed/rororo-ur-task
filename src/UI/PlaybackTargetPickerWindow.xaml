@@ -6,8 +6,8 @@
         MinWidth="380" MinHeight="380"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
-        Background="{StaticResource BgBrush}"
-        Foreground="{StaticResource WhiteBrush}"
+        Background="{DynamicResource BgBrush}"
+        Foreground="{DynamicResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -15,8 +15,8 @@
         Topmost="True"
         KeyDown="OnKeyDown">
 
-    <Border Background="{StaticResource BgBrush}"
-            BorderBrush="{StaticResource DividerBrush}"
+    <Border Background="{DynamicResource BgBrush}"
+            BorderBrush="{DynamicResource DividerBrush}"
             BorderThickness="1"
             CornerRadius="8">
         <Grid>
@@ -29,16 +29,16 @@
             <!-- Sticky header -->
             <Border Grid.Row="0"
                     Padding="18,16,18,12"
-                    BorderBrush="{StaticResource DividerBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="0,0,0,1">
                 <StackPanel>
                     <TextBlock x:Name="TitleText"
                                FontSize="14"
                                FontWeight="SemiBold"
-                               Foreground="{StaticResource WhiteBrush}" />
+                               Foreground="{DynamicResource WhiteBrush}" />
                     <TextBlock x:Name="SubtitleText"
                                FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
+                               Foreground="{DynamicResource MutedTextBrush}"
                                Margin="0,4,0,0" />
                 </StackPanel>
             </Border>
@@ -54,17 +54,17 @@
                             <Border Margin="0,3"
                                     CornerRadius="5"
                                     BorderThickness="1"
-                                    Background="{StaticResource RowBgBrush}"
+                                    Background="{DynamicResource RowBgBrush}"
                                     Padding="10,8"
                                     Cursor="Hand"
                                     MouseLeftButtonDown="OnAltRowClicked"
                                     Tag="{Binding}">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -86,19 +86,19 @@
                                             VerticalAlignment="Center">
                                         <Border.Style>
                                             <Style TargetType="Border">
-                                                <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                                                 <Setter Property="Background" Value="Transparent" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                        <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
-                                                        <Setter Property="Background" Value="{StaticResource CyanBrush}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
+                                                        <Setter Property="Background" Value="{DynamicResource CyanBrush}" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
                                         <TextBlock FontSize="9"
                                                    FontWeight="Bold"
-                                                   Foreground="{StaticResource BgBrush}"
+                                                   Foreground="{DynamicResource BgBrush}"
                                                    HorizontalAlignment="Center"
                                                    VerticalAlignment="Center"
                                                    Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}}"
@@ -109,7 +109,7 @@
                                     <Border Grid.Column="1"
                                             Width="26" Height="26"
                                             CornerRadius="13"
-                                            Background="{StaticResource CyanBrush}"
+                                            Background="{DynamicResource CyanBrush}"
                                             Margin="0,0,10,0"
                                             Opacity="0.35" />
 
@@ -118,9 +118,9 @@
                                         <TextBlock Text="{Binding DisplayName}"
                                                    FontSize="12"
                                                    FontWeight="SemiBold"
-                                                   Foreground="{StaticResource WhiteBrush}" />
+                                                   Foreground="{DynamicResource WhiteBrush}" />
                                         <TextBlock FontSize="9"
-                                                   Foreground="{StaticResource MutedTextBrush}">
+                                                   Foreground="{DynamicResource MutedTextBrush}">
                                             <Run Text="user " />
                                             <Run Text="{Binding RobloxUserId, Mode=OneWay}" />
                                         </TextBlock>
@@ -132,7 +132,7 @@
                                                Visibility="{Binding OrderTagVisible, Converter={StaticResource BoolToVisibility}}"
                                                FontSize="9"
                                                FontWeight="Bold"
-                                               Foreground="{StaticResource CyanBrush}"
+                                               Foreground="{DynamicResource CyanBrush}"
                                                VerticalAlignment="Center"
                                                Margin="8,0,0,0" />
                                 </Grid>
@@ -145,7 +145,7 @@
             <!-- Sticky footer -->
             <Border Grid.Row="2"
                     Padding="14,10"
-                    BorderBrush="{StaticResource DividerBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="0,1,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -155,7 +155,7 @@
                     <TextBlock x:Name="EscHint"
                                Grid.Column="0"
                                FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
+                               Foreground="{DynamicResource MutedTextBrush}"
                                VerticalAlignment="Center"
                                Text="Esc to cancel · ↑↓ to move · ↵ to play" />
                     <Button x:Name="PlayButton"
