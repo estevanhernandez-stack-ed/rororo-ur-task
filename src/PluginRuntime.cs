@@ -532,6 +532,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private void Log(string message)
     {
+        // Tee to the on-disk diagnostics file (full timestamps there); the
+        // activity view keeps its short HH:mm:ss formatting.
+        Diagnostics.DiagLog.Write(message);
         var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
         RaiseUI(() => StatusLogged?.Invoke(line));
     }
