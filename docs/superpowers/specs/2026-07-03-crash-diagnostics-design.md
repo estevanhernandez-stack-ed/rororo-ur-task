@@ -22,6 +22,13 @@ startup crash on current hosts, we would have been blind:
   activity view; `OnHostLost` self-terminates with exit 0. From the host's
   side, every one of these looks identical: the "RoRoRo Ur Task stopped —
   click to restart" banner, looping.
+- Exception handlers alone can't see **liveness bugs**. Proof from this same
+  session (#20): launching a second Ur Task instance hard-hung it windowless
+  forever — the bridge accept loop ran synchronously until its first await,
+  the already-owned pipe threw *before* any await, and the swallow-and-retry
+  loop spun the UI thread inside `new PluginRuntime()`. Zero exceptions ever
+  reached process scope. A handler-only design is blind to this entire class;
+  the evidence layer needs breadcrumbs plus a watchdog.
 
 Remote diagnosis currently requires walking a Discord user through Event
 Viewer. The fix: a crash-safe log file, exception handlers that leave evidence
@@ -46,6 +53,7 @@ before dying, and a one-click way for users to hand us the file.
 | Log scope | **Full activity tee + crashes** | The activity stream is already curated and low-volume. "Send me the log" then covers *every* support case — startup, connects, playback refusals — not just crashes. |
 | Crash behavior | **Log, then crash loud** | Same philosophy as the host (`App.xaml.cs`: "Silent crash is worse than loud crash"). Handlers never set `Handled`; we just have evidence afterward. |
 | Rollover | **2 files × 1 MB** | Worst case 2 MB on disk. Enough history for any support thread. |
+| Liveness bugs (hangs) | **Breadcrumbs + startup watchdog** | #20 proved the exception path is blind to exception-free hangs. The watchdog turns "log suspiciously ends" into an affirmative "hung at step X" line. |
 | Support affordance | **Tray → "Open log folder"** | One step from banner-loop report to log file in Discord. |
 | Docs | **README rider in same PR** | Fix the false "older hosts will refuse the install" claim while we're here. |
 
@@ -88,7 +96,7 @@ internal static class DiagLog
   Threading a logger through five constructors buys purity the use case
   doesn't need. Tests repoint `Directory` at a temp dir.
 
-### 2. Startup breadcrumbs
+### 2. Startup breadcrumbs + watchdog
 
 `App.OnStartup` writes a session header, then a one-line breadcrumb before
 each construction step:
@@ -103,11 +111,28 @@ startup: window shown
 startup: StartAsync dispatched
 ```
 
-This is the direct fix for today's blind spot: a crash anywhere in the ctor
-chain is bisectable from the last breadcrumb in the file. `OnExit` writes
-`exiting cleanly (code 0)` — its *absence* at the end of a session is the
-crash discriminator (clean `HostLost` self-termination goes through `OnExit`;
-a crash never does).
+This is the direct fix for today's blind spot: a crash *or hang* anywhere in
+the ctor chain is bisectable from the last breadcrumb in the file. `OnExit`
+writes `exiting cleanly (code 0)` — its *absence* at the end of a session is
+the crash discriminator (clean `HostLost` self-termination goes through
+`OnExit`; a crash never does).
+
+**Startup watchdog** — the affirmative evidence for the #20 class
+(exception-free hangs the handlers in §3 can never see). First thing in
+`OnStartup`, before any construction: start a background thread that sleeps
+30 seconds, then checks a `volatile bool` the end of `OnStartup` sets. If
+startup hasn't completed, it writes:
+
+```text
+WATCHDOG: startup not complete after 30s — hung after last breadcrumb above
+```
+
+then repeats the line once a minute while the hang persists. ~15 lines, one
+flag, no timers to dispose (background thread dies with the process). Under
+the #20 bug, the log would have read `startup: runtime` followed by watchdog
+lines — a windowless hang self-reports instead of being inferred from a log
+that just stops. Steady-state (post-startup) liveness monitoring is out of
+scope — see non-goals.
 
 ### 3. Exception handlers
 
@@ -169,13 +194,17 @@ Unit (`tests/rororo-ur-task.Tests`, `DiagLog.Directory` → temp dir):
   interleaving), count matches.
 - `PluginRuntime.Log` tee: a logged message appears in both the
   `StatusLogged` event payload and the file.
+- Watchdog: completion flag not set within an injectable threshold → watchdog
+  line lands in the file; flag set in time → no watchdog line.
 
 Manual verify (pre-merge, per `superpowers:verification-before-completion`):
 
 - `URTASK_TEST_CRASH=dispatcher` env var makes `App` throw on the dispatcher
   two seconds after startup — run once, confirm the exception lands in the log
-  with full stack, the process dies, and the host banner appears. The variable
-  is checked only when present; zero cost otherwise.
+  with full stack, the process dies, and the host banner appears.
+  `URTASK_TEST_CRASH=hang` blocks `OnStartup` before completion — confirm the
+  watchdog line appears (run with a shortened threshold). The variable is
+  checked only when present; zero cost otherwise.
 - Kill RoRoRo while the plugin runs → log shows the `HostLost` line + clean
   exit marker.
 
@@ -184,6 +213,10 @@ Manual verify (pre-merge, per `superpowers:verification-before-completion`):
 - No telemetry, crash upload, or phone-home of any kind. The file stays on the
   user's disk until they hand it over.
 - No log-level system, no verbosity settings, no UI toggle. One stream.
+- No steady-state liveness monitoring (UI-thread heartbeat, hang detection
+  after startup). The watchdog covers startup only — the window where #20
+  lived and where a hang is otherwise invisible (no UI exists yet to look
+  frozen). Post-startup hangs have a visibly frozen window as their evidence.
 - No host-side (ROROROblox) changes — the old-host restart race is already
   gone in 1.4.3+; the Store update is the remedy for stragglers.
 - No retroactive fix for the missing-consent / Event Viewer support path on
