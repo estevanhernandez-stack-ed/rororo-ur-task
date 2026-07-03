@@ -55,6 +55,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         StackWindowsCommand = new RelayCommand(() => _runtime.ArrangeStack(), CanArrange);
         GridWindowsCommand = new RelayCommand(() => _runtime.ArrangeGrid(), CanArrange);
+        RestoreWindowsCommand = new RelayCommand(() => _runtime.ArrangeRestore(), CanArrange);
 
         PlayAssignmentsCommand = new RelayCommand(
             () => _runtime.TriggerPlayAssignments(),
@@ -157,12 +158,14 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             AddAssignmentRow(info);
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
         });
         _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() =>
         {
             RemoveAssignmentRow(info.Pid);
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
         });
 
         // Seed current alts on construction
@@ -188,6 +191,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand TogglePlayStopCommand { get; }
     public ICommand StackWindowsCommand { get; }
     public ICommand GridWindowsCommand { get; }
+    public ICommand RestoreWindowsCommand { get; }
 
     private bool CanArrange() => _runtime.Accounts.Snapshot().Count > 0;
 
@@ -425,6 +429,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }

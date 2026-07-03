@@ -24,6 +24,12 @@ public interface IWindowMetrics
     /// <summary>Move/resize the outer rect. Returns false on Win32 failure.</summary>
     bool SetOuterRect(IntPtr hwnd, int x, int y, int w, int h);
 
+    /// <summary>Minimize the window (STACK gets the alts out of the way). Returns false on Win32 failure.</summary>
+    bool Minimize(IntPtr hwnd);
+
+    /// <summary>Un-minimize/restore the window (RESET brings it back before repositioning). Returns false on Win32 failure.</summary>
+    bool Restore(IntPtr hwnd);
+
     /// <summary>Work area (taskbar-excluded) of the monitor hosting the window.</summary>
     (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd);
 }

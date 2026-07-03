@@ -31,6 +31,13 @@ internal sealed class WindowMetrics : IWindowMetrics
     public bool SetOuterRect(IntPtr hwnd, int x, int y, int w, int h)
         => SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 
+    // ShowWindow returns the *previous* visibility, not success. For a resolvable
+    // hwnd the call itself doesn't fail, so report true — callers already gate on
+    // HwndForPid != Zero.
+    public bool Minimize(IntPtr hwnd) { ShowWindow(hwnd, SW_MINIMIZE); return true; }
+
+    public bool Restore(IntPtr hwnd) { ShowWindow(hwnd, SW_RESTORE); return true; }
+
     public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd)
     {
         var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -51,6 +58,8 @@ internal sealed class WindowMetrics : IWindowMetrics
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const int SW_MINIMIZE = 6;
+    private const int SW_RESTORE = 9;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int x; public int y; }
@@ -82,6 +91,10 @@ internal sealed class WindowMetrics : IWindowMetrics
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);

@@ -224,11 +224,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
         RaiseUI(() => AssignmentsReset?.Invoke());
     }
 
-    /// <summary>STACK button: every alt window moved to the anchor rect.</summary>
+    /// <summary>STACK button: minimize every alt window (snapshots positions first).</summary>
     public void ArrangeStack()
     {
         var (moved, note) = _arranger.StackAll();
-        Log(note is null ? $"Stacked {moved} alt window(s)." : $"Stack: {note}");
+        Log(note is null ? $"Minimized {moved} alt window(s)." : $"Stack: {note}");
     }
 
     /// <summary>GRID button: alt windows tiled over the anchor monitor's work area.</summary>
@@ -236,6 +236,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         var (moved, note) = _arranger.GridAll();
         Log(note is null ? $"Arranged {moved} alt window(s) in a grid." : $"Grid ({moved} moved): {note}");
+    }
+
+    /// <summary>RESET button: restore alt windows to their pre-arrange positions and un-minimize.</summary>
+    public void ArrangeRestore()
+    {
+        var (restored, note) = _arranger.RestoreAll();
+        Log(note is null ? $"Restored {restored} alt window(s) to their original positions." : $"Reset: {note}");
     }
 
     // ---------- Lifecycle ----------

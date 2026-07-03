@@ -37,6 +37,8 @@ public class MacroPlayerClientSpaceTests
             _resized = true;
             return SetResult;
         }
+        public bool Minimize(IntPtr hwnd) => true;
+        public bool Restore(IntPtr hwnd) => true;
         public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => (0, 0, 2560, 1440);
     }
 

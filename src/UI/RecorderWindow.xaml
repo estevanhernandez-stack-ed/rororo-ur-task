@@ -120,12 +120,14 @@
                     </StackPanel>
                     <Button Grid.Column="1"
                             Content="&#x1F4CC;"
+                            Style="{StaticResource SecondaryButton}"
                             ToolTip="Always on top"
                             Padding="6,3"
                             Margin="0,0,6,0"
                             Click="OnTogglePinClicked" />
                     <Button Grid.Column="2"
                             Content="&#x2310;"
+                            Style="{StaticResource SecondaryButton}"
                             ToolTip="Compact mode (Ctrl+Shift+M)"
                             Padding="6,3"
                             Click="OnToggleCompactClicked" />
@@ -513,18 +515,29 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
                                 <Button Content="STACK"
-                                        ToolTip="Move all running alt windows to the same position and size (for legacy screen-coordinate mouse macros)"
+                                        Style="{StaticResource SecondaryButton}"
+                                        ToolTip="Minimize all running alt windows (snapshots their positions first — RESET brings them back)"
                                         FontSize="9"
                                         Padding="9,3"
                                         Margin="0,0,6,0"
                                         Command="{Binding StackWindowsCommand}" />
                                 <Button Content="GRID"
+                                        Style="{StaticResource SecondaryButton}"
                                         ToolTip="Tile all running alt windows in a grid to watch the round-robin"
                                         FontSize="9"
                                         Padding="9,3"
                                         Margin="0,0,6,0"
                                         Command="{Binding GridWindowsCommand}" />
                                 <Button Content="RESET"
+                                        Style="{StaticResource SecondaryButton}"
+                                        ToolTip="Restore alt windows to their positions from before STACK/GRID (and un-minimize)"
+                                        FontSize="9"
+                                        Padding="9,3"
+                                        Margin="0,0,6,0"
+                                        Command="{Binding RestoreWindowsCommand}" />
+                                <Button Content="CLEAR"
+                                        Style="{StaticResource SecondaryButton}"
+                                        ToolTip="Clear all macro-to-alt assignments"
                                         FontSize="9"
                                         Padding="9,3"
                                         Command="{Binding ResetAssignmentsCommand}" />
