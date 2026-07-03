@@ -100,6 +100,8 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0">
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
@@ -119,13 +121,30 @@
                         </StackPanel>
                     </StackPanel>
                     <Button Grid.Column="1"
+                            Content="IMPORT"
+                            Style="{StaticResource SecondaryButton}"
+                            ToolTip="Import macros from a shared bundle file"
+                            FontSize="9"
+                            Padding="9,4"
+                            Margin="0,0,6,0"
+                            Click="OnImportMacrosClicked" />
+                    <Button Grid.Column="2"
+                            Content="EXPORT"
+                            Style="{StaticResource SecondaryButton}"
+                            ToolTip="Export all macros to a shareable bundle file"
+                            FontSize="9"
+                            Padding="9,4"
+                            Margin="0,0,6,0"
+                            IsEnabled="{Binding HasMacros}"
+                            Click="OnExportAllMacrosClicked" />
+                    <Button Grid.Column="3"
                             Content="&#x1F4CC;"
                             Style="{StaticResource SecondaryButton}"
                             ToolTip="Always on top"
                             Padding="6,3"
                             Margin="0,0,6,0"
                             Click="OnTogglePinClicked" />
-                    <Button Grid.Column="2"
+                    <Button Grid.Column="4"
                             Content="&#x2310;"
                             Style="{StaticResource SecondaryButton}"
                             ToolTip="Compact mode (Ctrl+Shift+M)"
@@ -389,6 +408,7 @@
                                                         <Button.ContextMenu>
                                                             <ContextMenu>
                                                                 <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
+                                                                <MenuItem Header="Export…" Click="OnMacroExportClicked" Tag="{Binding}" />
                                                                 <MenuItem Header="Delete" Click="OnMacroDeleteClicked" Tag="{Binding}" />
                                                             </ContextMenu>
                                                         </Button.ContextMenu>

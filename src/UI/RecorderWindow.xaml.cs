@@ -127,6 +127,69 @@ public partial class RecorderWindow : Window
         }
     }
 
+    // ── Macro import / export handlers ─────────────────────────────────────
+
+    private void OnImportMacrosClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not RecorderViewModel vm) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Import macros",
+            Multiselect = true,
+            DefaultExt = ".json",
+            Filter = "Ur Task macro bundle (*.json)|*.json|All files (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this) == true)
+        {
+            vm.ImportMacros(dlg.FileNames);
+        }
+    }
+
+    private void OnExportAllMacrosClicked(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not RecorderViewModel vm || vm.Macros.Count == 0) return;
+        ExportWithDialog(vm, vm.Macros.ToList(), "ur-task-macros");
+    }
+
+    private void OnMacroExportClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            ExportWithDialog(vm, new[] { macro }, SuggestExportFileName(macro.Name));
+        }
+    }
+
+    private void ExportWithDialog(RecorderViewModel vm, IReadOnlyList<Macro> macros, string suggestedName)
+    {
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Export macros",
+            FileName = suggestedName,
+            DefaultExt = ".json",
+            Filter = "Ur Task macro bundle (*.json)|*.json",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            vm.ExportMacros(macros, dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Export failed: {ex.Message}", "RoRoRo Ur Task",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>Macro name → safe filename stem ("farm loop!" → "farm loop"); falls back to "macro".</summary>
+    private static string SuggestExportFileName(string? macroName)
+    {
+        if (string.IsNullOrWhiteSpace(macroName)) return "macro";
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var cleaned = new string(macroName.Where(c => !invalid.Contains(c)).ToArray()).Trim();
+        return string.IsNullOrEmpty(cleaned) ? "macro" : cleaned;
+    }
+
     // ── Assignment row handler ─────────────────────────────────────────────
 
     /// <summary>
