@@ -2,15 +2,16 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## 0.4.0 — 2026-07-02
+## 0.4.0 — 2026-07-03
 
 ### Added
 
 - **Window-relative mouse macros (schema v3).** Per-window recordings now store mouse positions relative to the recorded window's client area, plus the recorded client size. Playback resizes the target window once to match (refusing with a clear reason when it can't — monitor too small or window minimum) and maps every event onto the target window wherever it sits, on any monitor. No more stacking windows for mouse macros. Keyboard-only recordings (the default) are unaffected — they carry no coordinates and never trigger a resize. Existing macros keep playing exactly as before (absolute screen coordinates) with a one-line advisory in the activity log; re-record to upgrade. Multi-window recordings keep raw absolute replay. v1/v2 macro files migrate to v3 on load; migration is sticky on save.
-- **Window arranging suite.** Two new buttons in the recorder window: **STACK** moves every running alt window to the same position and size (what legacy screen-coordinate mouse macros need); **GRID** tiles all running alts across the monitor's work area so you can watch the round-robin. Taskbar-aware; grids that can't fit at minimum window size overlap in cascade order and say so in the activity log.
+- **Window arranging suite.** Buttons in the recorder window to wrangle your alt windows: **STACK** minimizes every running alt (gets them out of the way — the common starting state); **GRID** tiles all running alts across the monitor's work area so you can watch the round-robin; **RESET** puts every alt back exactly where it was before you stacked or gridded (and un-minimizes it); **CLEAR** wipes the macro-to-alt assignments. STACK and GRID snapshot each window's position once per cycle, so RESET always returns to the true originals even after a STACK-then-GRID. Window size is preserved on restore — no scaling — which keeps macros portable. Taskbar-aware; grids that can't fit at minimum window size overlap in cascade order and say so in the activity log.
 
 ### Fixed
 
+- **Themed the recorder's window-control buttons.** Pin, Compact, STACK, GRID, and RESET were falling back to default white Windows chrome; they now match the app's navy theme.
 - **Manifest description no longer claims v0.1 bound-playback behavior** ("playback refuses unless the foreground window matches" — binding was removed in v0.2).
 
 Same host requirement as v0.3.x — RoRoRo v1.4.3.0+.
