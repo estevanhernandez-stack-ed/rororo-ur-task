@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using Hardcodet.Wpf.TaskbarNotification;
+using Labs626.UrTask.Diagnostics;
 
 namespace Labs626.UrTask.UI;
 
@@ -51,6 +52,10 @@ internal sealed class TrayService : IDisposable
         show.Click += (_, _) => SurfaceWindow();
         menu.Items.Add(show);
 
+        var openLogs = new MenuItem { Header = "Open log folder" };
+        openLogs.Click += (_, _) => OpenLogFolder();
+        menu.Items.Add(openLogs);
+
         menu.Items.Add(new Separator());
 
         var quit = new MenuItem { Header = "Quit RoRoRo Ur Task" };
@@ -66,5 +71,22 @@ internal sealed class TrayService : IDisposable
         if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
         _window.Activate();
         _window.Focus();
+    }
+
+    private static void OpenLogFolder()
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(DiagLog.Directory);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = DiagLog.Directory,
+                UseShellExecute = true,
+            });
+        }
+        catch
+        {
+            // Menu click — nowhere to report; the folder just doesn't open.
+        }
     }
 }
