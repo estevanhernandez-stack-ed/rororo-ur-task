@@ -43,6 +43,7 @@ public class StartupWatchdogTests : IDisposable
         finally
         {
             watchdog.MarkComplete(); // stop the thread before the next test repoints DiagLog
+            watchdog.JoinForTests(TimeSpan.FromSeconds(5));
         }
     }
 
@@ -53,6 +54,7 @@ public class StartupWatchdogTests : IDisposable
             threshold: TimeSpan.FromMilliseconds(50),
             repeat: TimeSpan.FromMilliseconds(50));
         watchdog.MarkComplete();
+        watchdog.JoinForTests(TimeSpan.FromSeconds(5));
 
         Thread.Sleep(300); // several threshold+repeat periods
 

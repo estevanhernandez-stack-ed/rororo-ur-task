@@ -14,16 +14,21 @@ internal sealed class StartupWatchdog
     private readonly TimeSpan _threshold;
     private readonly TimeSpan _repeat;
     private volatile bool _complete;
+    private readonly Thread _thread;
 
     public StartupWatchdog(TimeSpan? threshold = null, TimeSpan? repeat = null)
     {
         _threshold = threshold ?? TimeSpan.FromSeconds(30);
         _repeat = repeat ?? TimeSpan.FromMinutes(1);
-        new Thread(Run) { IsBackground = true, Name = "RoRoRoUrTask-StartupWatchdog" }.Start();
+        _thread = new Thread(Run) { IsBackground = true, Name = "RoRoRoUrTask-StartupWatchdog" };
+        _thread.Start();
     }
 
     /// <summary>Call at the end of App.OnStartup. Silences the watchdog.</summary>
     public void MarkComplete() => _complete = true;
+
+    /// <summary>Test seam — blocks until the watchdog thread exits. Call after MarkComplete().</summary>
+    internal void JoinForTests(TimeSpan timeout) => _thread.Join(timeout);
 
     private void Run()
     {
