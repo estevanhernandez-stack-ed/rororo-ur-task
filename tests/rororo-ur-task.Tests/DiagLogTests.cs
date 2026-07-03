@@ -86,4 +86,22 @@ public class DiagLogTests : IDisposable
         Assert.All(lines, l =>
             Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}  t\d line \d+$", l));
     }
+
+    [Fact]
+    public void Write_CultureWithDotTimeSeparator_StillWritesInvariantFormat()
+    {
+        var original = Thread.CurrentThread.CurrentCulture;
+        try
+        {
+            Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("fi-FI");
+            DiagLog.Write("culture check");
+        }
+        finally
+        {
+            Thread.CurrentThread.CurrentCulture = original;
+        }
+
+        var line = Assert.Single(File.ReadAllLines(DiagLog.CurrentLogPath));
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}  culture check$", line);
+    }
 }

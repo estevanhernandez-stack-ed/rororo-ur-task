@@ -36,7 +36,8 @@ internal static class DiagLog
                 System.IO.Directory.CreateDirectory(Directory);
                 RollIfNeeded();
                 File.AppendAllText(CurrentLogPath,
-                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}{Environment.NewLine}");
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)
+                    + "  " + message + Environment.NewLine);
             }
             catch
             {
