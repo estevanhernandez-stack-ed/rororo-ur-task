@@ -25,8 +25,8 @@
 
             <!-- Primary button style — cyan fill, navy text, branded accent. -->
             <Style x:Key="PrimaryButton" TargetType="Button">
-                <Setter Property="Background" Value="{StaticResource CyanBrush}" />
-                <Setter Property="Foreground" Value="{StaticResource BgBrush}" />
+                <Setter Property="Background" Value="{DynamicResource CyanBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource BgBrush}" />
                 <Setter Property="FontFamily" Value="{StaticResource BodyFont}" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Padding" Value="14,8" />
@@ -58,8 +58,8 @@
             <!-- Secondary button — outlined, transparent fill. -->
             <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="Foreground" Value="{StaticResource WhiteBrush}" />
-                <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource WhiteBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Template">
                     <Setter.Value>
@@ -75,7 +75,7 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Root" Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource RowHoverBrush}" />
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter TargetName="Root" Property="Opacity" Value="0.35" />
@@ -88,10 +88,10 @@
 
             <!-- ContextMenu — dark navy bg with brand border + rounded corners -->
             <Style TargetType="ContextMenu">
-                <Setter Property="Background" Value="{StaticResource BgBrush}" />
-                <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                <Setter Property="Background" Value="{DynamicResource BgBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="Foreground" Value="{StaticResource WhiteBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource WhiteBrush}" />
                 <Setter Property="Padding" Value="4" />
                 <Setter Property="Template">
                     <Setter.Value>
@@ -111,7 +111,7 @@
             <!-- MenuItem — light text, cyan hover -->
             <Style TargetType="MenuItem">
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="Foreground" Value="{StaticResource WhiteBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource WhiteBrush}" />
                 <Setter Property="FontFamily" Value="{StaticResource BodyFont}" />
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="Padding" Value="10,6" />
@@ -133,15 +133,15 @@
                                     <TextBlock Grid.Column="1"
                                                Text="{TemplateBinding InputGestureText}"
                                                FontSize="10"
-                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Foreground="{DynamicResource MutedTextBrush}"
                                                VerticalAlignment="Center"
                                                Margin="14,0,0,0" />
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource RowBgBrush}" />
-                                    <Setter Property="Foreground" Value="{StaticResource CyanBrush}" />
+                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource RowBgBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource CyanBrush}" />
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter Property="Opacity" Value="0.4" />
@@ -158,7 +158,7 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Separator">
-                            <Border Height="1" Background="{StaticResource DividerBrush}" />
+                            <Border Height="1" Background="{DynamicResource DividerBrush}" />
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -183,7 +183,7 @@
             <Style x:Key="MetaLabel" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
                 <Setter Property="FontSize" Value="10" />
-                <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
                 <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
             </Style>
 
@@ -193,11 +193,11 @@
                     <Setter.Value>
                         <ControlTemplate TargetType="Thumb">
                             <Border x:Name="ThumbBorder"
-                                    Background="{StaticResource DividerBrush}"
+                                    Background="{DynamicResource DividerBrush}"
                                     CornerRadius="2" />
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{StaticResource MutedTextBrush}" />
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource MutedTextBrush}" />
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -210,7 +210,7 @@
             <Style TargetType="ScrollBar">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="Transparent" />
-                <Setter Property="Foreground" Value="{StaticResource DividerBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DividerBrush}" />
                 <Style.Triggers>
                     <Trigger Property="Orientation" Value="Vertical">
                         <Setter Property="Width" Value="8" />

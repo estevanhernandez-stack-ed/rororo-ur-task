@@ -5,8 +5,8 @@
         Icon="pack://application:,,,/icon.png"
         Width="860" Height="560"
         MinWidth="720" MinHeight="460"
-        Background="{StaticResource BgBrush}"
-        Foreground="{StaticResource WhiteBrush}"
+        Background="{DynamicResource BgBrush}"
+        Foreground="{DynamicResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
         Topmost="{Binding IsTopmost}"
         WindowStyle="None"
@@ -18,8 +18,8 @@
         <KeyBinding Key="M" Modifiers="Control+Shift" Command="{Binding ToggleCompactCommand}" />
     </Window.InputBindings>
 
-    <Border Background="{StaticResource BgBrush}"
-            BorderBrush="{StaticResource DividerBrush}"
+    <Border Background="{DynamicResource BgBrush}"
+            BorderBrush="{DynamicResource DividerBrush}"
             BorderThickness="1"
             CornerRadius="10">
         <Grid>
@@ -51,17 +51,17 @@
                     <TextBlock Text="RORORO UR TASK"
                                FontFamily="{StaticResource MonoFont}"
                                FontSize="9"
-                               Foreground="{StaticResource CyanBrush}"
+                               Foreground="{DynamicResource CyanBrush}"
                                VerticalAlignment="Center" />
                     <Border Margin="10,0,0,0"
                             Padding="6,2"
                             CornerRadius="3"
-                            Background="{StaticResource RowBgBrush}"
+                            Background="{DynamicResource RowBgBrush}"
                             VerticalAlignment="Center"
                             Visibility="{Binding IsRecordModeAllWindows, Converter={StaticResource BoolToVisibility}}">
                         <TextBlock Text="MULTI-WINDOW"
                                    FontSize="8"
-                                   Foreground="{StaticResource CyanBrush}" />
+                                   Foreground="{DynamicResource CyanBrush}" />
                     </Border>
                 </StackPanel>
 
@@ -72,7 +72,7 @@
                             Width="38"
                             Background="Transparent"
                             BorderThickness="0"
-                            Foreground="{StaticResource MutedTextBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
                             FontSize="11"
                             ToolTip="Always on top"
                             Click="OnTogglePinClicked" />
@@ -80,7 +80,7 @@
                             Width="38"
                             Background="Transparent"
                             BorderThickness="0"
-                            Foreground="{StaticResource MutedTextBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
                             FontSize="11"
                             ToolTip="Compact mode (Ctrl+Shift+M)"
                             Click="OnToggleCompactClicked" />
@@ -88,21 +88,21 @@
                             Width="38"
                             Background="Transparent"
                             BorderThickness="0"
-                            Foreground="{StaticResource MutedTextBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
                             FontSize="14"
                             Click="OnTitleBarMinimizeClicked" />
                     <Button Content="▢"
                             Width="38"
                             Background="Transparent"
                             BorderThickness="0"
-                            Foreground="{StaticResource MutedTextBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
                             FontSize="11"
                             Click="OnTitleBarMaximizeClicked" />
                     <Button Content="✕"
                             Width="38"
                             Background="Transparent"
                             BorderThickness="0"
-                            Foreground="{StaticResource MutedTextBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
                             FontSize="12"
                             Click="OnTitleBarCloseClicked" />
                 </StackPanel>
@@ -119,25 +119,25 @@
 
                 <!-- Row 0: status pill -->
                 <Border Grid.Row="0"
-                        Background="{StaticResource RowBgBrush}"
+                        Background="{DynamicResource RowBgBrush}"
                         BorderThickness="1"
                         CornerRadius="6"
                         Padding="14,10">
                     <Border.Style>
                         <Style TargetType="Border">
-                            <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                    <Setter Property="BorderBrush" Value="{StaticResource MagentaBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource MagentaBrush}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                    <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
-                                    <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
-                                    <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -153,19 +153,19 @@
                                  VerticalAlignment="Top">
                             <Ellipse.Style>
                                 <Style TargetType="Ellipse">
-                                    <Setter Property="Fill" Value="{StaticResource MutedTextBrush}" />
+                                    <Setter Property="Fill" Value="{DynamicResource MutedTextBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsRecording}" Value="True">
-                                            <Setter Property="Fill" Value="{StaticResource MagentaBrush}" />
+                                            <Setter Property="Fill" Value="{DynamicResource MagentaBrush}" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                            <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                            <Setter Property="Fill" Value="{DynamicResource CyanBrush}" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsSequencePlaying}" Value="True">
-                                            <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                            <Setter Property="Fill" Value="{DynamicResource CyanBrush}" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
-                                            <Setter Property="Fill" Value="{StaticResource CyanBrush}" />
+                                            <Setter Property="Fill" Value="{DynamicResource CyanBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -176,10 +176,10 @@
                                        FontFamily="{StaticResource DisplayFont}"
                                        FontSize="15"
                                        FontWeight="SemiBold"
-                                       Foreground="{StaticResource WhiteBrush}" />
+                                       Foreground="{DynamicResource WhiteBrush}" />
                             <TextBlock Text="{Binding StatusMeta}"
                                        FontSize="10"
-                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Foreground="{DynamicResource MutedTextBrush}"
                                        Margin="0,2,0,0" />
                             <ProgressBar Margin="0,6,0,0"
                                          Height="3"
@@ -234,8 +234,8 @@
                                          distinguishes from PLAY (cyan fill vs magenta outline). -->
                                     <DataTrigger Binding="{Binding IsRunnerActive}" Value="True">
                                         <Setter Property="Background" Value="Transparent" />
-                                        <Setter Property="Foreground" Value="{StaticResource MagentaBrush}" />
-                                        <Setter Property="BorderBrush" Value="{StaticResource MagentaBrush}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource MagentaBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource MagentaBrush}" />
                                         <Setter Property="BorderThickness" Value="1" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -290,8 +290,8 @@
 
                     <!-- Left pane: macro library -->
                     <Border Grid.Column="0"
-                            Background="{StaticResource RowBgBrush}"
-                            BorderBrush="{StaticResource DividerBrush}"
+                            Background="{DynamicResource RowBgBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}"
                             BorderThickness="1"
                             CornerRadius="6">
                         <Grid>
@@ -313,7 +313,7 @@
                                                Text="MACROS"
                                                FontFamily="{StaticResource MonoFont}"
                                                FontSize="9"
-                                               Foreground="{StaticResource CyanBrush}"
+                                               Foreground="{DynamicResource CyanBrush}"
                                                VerticalAlignment="Center" />
                                     <Button Grid.Column="1"
                                             Content="IMPORT"
@@ -337,7 +337,7 @@
                             <!-- Recording toggles -->
                             <Border Grid.Row="1"
                                     Padding="11,4,11,8"
-                                    BorderBrush="{StaticResource DividerBrush}"
+                                    BorderBrush="{DynamicResource DividerBrush}"
                                     BorderThickness="0,0,0,1">
                                 <StackPanel>
                                     <Grid>
@@ -353,12 +353,12 @@
                                         <TextBlock Grid.Column="1"
                                                    Text="Record keyboard only (recommended)"
                                                    FontSize="11"
-                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Text="Mouse events recorded — stack all alt windows at the same screen position for playback to land clicks correctly."
                                                FontSize="9"
-                                               Foreground="{StaticResource MagentaBrush}"
+                                               Foreground="{DynamicResource MagentaBrush}"
                                                TextWrapping="Wrap"
                                                Margin="22,4,0,0"
                                                Visibility="{Binding ShowMouseRecordingWarning, Converter={StaticResource BoolToVisibility}}" />
@@ -376,12 +376,12 @@
                                         <TextBlock Grid.Column="1"
                                                    Text="Record across all windows"
                                                    FontSize="11"
-                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
                                                    VerticalAlignment="Center" />
                                         <TextBlock Grid.Column="2"
                                                    Text="EXPERIMENTAL"
                                                    FontSize="8"
-                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
                                                    VerticalAlignment="Center"
                                                    Margin="8,0,0,0" />
                                     </Grid>
@@ -393,7 +393,7 @@
                                 <!-- Empty state -->
                                 <TextBlock Text="Hit Ctrl+Shift+R or RECORD to capture your first macro"
                                            FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Foreground="{DynamicResource MutedTextBrush}"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
                                            TextWrapping="Wrap"
@@ -415,9 +415,9 @@
                                                         MouseLeftButtonDown="OnMacroCardClicked">
                                                     <Border.Style>
                                                         <Style TargetType="Border">
-                                                            <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                                                             <Setter Property="BorderThickness" Value="1" />
-                                                            <Setter Property="Background" Value="{StaticResource BgBrush}" />
+                                                            <Setter Property="Background" Value="{DynamicResource BgBrush}" />
                                                             <Style.Triggers>
                                                                 <!-- Active painter: thick cyan border + tinted background. -->
                                                                 <DataTrigger Value="True">
@@ -429,9 +429,9 @@
                                                                                      Mode="OneWay" />
                                                                         </MultiBinding>
                                                                     </DataTrigger.Binding>
-                                                                    <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                                    <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                                                     <Setter Property="BorderThickness" Value="2" />
-                                                                    <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                                                    <Setter Property="Background" Value="{DynamicResource RowHoverBrush}" />
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
@@ -454,7 +454,7 @@
                                                             <Button Grid.Column="1"
                                                                     Content="&#x22EF;"
                                                                     FontSize="14"
-                                                                    Foreground="{StaticResource MutedTextBrush}"
+                                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                                     Background="Transparent"
                                                                     BorderThickness="0"
                                                                     Padding="6,0"
@@ -472,17 +472,17 @@
                                                             </Button>
                                                         </Grid>
                                                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
-                                                            <TextBlock FontSize="9" Foreground="{StaticResource MutedTextBrush}">
+                                                            <TextBlock FontSize="9" Foreground="{DynamicResource MutedTextBrush}">
                                                                 <Run Text="{Binding Events.Count, Mode=OneWay}" />
                                                                 <Run Text="events" />
                                                             </TextBlock>
-                                                            <TextBlock FontSize="9" Foreground="{StaticResource MutedTextBrush}" Margin="10,0,0,0">
+                                                            <TextBlock FontSize="9" Foreground="{DynamicResource MutedTextBrush}" Margin="10,0,0,0">
                                                                 <Run Text="&#x00B7;" />
                                                                 <Run Text="{Binding RecordedAgainstDisplayName, Mode=OneWay, FallbackValue='(any alt)'}" />
                                                             </TextBlock>
                                                             <!-- ACTIVE chip — visible when this card is the active assignment macro -->
-                                                            <Border Background="{StaticResource RowBgBrush}"
-                                                                    BorderBrush="{StaticResource CyanBrush}"
+                                                            <Border Background="{DynamicResource RowBgBrush}"
+                                                                    BorderBrush="{DynamicResource CyanBrush}"
                                                                     BorderThickness="1"
                                                                     CornerRadius="3"
                                                                     Padding="5,1"
@@ -510,11 +510,11 @@
                                                                 <TextBlock Text="ACTIVE"
                                                                            FontFamily="{StaticResource MonoFont}"
                                                                            FontSize="8"
-                                                                           Foreground="{StaticResource CyanBrush}" />
+                                                                           Foreground="{DynamicResource CyanBrush}" />
                                                             </Border>
                                                             <!-- Paired-alt chip — shows all current pairings simultaneously. -->
-                                                            <Border Background="{StaticResource BgBrush}"
-                                                                    BorderBrush="{StaticResource CyanBrush}"
+                                                            <Border Background="{DynamicResource BgBrush}"
+                                                                    BorderBrush="{DynamicResource CyanBrush}"
                                                                     BorderThickness="1"
                                                                     CornerRadius="3"
                                                                     Padding="5,1"
@@ -530,7 +530,7 @@
                                                                 </Border.Visibility>
                                                                 <TextBlock FontFamily="{StaticResource MonoFont}"
                                                                            FontSize="8"
-                                                                           Foreground="{StaticResource CyanBrush}">
+                                                                           Foreground="{DynamicResource CyanBrush}">
                                                                     <Run Text="→ " />
                                                                     <Run>
                                                                         <Run.Text>
@@ -557,8 +557,8 @@
 
                     <!-- Right pane: assignments (top) + activity (bottom) -->
                     <Border Grid.Column="2"
-                            Background="{StaticResource RowBgBrush}"
-                            BorderBrush="{StaticResource DividerBrush}"
+                            Background="{DynamicResource RowBgBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}"
                             BorderThickness="1"
                             CornerRadius="6">
                         <Grid>
@@ -575,10 +575,10 @@
                                     <TextBlock Text="ASSIGNMENTS"
                                                FontFamily="{StaticResource MonoFont}"
                                                FontSize="9"
-                                               Foreground="{StaticResource CyanBrush}" />
+                                               Foreground="{DynamicResource CyanBrush}" />
                                     <TextBlock Text="Click a macro to mark it · click an alt row to assign · unassigned alts get keep-alive (Space)"
                                                FontSize="9"
-                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Foreground="{DynamicResource MutedTextBrush}"
                                                Margin="0,3,0,0"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
@@ -596,8 +596,8 @@
                                                     MouseLeftButtonDown="OnAssignmentRowClicked">
                                                 <Border.Style>
                                                     <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{StaticResource BgBrush}" />
-                                                        <Setter Property="BorderBrush" Value="{StaticResource DividerBrush}" />
+                                                        <Setter Property="Background" Value="{DynamicResource BgBrush}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
                                                         <Setter Property="BorderThickness" Value="1" />
                                                         <Style.Triggers>
                                                             <!-- Active alt during cycle: cyan outline + tint so the row
@@ -611,9 +611,9 @@
                                                                                  Mode="OneWay" />
                                                                     </MultiBinding>
                                                                 </DataTrigger.Binding>
-                                                                <Setter Property="BorderBrush" Value="{StaticResource CyanBrush}" />
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
                                                                 <Setter Property="BorderThickness" Value="2" />
-                                                                <Setter Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                                                <Setter Property="Background" Value="{DynamicResource RowHoverBrush}" />
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -627,12 +627,12 @@
                                                         <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
                                                         <TextBlock Text="{Binding DisplayMacroName}"
                                                                    FontSize="10"
-                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Foreground="{DynamicResource MutedTextBrush}"
                                                                    Margin="0,2,0,0" />
                                                     </StackPanel>
                                                     <Border Grid.Column="1"
-                                                            Background="{StaticResource RowBgBrush}"
-                                                            BorderBrush="{StaticResource CyanBrush}"
+                                                            Background="{DynamicResource RowBgBrush}"
+                                                            BorderBrush="{DynamicResource CyanBrush}"
                                                             BorderThickness="1"
                                                             CornerRadius="3"
                                                             Padding="6,2"
@@ -640,7 +640,7 @@
                                                             Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
                                                         <TextBlock Text="ASSIGNED"
                                                                    FontSize="8"
-                                                                   Foreground="{StaticResource CyanBrush}"
+                                                                   Foreground="{DynamicResource CyanBrush}"
                                                                    FontWeight="SemiBold" />
                                                     </Border>
                                                 </Grid>
@@ -653,19 +653,19 @@
                             <!-- Activity header -->
                             <Border Grid.Row="2"
                                     Padding="11,8,11,4"
-                                    BorderBrush="{StaticResource DividerBrush}"
+                                    BorderBrush="{DynamicResource DividerBrush}"
                                     BorderThickness="0,1,0,0">
                                 <TextBlock Text="ACTIVITY"
                                            FontFamily="{StaticResource MonoFont}"
                                            FontSize="9"
-                                           Foreground="{StaticResource MutedTextBrush}" />
+                                           Foreground="{DynamicResource MutedTextBrush}" />
                             </Border>
 
                             <!-- Activity log -->
                             <ListBox Grid.Row="3"
                                      ItemsSource="{Binding StatusLines}"
                                      Background="Transparent"
-                                     Foreground="{StaticResource MutedTextBrush}"
+                                     Foreground="{DynamicResource MutedTextBrush}"
                                      FontFamily="{StaticResource MonoFont}"
                                      FontSize="10"
                                      BorderThickness="0"
@@ -690,13 +690,13 @@
 
                 <!-- Row 3: footer -->
                 <Border Grid.Row="3" Margin="0,12,0,0" Padding="0,8,0,0"
-                        BorderBrush="{StaticResource DividerBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}"
                         BorderThickness="0,1,0,0"
                         Visibility="{Binding IsNotCompact, Converter={StaticResource BoolToVisibility}}">
                     <TextBlock Text="{Binding ConnectionLabel}"
                                FontFamily="{StaticResource MonoFont}"
                                FontSize="9"
-                               Foreground="{StaticResource MutedTextBrush}" />
+                               Foreground="{DynamicResource MutedTextBrush}" />
                 </Border>
             </Grid>
         </Grid>

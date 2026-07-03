@@ -11,11 +11,12 @@ namespace Labs626.UrTask.Theming;
 /// contract or pipe traffic involved), then watches the host's settings +
 /// themes folder so a theme switch in RoRoRo re-paints the plugin live.
 ///
-/// Apply strategy: mutate each unfrozen SolidColorBrush's Color in place, which
-/// re-renders every {StaticResource} consumer without a XAML sweep to
-/// DynamicResource. Frozen or replaced entries fall back to instance
-/// replacement (those would need DynamicResource consumers; App.xaml's brushes
-/// are plain unfrozen SolidColorBrush, so the mutation path is the norm).
+/// Apply strategy — same as the host's ThemeService: REPLACE the brush
+/// instance in Application.Current.Resources. All XAML consumers reference the
+/// eight brush keys via {DynamicResource}, which re-binds on dictionary entry
+/// replacement. (Mutating the existing brush's Color was tried first and does
+/// not propagate: StaticResource consumers capture instances at parse time and
+/// BAML-loaded brushes can come back frozen — verified empirically on v0.5.)
 /// </summary>
 internal sealed class HostThemeService : IDisposable
 {
@@ -131,14 +132,12 @@ internal sealed class HostThemeService : IDisposable
             return;
         }
 
-        if (resources[key] is SolidColorBrush brush && !brush.IsFrozen)
-        {
-            brush.Color = color;
-        }
-        else
-        {
-            resources[key] = new SolidColorBrush(color);
-        }
+        // Replacement, not mutation — DynamicResource subscribers re-bind when
+        // the dictionary entry changes. Freeze the new brush: it's shared
+        // across the UI and never mutated after this point.
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        resources[key] = brush;
     }
 
     private static bool TryParseColor(string hex, out Color color)
