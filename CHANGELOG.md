@@ -2,6 +2,25 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.5.0 — 2026-07-03
+
+### Added
+
+- **Shareable macros.** EXPORT in the macro library writes your whole collection (or a single macro via the card's ⋯ → Export…) to a portable version-stamped bundle file; IMPORT reads bundles *or* bare macro files shared straight out of someone's `macros\` folder. Every imported entry runs through the same migrator as the on-disk store, so a friend still on v0.1/v0.2 can share with you (and, because the macro schema stayed v3 by design, a v0.5 build can read bundles from future versions too). Imports are additive and can never overwrite what you have: every macro gets a fresh id, name collisions dedupe with a " (2)" suffix, and a broken entry in a shared bundle is skipped with a note in the activity log — it never sinks the rest of the batch.
+- **Ur Task follows your RoRoRo theme — live.** The plugin reads the host's active theme (built-ins and your custom theme files alike) straight from RoRoRo's settings on disk and re-paints itself, including while both apps are running: switch themes in RoRoRo and the plugin follows in about two seconds. No plugin-contract change, no pipe traffic — and if RoRoRo isn't installed, the plugin simply keeps its brand look. One caveat for theme tinkerers: the three built-in palettes are mirrored in plugin code, so if a future RoRoRo changes its built-ins, the plugin needs a matching update (custom theme files are always read live).
+- **Crash diagnostics.** The plugin now leaves evidence when things go wrong: an append-only rolling log at `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\logs\ur-task.log` with a session header, per-step startup breadcrumbs, the activity log teed to file, and log-then-crash-loud exception handlers (a silent crash is worse than a loud one — nothing is swallowed). A startup watchdog reports the failure mode exception handlers structurally cannot see: the exception-free windowless hang (exactly the bug fixed below). The tray menu gains **Open log folder**; a clean session always ends with an "exiting cleanly" line — its absence in the log *is* the evidence.
+
+### Changed
+
+- **Two-pane dashboard.** The recorder window grows from a 520×720 single stacked column into an 860×560 dashboard: status pill on top, an action bar (RECORD / ABORT / PLAY-STOP toggle on the left, STACK · GRID · RESET · CLEAR on the right), the macro library on the left — finally free to use the window's full height instead of the old fixed 140px strip — and assignments over the activity log on the right. Pin and compact moved into the custom title bar so they stay reachable in compact mode, which is unchanged (Ctrl+Shift+M, same slim strip). IMPORT/EXPORT live in the MACROS pane header.
+- **Plugin contract bumped 0.1.0 → 0.3.0**, matching Ur AFK. Both intervening contract releases were additive, so nothing about the host conversation changes — this just puts the whole plugin family on the same page (and stages the game-aware features specced for v0.6).
+
+### Fixed
+
+- **Launching a second Ur Task no longer hangs it forever.** With one instance already running (owning the action-bridge pipe), a second launch spun the UI thread in a synchronous retry loop before the window could even be created — windowless, one core pegged, and *zero* exceptions for any handler to catch. The accept loop now yields before touching the pipe and bows out cleanly when another instance owns the bridge. Found by the automated visual pass for this release; the new startup watchdog exists so this class of bug can never hide again.
+
+Same host requirement as v0.3.x/v0.4.x — RoRoRo v1.4.3.0+.
+
 ## 0.4.1 — 2026-07-03
 
 ### Changed
