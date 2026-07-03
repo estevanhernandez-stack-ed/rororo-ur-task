@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
@@ -99,11 +100,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(ConnectionLabel));
             OnPropertyChanged(nameof(IsConnected));
         };
-        _runtime.StatusLogged += line =>
-        {
-            StatusLines.Insert(0, line);
-            while (StatusLines.Count > StatusLogLimit) StatusLines.RemoveAt(StatusLines.Count - 1);
-        };
+        _runtime.StatusLogged += LogStatus;
         _runtime.MacrosChanged += () =>
         {
             Macros.Clear();
@@ -491,6 +488,65 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         if (macro is null) return;
         _runtime.Store.Delete(macro.Id);
         _runtime.RaiseMacrosChanged();
+    }
+
+    // ---------- v0.5: macro import / export ----------
+
+    /// <summary>Write the given macros to a portable bundle file at <paramref name="path"/>.</summary>
+    public void ExportMacros(IReadOnlyList<Macro> macros, string path)
+    {
+        if (macros is null || macros.Count == 0) return;
+        var json = MacroBundle.Serialize(macros, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        File.WriteAllText(path, json);
+        LogStatus(macros.Count == 1
+            ? $"Exported '{macros[0].Name ?? "(unnamed)"}' → {Path.GetFileName(path)}"
+            : $"Exported {macros.Count} macros → {Path.GetFileName(path)}");
+    }
+
+    /// <summary>
+    /// Import macros from bundle (or bare single-macro) files. Imports are
+    /// additive: every imported macro gets a fresh id and a deduped name, so an
+    /// import can never overwrite an existing macro. Per-entry failures land in
+    /// the activity log without sinking the rest of the batch.
+    /// </summary>
+    public void ImportMacros(IEnumerable<string> filePaths)
+    {
+        var takenNames = new HashSet<string>(
+            Macros.Select(m => m.Name).Where(n => !string.IsNullOrWhiteSpace(n))!,
+            StringComparer.OrdinalIgnoreCase);
+        var imported = 0;
+
+        foreach (var path in filePaths)
+        {
+            MacroBundle.ParseResult result;
+            try
+            {
+                result = MacroBundle.Parse(File.ReadAllText(path));
+            }
+            catch (Exception ex)
+            {
+                LogStatus($"Import failed for {Path.GetFileName(path)}: {ex.Message}");
+                continue;
+            }
+
+            foreach (var failure in result.Failures)
+                LogStatus($"Skipped {failure.Label} in {Path.GetFileName(path)}: {failure.Reason}");
+
+            foreach (var macro in result.Macros)
+            {
+                _runtime.Store.Save(MacroBundle.PrepareForImport(macro, takenNames));
+                imported++;
+            }
+        }
+
+        if (imported > 0) _runtime.RaiseMacrosChanged();
+        LogStatus($"Imported {imported} macro{(imported == 1 ? "" : "s")}.");
+    }
+
+    private void LogStatus(string line)
+    {
+        StatusLines.Insert(0, line);
+        while (StatusLines.Count > StatusLogLimit) StatusLines.RemoveAt(StatusLines.Count - 1);
     }
 
     // ---------- Assignment helpers ----------
