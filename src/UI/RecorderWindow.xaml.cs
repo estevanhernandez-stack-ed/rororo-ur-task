@@ -127,6 +127,15 @@ public partial class RecorderWindow : Window
         }
     }
 
+    private void OnMacroAllGamesClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.ToggleAllGames(macro);
+        }
+    }
+
     // ── Macro import / export handlers ─────────────────────────────────────
 
     private void OnImportMacrosClicked(object sender, RoutedEventArgs e)

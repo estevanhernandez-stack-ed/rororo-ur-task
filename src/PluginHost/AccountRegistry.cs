@@ -14,7 +14,9 @@ public sealed class AccountRegistry
 {
     private readonly ConcurrentDictionary<int, AccountInfo> _byPid = new();
 
-    public sealed record AccountInfo(int Pid, long RobloxUserId, string DisplayName, string AccountId);
+    public sealed record AccountInfo(
+        int Pid, long RobloxUserId, string DisplayName, string AccountId,
+        long PlaceId = 0, string PlaceName = "");
 
     /// <summary>
     /// Snapshot of currently-known accounts. Safe to read while events flow in.
@@ -30,9 +32,10 @@ public sealed class AccountRegistry
     public AccountInfo? ResolveByPid(int pid)
         => _byPid.TryGetValue(pid, out var info) ? info : null;
 
-    public void OnLaunched(int pid, long userId, string displayName, string accountId)
+    public void OnLaunched(int pid, long userId, string displayName, string accountId,
+        long placeId = 0, string placeName = "")
     {
-        var info = new AccountInfo(pid, userId, displayName, accountId);
+        var info = new AccountInfo(pid, userId, displayName, accountId, placeId, placeName);
         _byPid[pid] = info;
         AccountAdded?.Invoke(this, info);
     }

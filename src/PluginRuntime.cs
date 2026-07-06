@@ -425,6 +425,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingBoundAccount = account;
+            // Presence fills game identity AFTER the launch event (0.4.0 contract
+            // semantics), so the registry entry captured above may carry no game
+            // yet. Kick a best-effort snapshot refresh now; by stop-time the
+            // stamp re-resolves the pid and usually finds the game filled in.
+            _ = _client.RefreshRunningAccountsAsync();
             State = PluginState.Recording;
             Log(CurrentRecordMode == RecordMode.AllWindows
                 ? "Recording (multi-window mode) — capturing input across all windows."
@@ -468,19 +473,25 @@ internal sealed class PluginRuntime : IAsyncDisposable
             or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel);
         var isClientSpace = CurrentRecordMode == RecordMode.PerWindow && hasMouseEvents && _recordingClientSize is not null;
 
+        // Re-resolve the bound pid: the record-start refresh (or a later host
+        // event) may have filled game identity into the registry since then.
+        var boundFresh = bound is null ? null : Accounts.ResolveByPid(bound.Pid) ?? bound;
+
         var macro = new Macro(
             SchemaVersion: Macro.CurrentSchemaVersion,
             Id: Guid.NewGuid().ToString(),
             Name: $"Recording {DateTimeOffset.Now:HH:mm:ss}",
             RecordMode: CurrentRecordMode == RecordMode.AllWindows ? "AllWindows" : "PerWindow",
-            RecordedAgainstUserId: bound?.RobloxUserId,
-            RecordedAgainstDisplayName: bound?.DisplayName,
+            RecordedAgainstUserId: boundFresh?.RobloxUserId,
+            RecordedAgainstDisplayName: boundFresh?.DisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Events: events.ToList(),
             CoordSpace: isClientSpace ? Macro.CoordSpaceClient : Macro.CoordSpaceScreen,
             RecordedClientW: isClientSpace ? _recordingClientSize?.W : null,
-            RecordedClientH: isClientSpace ? _recordingClientSize?.H : null);
+            RecordedClientH: isClientSpace ? _recordingClientSize?.H : null,
+            RecordedPlaceId: boundFresh is { PlaceId: > 0 } ? boundFresh.PlaceId : null,
+            RecordedGameName: string.IsNullOrEmpty(boundFresh?.PlaceName) ? null : boundFresh!.PlaceName);
 
         try
         {

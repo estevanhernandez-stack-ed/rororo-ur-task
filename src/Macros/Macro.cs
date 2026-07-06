@@ -23,7 +23,12 @@ public sealed record Macro(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? RecordedClientW = null,        // physical px; set only when CoordSpace == "client"
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    int? RecordedClientH = null)
+    int? RecordedClientH = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? RecordedPlaceId = null,       // game identity at record time — soft metadata (v0.6, still schema v3
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RecordedGameName = null,    //   so v0.5 readers still open shared bundles; nullable = "any game")
+    bool AllGames = false)              // user override: usable everywhere regardless of the stamp
 {
     /// <summary>Current schema version. Bump on shape changes.</summary>
     public const int CurrentSchemaVersion = 3;
@@ -36,6 +41,10 @@ public sealed record Macro(
 
     public bool IsClientSpace =>
         string.Equals(CoordSpace, CoordSpaceClient, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when this macro is tied to a specific game: it carries a
+    /// place stamp AND the user hasn't flipped the "All games" override.</summary>
+    public bool IsGameScoped => !AllGames && RecordedPlaceId is > 0;
 
     public TimeSpan Duration => Events.Count == 0
         ? TimeSpan.Zero

@@ -73,8 +73,19 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         TogglePlayStopCommand = new RelayCommand(
             () =>
             {
-                if (IsRunnerActive) _runtime.TriggerAbort();
-                else _runtime.TriggerPlayAssignments();
+                if (IsRunnerActive)
+                {
+                    _runtime.TriggerAbort();
+                    return;
+                }
+                var mismatched = Assignments.Where(r => r.HasGameMismatch).ToList();
+                if (mismatched.Count > 0)
+                {
+                    LogStatus($"Note: {mismatched.Count} pairing{(mismatched.Count == 1 ? "" : "s")} "
+                        + $"target a different game than the macro was recorded in "
+                        + $"({string.Join(", ", mismatched.Select(r => r.Alt.DisplayName))}). Playing anyway.");
+                }
+                _runtime.TriggerPlayAssignments();
             },
             () => IsRunnerActive || Assignments.Count > 0);
 
@@ -103,13 +114,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.StatusLogged += LogStatus;
         _runtime.MacrosChanged += () =>
         {
-            Macros.Clear();
-            var loaded = _runtime.Store.LoadAll();
-            foreach (var m in loaded.Macros.OrderByDescending(m => m.RecordedAtUnixMs))
-                Macros.Add(m);
-            OnPropertyChanged(nameof(HasMacros));
-            OnPropertyChanged(nameof(HasNoMacros));
-            OnPropertyChanged(nameof(StatusMeta));
+            _allMacros = _runtime.Store.LoadAll().Macros;
+            RefreshMacroList();
         };
         _runtime.CurrentlyPlayingMacroChanged += _ =>
         {
@@ -153,6 +159,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.Accounts.AccountAdded += (_, info) => RaiseUI(() =>
         {
             AddAssignmentRow(info);
+            RefreshMacroList(); // current-games set changed — re-band the library
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -160,6 +167,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() =>
         {
             RemoveAssignmentRow(info.Pid);
+            RefreshMacroList();
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -472,6 +480,52 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
     public bool HasMacros => Macros.Count > 0;
     public bool HasNoMacros => Macros.Count == 0;
+
+    // ---------- v0.6: game-aware library ----------
+
+    private IReadOnlyList<Macro> _allMacros = Array.Empty<Macro>();
+
+    private bool _isPlayingNowFilter;
+    /// <summary>PLAYING NOW chip: hard-hide game-scoped macros for games no alt is running.</summary>
+    public bool IsPlayingNowFilter
+    {
+        get => _isPlayingNowFilter;
+        set
+        {
+            if (_isPlayingNowFilter == value) return;
+            _isPlayingNowFilter = value;
+            OnPropertyChanged();
+            RefreshMacroList();
+        }
+    }
+
+    /// <summary>Distinct place ids across running alts (0 = unknown, excluded).</summary>
+    private IReadOnlySet<long> CurrentPlaceIds()
+        => Assignments.Select(r => r.Alt.PlaceId).Where(id => id > 0).ToHashSet();
+
+    /// <summary>Rebuild the visible macro list: playing-now filter, then game-band + recency sort.</summary>
+    private void RefreshMacroList()
+    {
+        var current = CurrentPlaceIds();
+        var visible = _isPlayingNowFilter
+            ? MacroGameFilter.FilterPlayingNow(_allMacros, current)
+            : _allMacros;
+
+        Macros.Clear();
+        foreach (var m in MacroGameFilter.Sort(visible, current))
+            Macros.Add(m);
+        OnPropertyChanged(nameof(HasMacros));
+        OnPropertyChanged(nameof(HasNoMacros));
+        OnPropertyChanged(nameof(StatusMeta));
+    }
+
+    /// <summary>Flip the per-macro "usable in all games" override and persist it.</summary>
+    public void ToggleAllGames(Macro macro)
+    {
+        if (macro is null) return;
+        _runtime.Store.Save(macro with { AllGames = !macro.AllGames });
+        _runtime.RaiseMacrosChanged();
+    }
 
     // ---------- Macro mutations ----------
 
