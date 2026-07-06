@@ -104,12 +104,38 @@ internal sealed class PluginClient : IAsyncDisposable
             cancellationToken: ct).ConfigureAwait(false);
         foreach (var a in running.Accounts)
         {
-            _accounts.OnLaunched(a.ProcessId, a.RobloxUserId, a.DisplayName, a.AccountId);
+            _accounts.OnLaunched(a.ProcessId, a.RobloxUserId, a.DisplayName, a.AccountId,
+                a.PlaceId, a.PlaceName);
         }
 
         _consumerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _launchedConsumer = Task.Run(() => ConsumeLaunchedAsync(_consumerCts.Token));
         _exitedConsumer = Task.Run(() => ConsumeExitedAsync(_consumerCts.Token));
+    }
+
+    /// <summary>
+    /// Re-fetch the running-accounts snapshot to refresh soft metadata —
+    /// notably game identity, which presence fills in AFTER the launch event
+    /// fired (0.4.0 contract semantics). Best-effort: failures are swallowed
+    /// and callers use whatever the registry already holds.
+    /// </summary>
+    public async Task RefreshRunningAccountsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            if (_client is null) return;
+            var running = await _client.GetRunningAccountsAsync(new Empty(),
+                cancellationToken: ct).ConfigureAwait(false);
+            foreach (var a in running.Accounts)
+            {
+                _accounts.OnLaunched(a.ProcessId, a.RobloxUserId, a.DisplayName, a.AccountId,
+                    a.PlaceId, a.PlaceName);
+            }
+        }
+        catch (Exception)
+        {
+            // Soft-metadata refresh only — must never disturb the recording flow.
+        }
     }
 
     private async Task ConsumeLaunchedAsync(CancellationToken ct)
@@ -121,7 +147,7 @@ internal sealed class PluginClient : IAsyncDisposable
             await foreach (var evt in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 _accounts.OnLaunched(evt.ProcessId, evt.RobloxUserId,
-                    evt.DisplayName, evt.AccountId);
+                    evt.DisplayName, evt.AccountId, evt.PlaceId, evt.PlaceName);
             }
         }
         catch (OperationCanceledException) { /* expected on shutdown */ }

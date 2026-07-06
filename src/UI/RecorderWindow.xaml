@@ -308,6 +308,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0"
                                                Text="MACROS"
@@ -315,7 +316,41 @@
                                                FontSize="9"
                                                Foreground="{DynamicResource CyanBrush}"
                                                VerticalAlignment="Center" />
-                                    <Button Grid.Column="1"
+                                    <!-- PLAYING NOW: hard-hide game-scoped macros for games no alt is
+                                         running. All-games + unstamped macros always stay visible. -->
+                                    <ToggleButton Grid.Column="1"
+                                                  IsChecked="{Binding IsPlayingNowFilter, Mode=TwoWay}"
+                                                  ToolTip="Show only macros for games your alts are playing right now (plus all-games macros)"
+                                                  Cursor="Hand"
+                                                  Margin="0,0,6,0">
+                                        <ToggleButton.Template>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Border x:Name="Chip"
+                                                        Background="Transparent"
+                                                        BorderBrush="{DynamicResource DividerBrush}"
+                                                        BorderThickness="1"
+                                                        CornerRadius="3"
+                                                        Padding="7,3">
+                                                    <TextBlock x:Name="ChipText"
+                                                               Text="PLAYING NOW"
+                                                               FontFamily="{StaticResource MonoFont}"
+                                                               FontSize="8"
+                                                               Foreground="{DynamicResource MutedTextBrush}" />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
+                                                        <Setter TargetName="Chip" Property="Background" Value="{DynamicResource RowHoverBrush}" />
+                                                        <Setter TargetName="ChipText" Property="Foreground" Value="{DynamicResource CyanBrush}" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Chip" Property="Background" Value="{DynamicResource RowHoverBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </ToggleButton.Template>
+                                    </ToggleButton>
+                                    <Button Grid.Column="2"
                                             Content="IMPORT"
                                             Style="{StaticResource SecondaryButton}"
                                             ToolTip="Import macros from a shared bundle file"
@@ -323,7 +358,7 @@
                                             Padding="9,3"
                                             Margin="0,0,6,0"
                                             Click="OnImportMacrosClicked" />
-                                    <Button Grid.Column="2"
+                                    <Button Grid.Column="3"
                                             Content="EXPORT"
                                             Style="{StaticResource SecondaryButton}"
                                             ToolTip="Export all macros to a shareable bundle file"
@@ -466,6 +501,11 @@
                                                                     <ContextMenu>
                                                                         <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
                                                                         <MenuItem Header="Export…" Click="OnMacroExportClicked" Tag="{Binding}" />
+                                                                        <MenuItem Header="Allow in all games"
+                                                                                  IsCheckable="True"
+                                                                                  IsChecked="{Binding AllGames, Mode=OneWay}"
+                                                                                  Click="OnMacroAllGamesClicked"
+                                                                                  Tag="{Binding}" />
                                                                         <MenuItem Header="Delete" Click="OnMacroDeleteClicked" Tag="{Binding}" />
                                                                     </ContextMenu>
                                                                 </Button.ContextMenu>
@@ -543,6 +583,32 @@
                                                                         </Run.Text>
                                                                     </Run>
                                                                 </TextBlock>
+                                                            </Border>
+                                                            <!-- Game badge — where this macro was recorded. Absent =
+                                                                 usable anywhere (all-games or pre-v0.6 macro). -->
+                                                            <Border BorderBrush="{DynamicResource DividerBrush}"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="3"
+                                                                    Padding="5,1"
+                                                                    Margin="6,0,0,0"
+                                                                    VerticalAlignment="Center">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding RecordedGameName}" Value="{x:Null}">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding AllGames}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <TextBlock Text="{Binding RecordedGameName}"
+                                                                           FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="8"
+                                                                           Foreground="{DynamicResource MutedTextBrush}" />
                                                             </Border>
                                                         </StackPanel>
                                                     </Grid>
@@ -630,19 +696,35 @@
                                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                                    Margin="0,2,0,0" />
                                                     </StackPanel>
-                                                    <Border Grid.Column="1"
-                                                            Background="{DynamicResource RowBgBrush}"
-                                                            BorderBrush="{DynamicResource CyanBrush}"
-                                                            BorderThickness="1"
-                                                            CornerRadius="3"
-                                                            Padding="6,2"
-                                                            VerticalAlignment="Center"
-                                                            Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
-                                                        <TextBlock Text="ASSIGNED"
-                                                                   FontSize="8"
-                                                                   Foreground="{DynamicResource CyanBrush}"
-                                                                   FontWeight="SemiBold" />
-                                                    </Border>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <!-- Soft mismatch warning — macro recorded in a different game.
+                                                             Advisory only; playback is never blocked. -->
+                                                        <Border Background="{DynamicResource RowBgBrush}"
+                                                                BorderBrush="{DynamicResource MagentaBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="3"
+                                                                Padding="6,2"
+                                                                Margin="0,0,6,0"
+                                                                ToolTip="{Binding GameMismatchHint}"
+                                                                Visibility="{Binding HasGameMismatch, Converter={StaticResource BoolToVisibility}}">
+                                                            <TextBlock Text="≠ GAME"
+                                                                       FontFamily="{StaticResource MonoFont}"
+                                                                       FontSize="8"
+                                                                       Foreground="{DynamicResource MagentaBrush}"
+                                                                       FontWeight="SemiBold" />
+                                                        </Border>
+                                                        <Border Background="{DynamicResource RowBgBrush}"
+                                                                BorderBrush="{DynamicResource CyanBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="3"
+                                                                Padding="6,2"
+                                                                Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
+                                                            <TextBlock Text="ASSIGNED"
+                                                                       FontSize="8"
+                                                                       Foreground="{DynamicResource CyanBrush}"
+                                                                       FontWeight="SemiBold" />
+                                                        </Border>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
