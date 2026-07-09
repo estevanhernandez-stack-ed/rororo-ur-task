@@ -1,0 +1,92 @@
+using Labs626.UrTask.Macros;
+using Labs626.UrTask.PluginHost;
+
+namespace RoRoRo.UrTask.Tests;
+
+public class RecipeRunnerTests
+{
+    private static AccountRegistry.AccountInfo Alt(int pid, long uid, string name)
+        => new(pid, uid, name, Guid.NewGuid().ToString());
+
+    private static Macro MacroWithId(string id)
+        => new(Macro.CurrentSchemaVersion, id, id, null, null, null, null, 0, Array.Empty<MacroEvent>());
+
+    // runOnce fake: report every alt Completed unless its uid is in `failUids`.
+    private static RecipeRunner.RunOnceDelegate FakeRunOnce(
+        List<string> log, HashSet<long>? failUids = null)
+        => (macro, alts, ct) =>
+        {
+            log.Add($"runOnce:{macro.Id}:[{string.Join(",", alts.Select(a => a.RobloxUserId))}]");
+            var per = alts.Select(a => new AltOutcome(a,
+                failUids != null && failUids.Contains(a.RobloxUserId)
+                    ? PlaybackOutcome.Refused : PlaybackOutcome.Completed, null)).ToList();
+            int done = per.Count(p => p.Outcome == PlaybackOutcome.Completed);
+            return Task.FromResult(new SequenceResult(per, done, per.Count - done, 0, TimeSpan.Zero));
+        };
+
+    private static RecipeRunner.RunLoopDelegate FakeRunLoop(List<string> log)
+        => (assignments, ct) =>
+        {
+            log.Add($"loop:[{string.Join(",", assignments.Select(a => $"{a.Alt.RobloxUserId}:{a.Macro?.Id ?? "keepalive"}"))}]");
+            return Task.CompletedTask;
+        };
+
+    [Fact]
+    public async Task Position_Barriers_Then_Loop_Starts()
+    {
+        var log = new List<string>();
+        var alts = new[] { Alt(1, 10, "a"), Alt(2, 20, "b") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep("loop", StepIteration.Loop) }, 0);
+
+        var runner = new RecipeRunner(FakeRunOnce(log), FakeRunLoop(log), MacroWithId);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.Equal(2, log.Count);
+        Assert.Equal("runOnce:pos:[10,20]", log[0]);           // position first, all alts
+        Assert.Equal("loop:[10:loop,20:loop]", log[1]);        // then loop, all alts, loop macro
+    }
+
+    [Fact]
+    public async Task TerminalKeepAlive_PassesNullMacro()
+    {
+        var log = new List<string>();
+        var alts = new[] { Alt(1, 10, "a") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep(null, StepIteration.KeepAlive) }, 0);
+
+        var runner = new RecipeRunner(FakeRunOnce(log), FakeRunLoop(log), MacroWithId);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.Equal("loop:[10:keepalive]", log[1]);
+    }
+
+    [Fact]
+    public async Task PositionFailure_ProceedsWithSuccessesOnly()
+    {
+        var log = new List<string>();
+        var alts = new[] { Alt(1, 10, "a"), Alt(2, 20, "b") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep("loop", StepIteration.Loop) }, 0);
+
+        var runner = new RecipeRunner(FakeRunOnce(log, failUids: new HashSet<long> { 20 }), FakeRunLoop(log), MacroWithId);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.Equal("loop:[10:loop]", log[1]);  // alt 20 dropped, squad not blocked
+    }
+
+    [Fact]
+    public async Task AllPositionsFail_LoopNeverStarts()
+    {
+        var log = new List<string>();
+        var alts = new[] { Alt(1, 10, "a") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep("loop", StepIteration.Loop) }, 0);
+
+        var runner = new RecipeRunner(FakeRunOnce(log, failUids: new HashSet<long> { 10 }), FakeRunLoop(log), MacroWithId);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.Single(log);                      // only the runOnce; no loop
+        Assert.StartsWith("runOnce", log[0]);
+    }
+}
