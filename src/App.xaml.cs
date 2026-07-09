@@ -48,7 +48,7 @@ public partial class App : Application
         DiagLog.Write("startup: window");
         _window = new RecorderWindow { DataContext = vm };
         DiagLog.Write("startup: tray");
-        _tray = new TrayService(_window);
+        _tray = new TrayService(_window, _runtime);
         _runtime.StateChanged += () => _tray.UpdateState(_runtime.State);
 
         DiagLog.Write("startup: window shown");

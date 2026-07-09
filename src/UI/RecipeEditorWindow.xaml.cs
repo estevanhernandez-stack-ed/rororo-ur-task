@@ -44,11 +44,13 @@ internal sealed class StepRowItem
 /// plus the two small sync layers (alt rows, step rows) that keep DataTemplates
 /// free of method-call bindings.
 ///
-/// Save/Run seam for Task 7: Save builds the <see cref="Recipe"/> via
-/// <c>_vm.Build(...)</c>, stores it on <see cref="BuiltRecipe"/>, and raises
-/// <see cref="Saved"/> — Task 7 wires persistence (RecipeStore) off that event
-/// without this window needing to know about it. Run is deliberately left
-/// unwired (no Click handler) for Task 7 to attach RecipeRunner.
+/// Save/Run seam: Save builds the <see cref="Recipe"/> via <c>_vm.Build(...)</c>,
+/// stores it on <see cref="BuiltRecipe"/>, and raises <see cref="Saved"/> —
+/// callers wire persistence (RecipeStore) off that event without this window
+/// needing to know about it. Run does the same build + <see cref="Saved"/>
+/// (so a run is always persisted) and additionally hands the recipe to
+/// <see cref="PluginRuntime.RunRecipe"/>, which composes RecipeRunner over the
+/// live SequencePlayer/AssignmentRunner and kicks it off.
 /// </summary>
 public partial class RecipeEditorWindow : Window
 {
@@ -56,11 +58,22 @@ public partial class RecipeEditorWindow : Window
     private readonly PlaybackTargetPickerViewModel _altPicker;
     private readonly ObservableCollection<AltRowItem> _altRows;
     private readonly ObservableCollection<StepRowItem> _stepRows = new();
+    private readonly PluginRuntime _runtime;
 
-    internal RecipeEditorWindow(IReadOnlyList<Macro> library, IReadOnlyList<AccountRegistry.AccountInfo> alts)
+    /// <summary>
+    /// Task 7's live-runner seam: <paramref name="runtime"/> supplies the composed
+    /// RecipeRunner (SequencePlayer/AssignmentRunner-backed) via
+    /// <see cref="PluginRuntime.RunRecipe"/> for the Run button. Persistence stays
+    /// decoupled — callers wire it off <see cref="Saved"/>, same as before.
+    /// </summary>
+    internal RecipeEditorWindow(
+        IReadOnlyList<Macro> library,
+        IReadOnlyList<AccountRegistry.AccountInfo> alts,
+        PluginRuntime runtime)
     {
         InitializeComponent();
 
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _vm = new RecipeEditorViewModel(library);
         DataContext = _vm;
 
@@ -148,13 +161,24 @@ public partial class RecipeEditorWindow : Window
             _vm.RemoveStep(row.Index);
     }
 
-    // ── Save (Task 7 wires persistence off the Saved event) ────────────────
+    // ── Save (persistence is wired off the Saved event by the caller) ──────
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)
     {
         if (!_vm.CanSave) return;
         BuiltRecipe = _vm.Build(Guid.NewGuid().ToString(), _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Saved?.Invoke(this, EventArgs.Empty);
+        Close();
+    }
+
+    // ── Run (build + persist same as Save, then hand off to the live runner) ──
+
+    private void OnRunClicked(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.CanSave || SelectedAlts.Count == 0) return;
+        BuiltRecipe = _vm.Build(Guid.NewGuid().ToString(), _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Saved?.Invoke(this, EventArgs.Empty); // same persistence path as Save
+        _runtime.RunRecipe(BuiltRecipe, SelectedAlts);
         Close();
     }
 

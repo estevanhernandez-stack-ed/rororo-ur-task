@@ -23,6 +23,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public AccountRegistry Accounts { get; }
     public MacroStore Store { get; }
+    public RecipeStore Recipes { get; }
 
     private readonly ForegroundWatcher _foreground;
     private readonly MacroRecorder _recorder;
@@ -43,6 +44,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
+    private RecipeRunner? _activeRecipeRunner;
 
     // ---------- Assignment state ----------
     private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
@@ -107,6 +109,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
+        Recipes = new RecipeStore();
         _hotkeys = new HotkeyService();
         _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
@@ -245,6 +248,65 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Log(note is null ? $"Restored {restored} alt window(s) to their original positions." : $"Reset: {note}");
     }
 
+    // ---------- Recipes (Task 7: wire RecipeRunner to the real runners) ----------
+
+    /// <summary>
+    /// Compose a <see cref="RecipeRunner"/> over the live <see cref="SequencePlayer"/>
+    /// (RunOnce position steps) and <see cref="AssignmentRunner"/> (terminal Loop/
+    /// KeepAlive), then kick it off fire-and-forget. Only one recipe runs at a time —
+    /// a prior active run is aborted first. Progress is surfaced through the same
+    /// Log/StatusLogged pipe the rest of playback uses (no separate recipe status
+    /// UI — reuses the existing activity feed instead of inventing a new one).
+    /// The bare-Esc / Ctrl+Shift+A abort chord (see <see cref="OnHotkey"/>) also
+    /// aborts the active recipe run — RunAsync's own delegates are literally
+    /// _sequence.PlayAsync / _runner.RunAsync, so this is the same abort surface
+    /// callers already know, not a new one.
+    /// </summary>
+    public void RunRecipe(Recipe recipe, IReadOnlyList<AccountRegistry.AccountInfo> selectedAlts)
+    {
+        if (recipe is null) throw new ArgumentNullException(nameof(recipe));
+        if (selectedAlts is null || selectedAlts.Count == 0)
+        {
+            Log("Run recipe — no alts selected.");
+            return;
+        }
+
+        if (_activeRecipeRunner is { IsRunning: true } prior)
+        {
+            Log("Another recipe is already running — aborting it to start this one.");
+            prior.Abort();
+        }
+
+        var runner = new RecipeRunner(
+            runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
+            runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
+            resolveMacro: id => Store.LoadAll().Macros
+                .FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)));
+        runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
+
+        _activeRecipeRunner = runner;
+        _hotkeys.EnableAbortKey(); // Esc/Ctrl+Shift+A aborts for the whole recipe run
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await runner.RunAsync(recipe, selectedAlts);
+                Log($"Recipe '{recipe.Name ?? "(unnamed)"}' finished.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Recipe run error: {ex.Message}");
+            }
+            finally
+            {
+                if (ReferenceEquals(_activeRecipeRunner, runner))
+                    _activeRecipeRunner = null;
+                RefreshAbortKey();
+            }
+        });
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -379,7 +441,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Abort:
-                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort();
+                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
+                    | (_activeRecipeRunner?.Abort() ?? false);
                 Log(aborted ? "Aborted." : "Abort ignored — nothing playing.");
                 break;
         }
@@ -393,7 +456,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     private void RefreshAbortKey()
     {
-        if (_runner.IsRunning || _sequenceActive || _playerActive)
+        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false))
             _hotkeys.EnableAbortKey();
         else
             _hotkeys.DisableAbortKey();
