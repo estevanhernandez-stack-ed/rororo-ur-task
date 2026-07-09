@@ -33,4 +33,21 @@ public class RecipeEditorViewModelTests
         Assert.Equal(StepIteration.Loop, recipe.Terminal.Iteration);
         Assert.Equal(123, recipe.RecordedAtUnixMs);
     }
+
+    [Fact]
+    public void Build_PlaceStamp_SkipsAllGamesMacro()
+    {
+        var macroA = new Macro(Macro.CurrentSchemaVersion, "11111111-1111-1111-1111-111111111111", "A", null, null, null, null, 0,
+            Array.Empty<MacroEvent>(), RecordedPlaceId: 111, RecordedGameName: "AllGamesLeftover", AllGames: true);
+        var macroB = new Macro(Macro.CurrentSchemaVersion, "22222222-2222-2222-2222-222222222222", "B", null, null, null, null, 0,
+            Array.Empty<MacroEvent>(), RecordedPlaceId: 222, RecordedGameName: "RealGame", AllGames: false);
+
+        var vm = new RecipeEditorViewModel(new[] { macroA, macroB });
+        vm.AddPositionStep(macroA.Id);
+        vm.SetTerminal(StepIteration.Loop, macroB.Id);
+
+        var recipe = vm.Build(Guid.NewGuid().ToString(), "walk + mine", nowUnixMs: 123);
+        Assert.Equal(222, recipe.RecordedPlaceId);
+        Assert.Equal("RealGame", recipe.RecordedGameName);
+    }
 }

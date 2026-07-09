@@ -64,7 +64,7 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
         var placeStamp = Steps.Select(s => s.MacroId)
             .Where(mid => mid is not null && _byId.ContainsKey(mid))
             .Select(mid => _byId[mid!])
-            .FirstOrDefault(m => m.RecordedPlaceId is > 0);
+            .FirstOrDefault(m => m.IsGameScoped);
         return new Recipe(Recipe.CurrentSchemaVersion, id, name, Steps.ToList(), nowUnixMs,
             placeStamp?.RecordedPlaceId, placeStamp?.RecordedGameName);
     }
