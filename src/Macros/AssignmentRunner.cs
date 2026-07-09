@@ -45,8 +45,16 @@ internal sealed class AssignmentRunner
         if (assignments is null) throw new ArgumentNullException(nameof(assignments));
         if (assignments.Count == 0) return;
 
-        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
-        var ct = _activeCts.Token;
+        // Atomic single-flight claim. Only one round-robin loop may run at a time. A
+        // second concurrent entry must NOT clobber the in-flight loop's token — it
+        // refuses (returns immediately) and runs nothing.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        if (Interlocked.CompareExchange(ref _activeCts, cts, null) is not null)
+        {
+            cts.Dispose();
+            return;
+        }
+        var ct = cts.Token;
         var cycle = 0;
 
         try

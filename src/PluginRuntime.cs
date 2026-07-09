@@ -277,11 +277,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
             prior.Abort();
         }
 
+        // Load the macro library once up front — resolveMacro is called once per
+        // position step plus once for a Loop terminal, and re-reading + re-deserializing
+        // every macro file on each call turns an N-step recipe into N+1 full library
+        // reloads. Snapshot into a dictionary instead.
+        var macros = Store.LoadAll().Macros.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
             runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
-            resolveMacro: id => Store.LoadAll().Macros
-                .FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)));
+            resolveMacro: id => macros.TryGetValue(id, out var m) ? m : null);
         runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
 
         _activeRecipeRunner = runner;
