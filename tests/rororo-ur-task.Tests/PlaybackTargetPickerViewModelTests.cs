@@ -8,6 +8,9 @@ public class PlaybackTargetPickerViewModelTests
     private static AccountRegistry.AccountInfo Alt(int pid, long userId, string name)
         => new(pid, userId, name, $"acct-{pid}");
 
+    private static AccountRegistry.AccountInfo Alt(long uid)
+        => new((int)uid, uid, $"alt{uid}", Guid.NewGuid().ToString());
+
     private static IReadOnlyList<AccountRegistry.AccountInfo> ThreeAlts() => new[]
     {
         Alt(1001, 47821334, "Goldnail8"),
@@ -76,5 +79,35 @@ public class PlaybackTargetPickerViewModelTests
         Assert.True(vm.CanPlay);
         vm.Toggle(vm.Alts[0]);
         Assert.False(vm.CanPlay);
+    }
+
+    [Fact]
+    public void SelectAll_MultiSelect_SelectsEveryAlt()
+    {
+        var alts = new[] { Alt(1), Alt(2), Alt(3) };
+        var vm = new PlaybackTargetPickerViewModel(alts, preferredUserId: null, multiSelect: true);
+        vm.SelectAll();
+        Assert.Equal(3, vm.SelectedTargets.Count);
+        Assert.True(vm.CanPlay);
+    }
+
+    [Fact]
+    public void SelectNone_ClearsSelection()
+    {
+        var alts = new[] { Alt(1), Alt(2) };
+        var vm = new PlaybackTargetPickerViewModel(alts, preferredUserId: null, multiSelect: true);
+        vm.SelectAll();
+        vm.SelectNone();
+        Assert.Empty(vm.SelectedTargets);
+        Assert.False(vm.CanPlay);
+    }
+
+    [Fact]
+    public void SelectAll_SingleSelect_IsNoOp()
+    {
+        var alts = new[] { Alt(1), Alt(2) };
+        var vm = new PlaybackTargetPickerViewModel(alts, preferredUserId: null, multiSelect: false);
+        vm.SelectAll();
+        Assert.True(vm.SelectedTargets.Count <= 1);
     }
 }

@@ -22,6 +22,7 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
@@ -43,8 +44,26 @@
                 </StackPanel>
             </Border>
 
+            <!-- Select all / select none (multi-select only) -->
+            <StackPanel Grid.Row="1"
+                        Orientation="Horizontal"
+                        Margin="14,8,14,0"
+                        Visibility="{Binding MultiSelect, Converter={StaticResource BoolToVisibility}}">
+                <Button Content="Select all"
+                        Click="SelectAll_Click"
+                        Style="{StaticResource SecondaryButton}"
+                        FontSize="9"
+                        Padding="9,5"
+                        Margin="0,0,6,0" />
+                <Button Content="Select none"
+                        Click="SelectNone_Click"
+                        Style="{StaticResource SecondaryButton}"
+                        FontSize="9"
+                        Padding="9,5" />
+            </StackPanel>
+
             <!-- Scrollable alt list -->
-            <ScrollViewer Grid.Row="1"
+            <ScrollViewer Grid.Row="2"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           Padding="14,8,14,8">
@@ -143,7 +162,7 @@
             </ScrollViewer>
 
             <!-- Sticky footer -->
-            <Border Grid.Row="2"
+            <Border Grid.Row="3"
                     Padding="14,10"
                     BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="0,1,0,0">
