@@ -127,4 +127,41 @@ public class RecipeRunnerTests
         Assert.DoesNotContain(log, l => l.StartsWith("loop:"));
         Assert.Contains(RecipeRunPhase.MacroMissing, phases);
     }
+
+    // Covers Fix 1 (host-loss safety): OnHostLost calls _activeRecipeRunner.Abort(),
+    // which cancels the recipe's OWN token (not a sub-runner's internal token). This
+    // proves that once that token is cancelled — even mid-position-step, before the
+    // terminal step is reached — RunAsync's pre-terminal ct.ThrowIfCancellationRequested()
+    // fires and the terminal loop never starts. Without this, a stale RecipeRunner
+    // would start a fresh terminal input-loop against orphaned PIDs after host loss.
+    [Fact]
+    public async Task TokenCancelledDuringPosition_TerminalLoopNeverStarts()
+    {
+        var log = new List<string>();
+        var alts = new[] { Alt(1, 10, "a") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep("loop", StepIteration.Loop) }, 0);
+
+        using var cts = new CancellationTokenSource();
+
+        // Fake runOnce that cancels the CTS (simulating OnHostLost calling
+        // _activeRecipeRunner.Abort() while positioning is in flight) and then
+        // returns a normal all-Completed result, same as a real position step that
+        // finishes just as the abort lands.
+        RecipeRunner.RunOnceDelegate cancellingRunOnce = (macro, altsArg, ct) =>
+        {
+            log.Add($"runOnce:{macro.Id}:[{string.Join(",", altsArg.Select(a => a.RobloxUserId))}]");
+            cts.Cancel();
+            var per = altsArg.Select(a => new AltOutcome(a, PlaybackOutcome.Completed, null)).ToList();
+            return Task.FromResult(new SequenceResult(per, per.Count, 0, 0, TimeSpan.Zero));
+        };
+
+        var runner = new RecipeRunner(cancellingRunOnce, FakeRunLoop(log), MacroWithId);
+
+        // RecipeRunner swallows OperationCanceledException internally — this must
+        // complete without throwing to the caller.
+        await runner.RunAsync(recipe, alts, cts.Token);
+
+        Assert.DoesNotContain(log, l => l.StartsWith("loop:"));
+    }
 }

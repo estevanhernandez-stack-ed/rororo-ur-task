@@ -277,6 +277,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
             prior.Abort();
         }
 
+        // Recipe takes over the shared AssignmentRunner surface: the recipe's terminal
+        // step drives the SAME _runner instance the plain Ctrl+Shift+P loop drives, and
+        // with the single-flight guard a still-running plain loop would make that
+        // terminal _runner.RunAsync silently refuse. Abort it now so the recipe owns
+        // the runner by the time its terminal step reaches it.
+        // Do NOT abort _sequence here — the recipe's own positioning uses
+        // _sequence.PlayAsync moments later (inside the Task.Run below); aborting it
+        // now risks the recipe's first position step refusing on a not-yet-cleared claim.
+        if (_runner.Abort())
+            Log("recipe takes over — aborting active loop");
+
         // Load the macro library once up front — resolveMacro is called once per
         // position step plus once for a Loop terminal, and re-reading + re-deserializing
         // every macro file on each call turns an N-step recipe into N+1 full library
@@ -353,6 +364,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _bridgeCts.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
+        try { _activeRecipeRunner?.Abort(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -372,6 +384,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _runner.Abort(); } catch { }
         try { _sequence.Abort(); } catch { }
         try { _player.Abort(); } catch { }
+        // The recipe runner has its own token — aborting the sub-runners above only
+        // cancels THEIR internal tokens, not the recipe's. Without this, RecipeRunner
+        // never observes cancellation and starts a fresh terminal loop against
+        // orphaned PIDs after the host is gone.
+        try { _activeRecipeRunner?.Abort(); } catch { }
 
         // Marshal to UI thread for the WPF shutdown. If we can't reach the
         // dispatcher (rare race), fall back to a hard exit so we don't linger.
@@ -400,6 +417,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // A recipe owns the shared runner surface while it's active — refuse
+                // rather than starting a concurrent plain loop underneath it.
+                if (_activeRecipeRunner is { IsRunning: true })
+                {
+                    Log("recipe running — ignoring Play");
+                    break;
+                }
+
                 // Toggle: if a round-robin is already running, Ctrl+Shift+P stops it
                 // (same as Esc). Rescue affordance — the chord that started it can
                 // also stop it, so users aren't trapped if they reach for the chord
