@@ -2,7 +2,7 @@ using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Macros;
 
-public enum RecipeRunPhase { Positioning, Looping, KeepAlive, AllAltsFailed, Done }
+public enum RecipeRunPhase { Positioning, Looping, KeepAlive, AllAltsFailed, MacroMissing, Done }
 
 public sealed record RecipePhaseEvent(
     string StepLabel, int StepIndex, int TotalSteps,
@@ -60,7 +60,13 @@ internal sealed class RecipeRunner
             {
                 ct.ThrowIfCancellationRequested();
                 var macro = _resolveMacro(positionSteps[i].MacroId!);
-                if (macro is null) continue; // unresolved macro id — skip the step, keep the squad
+                if (macro is null)
+                {
+                    // unresolved macro id — recipe references a deleted/renamed macro. Stop and
+                    // surface it rather than running the loop over un-positioned alts.
+                    Emit(new RecipePhaseEvent($"Missing macro ({i + 1})", i, recipe.Steps.Count, live, RecipeRunPhase.MacroMissing));
+                    return;
+                }
 
                 Emit(new RecipePhaseEvent($"Positioning ({i + 1})", i, recipe.Steps.Count, live, RecipeRunPhase.Positioning));
                 var result = await _runOnce(macro, live, ct).ConfigureAwait(false);
@@ -83,6 +89,15 @@ internal sealed class RecipeRunner
             var terminalMacro = terminal.Iteration == StepIteration.Loop
                 ? _resolveMacro(terminal.MacroId!)
                 : null; // KeepAlive → null macro → AssignmentRunner sends Space
+
+            if (terminal.Iteration == StepIteration.Loop && terminalMacro is null)
+            {
+                // unresolved terminal macro id — do not degrade to keep-alive silently.
+                Emit(new RecipePhaseEvent(
+                    "Missing macro (terminal)", recipe.Steps.Count - 1, recipe.Steps.Count, live, RecipeRunPhase.MacroMissing));
+                return;
+            }
+
             var assignments = live.Select(a => new Assignment(a, terminalMacro)).ToList();
 
             Emit(new RecipePhaseEvent(
@@ -91,7 +106,7 @@ internal sealed class RecipeRunner
                 terminal.Iteration == StepIteration.Loop ? RecipeRunPhase.Looping : RecipeRunPhase.KeepAlive));
 
             await _runLoop(assignments, ct).ConfigureAwait(false); // runs until cancelled
-            Emit(new RecipePhaseEvent("Done", recipe.Steps.Count, recipe.Steps.Count, live, RecipeRunPhase.Done));
+            Emit(new RecipePhaseEvent("Done", recipe.Steps.Count - 1, recipe.Steps.Count, live, RecipeRunPhase.Done));
         }
         catch (OperationCanceledException) { /* aborted — expected */ }
         finally

@@ -89,4 +89,42 @@ public class RecipeRunnerTests
         Assert.Single(log);                      // only the runOnce; no loop
         Assert.StartsWith("runOnce", log[0]);
     }
+
+    [Fact]
+    public async Task UnresolvedPositionMacro_EmitsMacroMissing_AndLoopNeverStarts()
+    {
+        var log = new List<string>();
+        var phases = new List<RecipeRunPhase>();
+        var alts = new[] { Alt(1, 10, "a") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("missing", StepIteration.RunOnce), new RecipeStep("loop", StepIteration.Loop) }, 0);
+
+        Macro? Resolve(string id) => id == "missing" ? null : MacroWithId(id);
+
+        var runner = new RecipeRunner(FakeRunOnce(log), FakeRunLoop(log), Resolve);
+        runner.Progress += (_, e) => phases.Add(e.Phase);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.DoesNotContain(log, l => l.StartsWith("loop:"));
+        Assert.Contains(RecipeRunPhase.MacroMissing, phases);
+    }
+
+    [Fact]
+    public async Task UnresolvedTerminalLoopMacro_EmitsMacroMissing_AndLoopNeverStarts()
+    {
+        var log = new List<string>();
+        var phases = new List<RecipeRunPhase>();
+        var alts = new[] { Alt(1, 10, "a") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep("missing", StepIteration.Loop) }, 0);
+
+        Macro? Resolve(string id) => id == "missing" ? null : MacroWithId(id);
+
+        var runner = new RecipeRunner(FakeRunOnce(log), FakeRunLoop(log), Resolve);
+        runner.Progress += (_, e) => phases.Add(e.Phase);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.DoesNotContain(log, l => l.StartsWith("loop:"));
+        Assert.Contains(RecipeRunPhase.MacroMissing, phases);
+    }
 }
