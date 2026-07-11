@@ -205,6 +205,36 @@ public partial class RecorderWindow : Window
         }
     }
 
+    private void OnMacroExportAhkV1Clicked(object sender, RoutedEventArgs e) => ExportAsAutoHotkey(sender, AhkVersion.V1);
+
+    private void OnMacroExportAhkV2Clicked(object sender, RoutedEventArgs e) => ExportAsAutoHotkey(sender, AhkVersion.V2);
+
+    /// <summary>Mirrors <see cref="ExportWithDialog"/>'s SaveFileDialog pattern for the
+    /// AutoHotkey exporter — .ahk filter, macro-name-derived default filename.</summary>
+    private void ExportAsAutoHotkey(object sender, AhkVersion version)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not Macro macro
+            || DataContext is not RecorderViewModel vm) return;
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = version == AhkVersion.V1 ? "Export as AutoHotkey v1" : "Export as AutoHotkey v2",
+            FileName = SuggestExportFileName(macro.Name) + ".ahk",
+            DefaultExt = ".ahk",
+            Filter = "AutoHotkey script (*.ahk)|*.ahk",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            vm.ExportMacroAsAutoHotkey(macro, version, dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Export failed: {ex.Message}", "RoRoRo Ur Task",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     /// <summary>Macro name → safe filename stem ("farm loop!" → "farm loop"); falls back to "macro".</summary>
     private static string SuggestExportFileName(string? macroName)
     {

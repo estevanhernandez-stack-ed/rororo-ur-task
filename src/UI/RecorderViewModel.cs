@@ -633,6 +633,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             : $"Exported {macros.Count} macros → {Path.GetFileName(path)}");
     }
 
+    /// <summary>Render a single macro as a standalone AutoHotkey (v1 or v2) script and
+    /// write it to <paramref name="path"/>. Best-effort port — see
+    /// <see cref="AutoHotkeyExporter"/> for the caveats baked into the file header.</summary>
+    public void ExportMacroAsAutoHotkey(Macro macro, AhkVersion version, string path)
+    {
+        if (macro is null) return;
+        var script = AutoHotkeyExporter.Export(macro, version);
+        File.WriteAllText(path, script); // .NET default is UTF-8 without a BOM, matching ExportMacros above.
+        LogStatus($"Exported '{macro.Name ?? "(unnamed)"}' → {Path.GetFileName(path)} (AutoHotkey {(version == AhkVersion.V1 ? "v1" : "v2")})");
+    }
+
     /// <summary>
     /// Import macros from bundle (or bare single-macro) files. Imports are
     /// additive: every imported macro gets a fresh id and a deduped name, so an

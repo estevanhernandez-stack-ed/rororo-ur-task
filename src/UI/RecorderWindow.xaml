@@ -510,6 +510,10 @@
                                                                     <ContextMenu>
                                                                         <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
                                                                         <MenuItem Header="Export…" Click="OnMacroExportClicked" Tag="{Binding}" />
+                                                                        <MenuItem Header="Export as AutoHotkey">
+                                                                            <MenuItem Header="v1…" Click="OnMacroExportAhkV1Clicked" Tag="{Binding}" />
+                                                                            <MenuItem Header="v2…" Click="OnMacroExportAhkV2Clicked" Tag="{Binding}" />
+                                                                        </MenuItem>
                                                                         <MenuItem Header="Allow in all games"
                                                                                   IsCheckable="True"
                                                                                   IsChecked="{Binding AllGames, Mode=OneWay}"
