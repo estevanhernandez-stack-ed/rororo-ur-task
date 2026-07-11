@@ -23,6 +23,15 @@ public partial class RecorderWindow : Window
                 ApplyCompactState(vm.IsCompact);
             }
         };
+
+        // Re-read the saved-routines list every time this window regains focus —
+        // mirrors RecipesWindow's Activated-refresh so a recipe/loadout saved,
+        // edited, or deleted in the (non-modal) Recipes library or editor shows
+        // up in the routine picker here without a restart.
+        Activated += (_, _) =>
+        {
+            if (DataContext is RecorderViewModel vm) vm.RefreshRoutines();
+        };
     }
 
     /// <summary>

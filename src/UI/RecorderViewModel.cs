@@ -28,6 +28,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
         Assignments = new ObservableCollection<AssignmentRow>();
+        SavedRoutines = new ObservableCollection<Recipe>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
@@ -53,6 +54,30 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
 
         ResetAssignmentsCommand = new RelayCommand(() => _runtime.ResetAssignments());
+
+        // Routine (recipe/loadout) run surface — targets exactly the alts checked
+        // via AssignmentRow.IsCheckedForRoutine, independent of macro assignment.
+        // CanExecute already gates on a selected routine + ≥1 checked alt, but the
+        // execute body re-checks (RecipesWindow.OnRunClicked does the same for its
+        // own picker) — RunRecipe itself also refuses an empty list, but checking
+        // here avoids even attempting the call if Execute is ever invoked directly.
+        RunRoutineCommand = new RelayCommand(
+            () =>
+            {
+                if (SelectedRoutine is not { } routine) return;
+                var targets = Assignments.Where(r => r.IsCheckedForRoutine).Select(r => r.Alt).ToList();
+                if (targets.Count == 0) return;
+                _runtime.RunRecipe(routine, targets);
+            },
+            () => SelectedRoutine is not null && Assignments.Any(r => r.IsCheckedForRoutine) && !IsRunnerActive);
+        SelectAllRoutineAltsCommand = new RelayCommand(() =>
+        {
+            foreach (var row in Assignments) row.IsCheckedForRoutine = true;
+        });
+        SelectNoneRoutineAltsCommand = new RelayCommand(() =>
+        {
+            foreach (var row in Assignments) row.IsCheckedForRoutine = false;
+        });
 
         StackWindowsCommand = new RelayCommand(() => _runtime.ArrangeStack(), CanArrange);
         GridWindowsCommand = new RelayCommand(() => _runtime.ArrangeGrid(), CanArrange);
@@ -175,6 +200,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         // Seed current alts on construction
         foreach (var alt in _runtime.Accounts.Snapshot()) AddAssignmentRow(alt);
+
+        // Seed the routine picker so it's populated even before the window's
+        // first Activated fires (RefreshRoutines is re-called there too, to
+        // pick up recipes saved/edited/deleted elsewhere while this window is open).
+        RefreshRoutines();
     }
 
     // ---------- Collections ----------
@@ -182,6 +212,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ObservableCollection<Macro> Macros { get; }
     public ObservableCollection<string> StatusLines { get; }
     public ObservableCollection<AssignmentRow> Assignments { get; }
+    public ObservableCollection<Recipe> SavedRoutines { get; }
 
     // ---------- Commands ----------
 
@@ -191,6 +222,9 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand MarkMacroActiveCommand { get; }
     public ICommand ToggleAltAssignmentCommand { get; }
     public ICommand ResetAssignmentsCommand { get; }
+    public ICommand RunRoutineCommand { get; }
+    public ICommand SelectAllRoutineAltsCommand { get; }
+    public ICommand SelectNoneRoutineAltsCommand { get; }
     public ICommand PlayAssignmentsCommand { get; }
     public ICommand StopAssignmentsCommand { get; }
     public ICommand TogglePlayStopCommand { get; }
@@ -357,6 +391,39 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public bool HasActiveAssignment => _activeAssignmentMacro is not null;
     public string ActiveAssignmentName => _activeAssignmentMacro?.Name ?? "(none)";
 
+    // ---------- Routine (recipe/loadout) run surface ----------
+
+    private Recipe? _selectedRoutine;
+    /// <summary>The saved recipe/loadout picked in the ASSIGNMENTS pane's routine
+    /// strip. RUN targets whichever alts have <see cref="AssignmentRow.IsCheckedForRoutine"/>
+    /// checked — independent of the macro-assignment pairing above.</summary>
+    public Recipe? SelectedRoutine
+    {
+        get => _selectedRoutine;
+        set
+        {
+            if (Equals(_selectedRoutine, value)) return;
+            _selectedRoutine = value;
+            OnPropertyChanged();
+            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>Re-read every saved recipe/loadout from disk. Called on window
+    /// Activated so a routine saved/edited/deleted elsewhere (Recipes library,
+    /// recipe editor) shows up here without a restart. Preserves the current
+    /// selection by id across the reload when it still exists.</summary>
+    public void RefreshRoutines()
+    {
+        var previousId = _selectedRoutine?.Id;
+        var recipes = _runtime.Recipes.LoadAll().Recipes
+            .OrderBy(r => r.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        SavedRoutines.Clear();
+        foreach (var recipe in recipes) SavedRoutines.Add(recipe);
+        SelectedRoutine = previousId is null ? null : SavedRoutines.FirstOrDefault(r => r.Id == previousId);
+    }
+
     // ---------- Assignment: paired-alt visibility (1:1 multi-pair display) ----------
 
     // Map of MacroId → paired alt DisplayName. Re-issued as a new instance whenever
@@ -435,6 +502,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }
@@ -609,13 +677,25 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         if (Assignments.Any(r => r.Alt.Pid == alt.Pid)) return;
         var existing = _runtime.GetAssignment(alt.Pid);
-        Assignments.Add(new AssignmentRow(alt) { AssignedMacro = existing });
+        var row = new AssignmentRow(alt) { AssignedMacro = existing };
+        row.PropertyChanged += OnAssignmentRowPropertyChanged;
+        Assignments.Add(row);
     }
 
     private void RemoveAssignmentRow(int pid)
     {
         var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
-        if (row is not null) Assignments.Remove(row);
+        if (row is null) return;
+        row.PropertyChanged -= OnAssignmentRowPropertyChanged;
+        Assignments.Remove(row);
+    }
+
+    /// <summary>Routine-checkbox toggles change RunRoutineCommand's CanExecute
+    /// (it requires ≥1 checked alt); plain RelayCommand doesn't auto-requery.</summary>
+    private void OnAssignmentRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AssignmentRow.IsCheckedForRoutine))
+            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
     }
 
     private void RefreshAssignmentRow(int pid, Macro? macro)

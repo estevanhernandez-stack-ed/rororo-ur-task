@@ -656,6 +656,52 @@
                                                Foreground="{DynamicResource MutedTextBrush}"
                                                Margin="0,3,0,0"
                                                TextWrapping="Wrap" />
+
+                                    <!-- Routine (recipe/loadout) run strip — pick a saved routine, check
+                                         which alts it runs on via the checkbox on each row below, hit RUN.
+                                         Explicit selection only: no popup, nothing auto-wiped. -->
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Grid.Column="0"
+                                                  Style="{StaticResource ThemedComboBox}"
+                                                  ItemsSource="{Binding SavedRoutines}"
+                                                  DisplayMemberPath="Name"
+                                                  SelectedItem="{Binding SelectedRoutine, Mode=TwoWay}"
+                                                  ToolTip="Pick a saved recipe or loadout to run"
+                                                  Margin="0,0,8,0" />
+                                        <Button Grid.Column="1"
+                                                Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding RunRoutineCommand}"
+                                                ToolTip="Run the selected routine on the checked alts below"
+                                                Padding="14,6">
+                                            <StackPanel>
+                                                <TextBlock Text="RUN" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                                <TextBlock Text="▸ routine" FontSize="8" Opacity="0.7" HorizontalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Text="target alts:"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   FontSize="8"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,8,0" />
+                                        <Button Content="Select all"
+                                                Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding SelectAllRoutineAltsCommand}"
+                                                FontSize="9"
+                                                Padding="9,4"
+                                                Margin="0,0,6,0" />
+                                        <Button Content="Select none"
+                                                Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding SelectNoneRoutineAltsCommand}"
+                                                FontSize="9"
+                                                Padding="9,4" />
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 
@@ -695,17 +741,28 @@
                                                 </Border.Style>
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0">
+                                                    <!-- Routine-target checkbox — independent of the macro assignment
+                                                         at right; both coexist on the same row. Handles its own click
+                                                         (WPF marks the bubbling MouseLeftButtonDown Handled inside
+                                                         ButtonBase), so it never also fires the row's
+                                                         OnAssignmentRowClicked macro-assign toggle below. -->
+                                                    <CheckBox Grid.Column="0"
+                                                              IsChecked="{Binding IsCheckedForRoutine, Mode=TwoWay}"
+                                                              VerticalAlignment="Center"
+                                                              Margin="0,0,8,0"
+                                                              ToolTip="Target this alt for the next routine RUN" />
+                                                    <StackPanel Grid.Column="1">
                                                         <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
                                                         <TextBlock Text="{Binding DisplayMacroName}"
                                                                    FontSize="10"
                                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                                    Margin="0,2,0,0" />
                                                     </StackPanel>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                                         <!-- Soft mismatch warning — macro recorded in a different game.
                                                              Advisory only; playback is never blocked. -->
                                                         <Border Background="{DynamicResource RowBgBrush}"
