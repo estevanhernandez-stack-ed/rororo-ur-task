@@ -12,9 +12,10 @@ public sealed record RecipePhaseEvent(
 /// Thin orchestrator: run each RunOnce (position) step once-per-alt and BARRIER on
 /// its completion, carrying only the alts that positioned forward
 /// (proceed-with-successes), then start the terminal Loop/KeepAlive step across the
-/// survivors. Owns no Win32 — it drives two injected delegates that in production
-/// wrap SequencePlayer (run-once) and AssignmentRunner (loop), so orchestration is
-/// unit-testable with fakes.
+/// survivors — or, for a loadout (terminal <see cref="StepIteration.Done"/>), stop
+/// after positioning with no loop at all. Owns no Win32 — it drives two injected
+/// delegates that in production wrap SequencePlayer (run-once) and AssignmentRunner
+/// (loop), so orchestration is unit-testable with fakes.
 /// </summary>
 internal sealed class RecipeRunner
 {
@@ -86,6 +87,15 @@ internal sealed class RecipeRunner
 
             ct.ThrowIfCancellationRequested();
             var terminal = recipe.Terminal;
+
+            if (terminal.Iteration == StepIteration.Done)
+            {
+                // a loadout: position steps already ran once above — stop here, no
+                // AssignmentRunner loop. No Assignments to build either.
+                Emit(new RecipePhaseEvent("Done", recipe.Steps.Count - 1, recipe.Steps.Count, live, RecipeRunPhase.Done));
+                return;
+            }
+
             var terminalMacro = terminal.Iteration == StepIteration.Loop
                 ? _resolveMacro(terminal.MacroId!)
                 : null; // KeepAlive → null macro → AssignmentRunner sends Space

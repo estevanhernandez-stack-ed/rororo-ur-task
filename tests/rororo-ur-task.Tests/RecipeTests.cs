@@ -48,6 +48,24 @@ public class RecipeTests
     }
 
     [Fact]
+    public void ValidateSteps_TerminalDone_WithPriorPositionStep_IsValid()
+    {
+        var steps = new[] { Pos("a"), new RecipeStep(null, StepIteration.Done) };
+        var (ok, error) = Recipe.ValidateSteps(steps);
+        Assert.True(ok);
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void ValidateSteps_TerminalDone_Alone_IsInvalid()
+    {
+        var steps = new[] { new RecipeStep(null, StepIteration.Done) };
+        var (ok, error) = Recipe.ValidateSteps(steps);
+        Assert.False(ok);
+        Assert.Equal("A loadout needs at least one step to run.", error);
+    }
+
+    [Fact]
     public void TerminalAndPositionSteps_Partition()
     {
         var steps = new[] { Pos("a"), Pos("b"), new RecipeStep("c", StepIteration.Loop) };

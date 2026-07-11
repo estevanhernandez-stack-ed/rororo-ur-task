@@ -61,8 +61,8 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
 
     public void SetTerminal(StepIteration mode, string? macroId)
     {
-        if (mode is not (StepIteration.Loop or StepIteration.KeepAlive))
-            throw new ArgumentException("Terminal must be Loop or KeepAlive.", nameof(mode));
+        if (mode is not (StepIteration.Loop or StepIteration.KeepAlive or StepIteration.Done))
+            throw new ArgumentException("Terminal must be Loop, KeepAlive, or Done.", nameof(mode));
         var terminal = new RecipeStep(mode == StepIteration.Loop ? macroId : null, mode);
         if (Steps.Count > 0 && Steps[^1].Iteration != StepIteration.RunOnce)
             Steps[^1] = terminal;   // replace existing terminal
@@ -104,6 +104,7 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
     /// <summary>Macro display name for a step (game badge/mismatch reuse existing MacroGameFilter in the row template).</summary>
     public string StepMacroName(RecipeStep step)
         => step.Iteration == StepIteration.KeepAlive ? "Keep-alive (Space)"
+         : step.Iteration == StepIteration.Done ? "Run once, then stop"
          : (step.MacroId is not null && _byId.TryGetValue(step.MacroId, out var m) ? (m.Name ?? "(unnamed)") : "(missing macro)");
 
     public Recipe Build(string id, string? name, long nowUnixMs)

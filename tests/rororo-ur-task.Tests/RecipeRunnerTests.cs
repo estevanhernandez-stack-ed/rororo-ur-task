@@ -62,6 +62,26 @@ public class RecipeRunnerTests
     }
 
     [Fact]
+    public async Task TerminalDone_Loadout_RunsPositionOnce_NeverStartsLoop()
+    {
+        var log = new List<string>();
+        var phases = new List<RecipeRunPhase>();
+        var alts = new[] { Alt(1, 10, "a"), Alt(2, 20, "b") };
+        var recipe = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "r",
+            new[] { new RecipeStep("pos", StepIteration.RunOnce), new RecipeStep(null, StepIteration.Done) }, 0);
+
+        var runner = new RecipeRunner(FakeRunOnce(log), FakeRunLoop(log), MacroWithId);
+        runner.Progress += (_, e) => phases.Add(e.Phase);
+        await runner.RunAsync(recipe, alts, CancellationToken.None);
+
+        Assert.Single(log);                              // only the runOnce; no loop
+        Assert.Equal("runOnce:pos:[10,20]", log[0]);
+        Assert.DoesNotContain(log, l => l.StartsWith("loop:"));
+        Assert.Contains(RecipeRunPhase.Done, phases);
+        Assert.False(runner.IsRunning);                  // run completed, finally cleaned up
+    }
+
+    [Fact]
     public async Task PositionFailure_ProceedsWithSuccessesOnly()
     {
         var log = new List<string>();

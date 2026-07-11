@@ -20,6 +20,21 @@ public class RecipeEditorViewModelTests
     }
 
     [Fact]
+    public void SetTerminal_Done_CanSaveTrue_And_IsLoadoutTrueOnBuiltRecipe()
+    {
+        var vm = new RecipeEditorViewModel(new[] { M("11111111-1111-1111-1111-111111111111", "walk") });
+        vm.AddPositionStep("11111111-1111-1111-1111-111111111111");
+        Assert.False(vm.CanSave); // still no terminal
+
+        vm.SetTerminal(StepIteration.Done, null);
+        Assert.True(vm.CanSave);
+
+        var recipe = vm.Build(Guid.NewGuid().ToString(), "walk once", nowUnixMs: 123);
+        Assert.True(recipe.IsLoadout);
+        Assert.Equal(StepIteration.Done, recipe.Terminal.Iteration);
+    }
+
+    [Fact]
     public void Build_ProducesValidRecipe()
     {
         var vm = new RecipeEditorViewModel(new[] {

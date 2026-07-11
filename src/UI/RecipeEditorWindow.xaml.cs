@@ -36,6 +36,7 @@ internal sealed class StepRowItem
         StepIteration.RunOnce => "POSITION",
         StepIteration.Loop => "LOOP",
         StepIteration.KeepAlive => "KEEP-ALIVE",
+        StepIteration.Done => "RUN ONCE",
         _ => Step.Iteration.ToString().ToUpperInvariant(),
     };
 }
@@ -170,6 +171,9 @@ public partial class RecipeEditorWindow : Window
 
     private void OnSetKeepAliveClicked(object sender, RoutedEventArgs e)
         => _vm.SetTerminal(StepIteration.KeepAlive, null);
+
+    private void OnSetDoneClicked(object sender, RoutedEventArgs e)
+        => _vm.SetTerminal(StepIteration.Done, null);
 
     private void OnRemoveStepClicked(object sender, RoutedEventArgs e)
     {
