@@ -27,6 +27,10 @@ internal sealed class StepRowItem
     public int Index { get; }
     public string DisplayName { get; }
 
+    /// <summary>True for position (RunOnce) rows — drives the up/down reorder
+    /// buttons' Visibility so the pinned terminal row never shows them.</summary>
+    public bool IsPosition => Step.Iteration == StepIteration.RunOnce;
+
     public string IterationLabel => Step.Iteration switch
     {
         StepIteration.RunOnce => "POSITION",
@@ -136,6 +140,7 @@ public partial class RecipeEditorWindow : Window
             var step = _vm.Steps[i];
             _stepRows.Add(new StepRowItem(step, i, _vm.StepMacroName(step)));
         }
+        EmptyStepsHint.Visibility = _stepRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ── Step authoring ──────────────────────────────────────────────────────
@@ -159,6 +164,18 @@ public partial class RecipeEditorWindow : Window
     {
         if (sender is FrameworkElement el && el.DataContext is StepRowItem row)
             _vm.RemoveStep(row.Index);
+    }
+
+    private void OnMoveStepUpClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is StepRowItem row)
+            _vm.MoveStepUp(row.Index);
+    }
+
+    private void OnMoveStepDownClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is StepRowItem row)
+            _vm.MoveStepDown(row.Index);
     }
 
     // ── Save (persistence is wired off the Saved event by the caller) ──────

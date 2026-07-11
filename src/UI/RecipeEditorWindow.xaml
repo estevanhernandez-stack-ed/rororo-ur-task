@@ -217,6 +217,7 @@
                                 </Grid.ColumnDefinitions>
                                 <ComboBox x:Name="PositionMacroCombo"
                                           Grid.Column="0"
+                                          Style="{StaticResource ThemedComboBox}"
                                           DisplayMemberPath="Name"
                                           Margin="0,0,8,0" />
                                 <Button Grid.Column="1"
@@ -236,6 +237,7 @@
                                 </Grid.ColumnDefinitions>
                                 <ComboBox x:Name="TerminalMacroCombo"
                                           Grid.Column="0"
+                                          Style="{StaticResource ThemedComboBox}"
                                           DisplayMemberPath="Name"
                                           Margin="0,0,8,0" />
                                 <Button Grid.Column="1"
@@ -254,7 +256,18 @@
                             </Grid>
 
                             <!-- Ordered steps list -->
-                            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Padding="8,0,8,8">
+                            <Grid Grid.Row="3">
+                            <TextBlock x:Name="EmptyStepsHint"
+                                       Text="No steps yet — pick a macro and click ADD POSITION STEP, then SET LOOP or SET KEEP-ALIVE."
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="20"
+                                       Visibility="Collapsed" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8,0,8,8">
                                 <ItemsControl x:Name="StepsList">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -267,6 +280,8 @@
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
@@ -288,6 +303,24 @@
                                                                    Foreground="{DynamicResource CyanBrush}" />
                                                     </Border>
                                                     <Button Grid.Column="2"
+                                                            Content="&#x25B2;"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            Foreground="{DynamicResource MutedTextBrush}"
+                                                            FontSize="10"
+                                                            Padding="4,0"
+                                                            Visibility="{Binding IsPosition, Converter={StaticResource BoolToVisibility}}"
+                                                            Click="OnMoveStepUpClicked" />
+                                                    <Button Grid.Column="3"
+                                                            Content="&#x25BC;"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            Foreground="{DynamicResource MutedTextBrush}"
+                                                            FontSize="10"
+                                                            Padding="4,0"
+                                                            Visibility="{Binding IsPosition, Converter={StaticResource BoolToVisibility}}"
+                                                            Click="OnMoveStepDownClicked" />
+                                                    <Button Grid.Column="4"
                                                             Content="✕"
                                                             Background="Transparent"
                                                             BorderThickness="0"
@@ -301,6 +334,7 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                             </ScrollViewer>
+                            </Grid>
                         </Grid>
                     </Border>
                 </Grid>

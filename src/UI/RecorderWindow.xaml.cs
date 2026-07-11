@@ -8,6 +8,10 @@ namespace Labs626.UrTask.UI;
 
 public partial class RecorderWindow : Window
 {
+    /// <summary>Wired by App.xaml.cs to <see cref="PluginRuntime.OpenRecipeEditor"/>
+    /// so the RECIPES button doesn't need a runtime reference of its own.</summary>
+    internal Action? RecipesRequested { get; set; }
+
     public RecorderWindow()
     {
         InitializeComponent();
@@ -72,6 +76,8 @@ public partial class RecorderWindow : Window
         if (DataContext is RecorderViewModel vm)
             vm.IsCompact = !vm.IsCompact;
     }
+
+    private void OnRecipesClicked(object sender, RoutedEventArgs e) => RecipesRequested?.Invoke();
 
     // ── Macro card handlers ────────────────────────────────────────────────
 

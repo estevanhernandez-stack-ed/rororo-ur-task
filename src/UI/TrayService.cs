@@ -81,32 +81,10 @@ internal sealed class TrayService : IDisposable
     }
 
     /// <summary>
-    /// "New recipe" menu item: opens a fresh <see cref="RecipeEditorWindow"/> seeded
-    /// with the current macro library and the live alt set. Non-modal (Show, not
-    /// ShowDialog) so a running recipe loop doesn't block the rest of the plugin.
-    /// Persistence is wired off the window's Saved event — Task 7's seam — so the
-    /// window itself stays decoupled from RecipeStore.
+    /// "New recipe" menu item: delegates to <see cref="PluginRuntime.OpenRecipeEditor"/>,
+    /// the shared wiring the main window's Recipes button also uses.
     /// </summary>
-    private void OpenNewRecipeEditor()
-    {
-        try
-        {
-            var library = _runtime.Store.LoadAll().Macros;
-            var alts = _runtime.Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
-            var editor = new RecipeEditorWindow(library, alts, _runtime) { Owner = _window };
-            editor.Saved += (_, _) =>
-            {
-                if (editor.BuiltRecipe is { } recipe)
-                    _runtime.Recipes.Save(recipe);
-            };
-            editor.Show();
-        }
-        catch (Exception ex)
-        {
-            // Menu click — nowhere dedicated to report; leave a trace like OpenLogFolder does.
-            DiagLog.Write($"New recipe editor failed to open: {ex.Message}");
-        }
-    }
+    private void OpenNewRecipeEditor() => _runtime.OpenRecipeEditor(_window);
 
     private static void OpenLogFolder()
     {

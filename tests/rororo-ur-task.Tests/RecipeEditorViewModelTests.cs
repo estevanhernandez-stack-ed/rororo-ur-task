@@ -35,6 +35,57 @@ public class RecipeEditorViewModelTests
     }
 
     [Fact]
+    public void MoveStepDown_SwapsAdjacentPositionSteps_TerminalStaysLast()
+    {
+        var vm = new RecipeEditorViewModel(new[] {
+            M("11111111-1111-1111-1111-111111111111", "walk"),
+            M("22222222-2222-2222-2222-222222222222", "mine") });
+        vm.AddPositionStep("11111111-1111-1111-1111-111111111111");
+        vm.AddPositionStep("22222222-2222-2222-2222-222222222222");
+        vm.SetTerminal(StepIteration.KeepAlive, null);
+
+        vm.MoveStepDown(0);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", vm.Steps[0].MacroId);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", vm.Steps[1].MacroId);
+        Assert.Equal(StepIteration.KeepAlive, vm.Steps[2].Iteration);
+    }
+
+    [Fact]
+    public void MoveStepDown_LastPositionStep_DoesNotMovePastTerminal()
+    {
+        var vm = new RecipeEditorViewModel(new[] {
+            M("11111111-1111-1111-1111-111111111111", "walk"),
+            M("22222222-2222-2222-2222-222222222222", "mine") });
+        vm.AddPositionStep("11111111-1111-1111-1111-111111111111");
+        vm.AddPositionStep("22222222-2222-2222-2222-222222222222");
+        vm.SetTerminal(StepIteration.KeepAlive, null);
+
+        vm.MoveStepDown(1); // last position step, adjacent to the terminal
+
+        Assert.Equal("11111111-1111-1111-1111-111111111111", vm.Steps[0].MacroId);
+        Assert.Equal("22222222-2222-2222-2222-222222222222", vm.Steps[1].MacroId);
+        Assert.Equal(StepIteration.KeepAlive, vm.Steps[2].Iteration);
+    }
+
+    [Fact]
+    public void MoveStepUpAndDown_OnTerminalIndex_IsNoOp()
+    {
+        var vm = new RecipeEditorViewModel(new[] {
+            M("11111111-1111-1111-1111-111111111111", "walk") });
+        vm.AddPositionStep("11111111-1111-1111-1111-111111111111");
+        vm.SetTerminal(StepIteration.KeepAlive, null);
+
+        vm.MoveStepUp(1); // terminal index
+        Assert.Equal(StepIteration.RunOnce, vm.Steps[0].Iteration);
+        Assert.Equal(StepIteration.KeepAlive, vm.Steps[1].Iteration);
+
+        vm.MoveStepDown(1); // terminal index
+        Assert.Equal(StepIteration.RunOnce, vm.Steps[0].Iteration);
+        Assert.Equal(StepIteration.KeepAlive, vm.Steps[1].Iteration);
+    }
+
+    [Fact]
     public void Build_PlaceStamp_SkipsAllGamesMacro()
     {
         var macroA = new Macro(Macro.CurrentSchemaVersion, "11111111-1111-1111-1111-111111111111", "A", null, null, null, null, 0,

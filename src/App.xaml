@@ -86,6 +86,128 @@
                 </Setter>
             </Style>
 
+            <!-- ComboBoxItem — dark rows, cyan highlight/selected, used inside ThemedComboBox's popup. -->
+            <Style x:Key="ThemedComboBoxItem" TargetType="ComboBoxItem">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{DynamicResource WhiteBrush}" />
+                <Setter Property="FontFamily" Value="{StaticResource BodyFont}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <Border x:Name="ItemBorder"
+                                    Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}"
+                                    CornerRadius="3">
+                                <ContentPresenter />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource RowBgBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource CyanBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource RowHoverBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource CyanBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Themed non-editable ComboBox — RowBgBrush field, DividerBrush border,
+                 cyan drop arrow, and (critically) a themed Popup/ItemsPresenter so the
+                 dropdown surface is dark too. A raw Background= setter alone only
+                 themes the closed field; the popup renders through a separate visual
+                 tree that needs its own Border/ItemsPresenter here. -->
+            <Style x:Key="ThemedComboBox" TargetType="ComboBox">
+                <Setter Property="Background" Value="{DynamicResource RowBgBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource WhiteBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="FontFamily" Value="{StaticResource BodyFont}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="IsEditable" Value="False" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource ThemedComboBoxItem}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid>
+                                <ToggleButton x:Name="ToggleButton"
+                                              Focusable="False"
+                                              ClickMode="Press"
+                                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Root"
+                                                    Background="{DynamicResource RowBgBrush}"
+                                                    BorderBrush="{DynamicResource DividerBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="4">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Path x:Name="Arrow"
+                                                          Grid.Column="1"
+                                                          Data="M 0 0 L 4 4 L 8 0 Z"
+                                                          Fill="{DynamicResource CyanBrush}"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          Margin="0,0,10,0" />
+                                                </Grid>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+                                <ContentPresenter x:Name="ContentSite"
+                                                  IsHitTestVisible="False"
+                                                  Content="{TemplateBinding SelectionBoxItem}"
+                                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                                  Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="Center"
+                                                  HorizontalAlignment="Left" />
+                                <Popup x:Name="PART_Popup"
+                                       Placement="Bottom"
+                                       IsOpen="{TemplateBinding IsDropDownOpen}"
+                                       AllowsTransparency="True"
+                                       Focusable="False"
+                                       PopupAnimation="Slide">
+                                    <Border x:Name="PopupBorder"
+                                            Background="{DynamicResource BgBrush}"
+                                            BorderBrush="{DynamicResource DividerBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Margin="0,2,0,0"
+                                            MinWidth="{TemplateBinding ActualWidth}"
+                                            MaxHeight="240"
+                                            SnapsToDevicePixels="True">
+                                        <ScrollViewer SnapsToDevicePixels="True">
+                                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.35" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- ContextMenu — dark navy bg with brand border + rounded corners -->
             <Style TargetType="ContextMenu">
                 <Setter Property="Background" Value="{DynamicResource BgBrush}" />

@@ -37,7 +37,7 @@ public sealed record Recipe(
     /// last is Loop (with a macro) or KeepAlive (macro optional).</summary>
     public static (bool ok, string? error) ValidateSteps(IReadOnlyList<RecipeStep> steps)
     {
-        if (steps is null || steps.Count == 0) return (false, "A recipe needs at least a terminal step.");
+        if (steps is null || steps.Count == 0) return (false, "Add a position step, then set a loop or keep-alive.");
 
         for (int i = 0; i < steps.Count - 1; i++)
         {

@@ -323,6 +323,37 @@ internal sealed class PluginRuntime : IAsyncDisposable
         });
     }
 
+    // ---------- Recipe editor ----------
+
+    /// <summary>
+    /// Open a fresh <see cref="UI.RecipeEditorWindow"/> seeded with the current macro
+    /// library and the live alt set. Non-modal (Show, not ShowDialog) so a running
+    /// recipe loop doesn't block the rest of the plugin. Persistence is wired off
+    /// the window's Saved event — Task 7's seam — so the window itself stays
+    /// decoupled from RecipeStore. Shared by the tray's "New recipe" menu item and
+    /// the main window's Recipes button so there's exactly one place this wiring lives.
+    /// </summary>
+    public void OpenRecipeEditor(Window owner)
+    {
+        try
+        {
+            var library = Store.LoadAll().Macros;
+            var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+            var editor = new UI.RecipeEditorWindow(library, alts, this) { Owner = owner };
+            editor.Saved += (_, _) =>
+            {
+                if (editor.BuiltRecipe is { } recipe)
+                    Recipes.Save(recipe);
+            };
+            editor.Show();
+        }
+        catch (Exception ex)
+        {
+            // Menu click / button click — nowhere dedicated to report; leave a trace like OpenLogFolder does.
+            Diagnostics.DiagLog.Write($"Recipe editor failed to open: {ex.Message}");
+        }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()

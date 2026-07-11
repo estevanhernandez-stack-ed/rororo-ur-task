@@ -51,6 +51,28 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
         if (index >= 0 && index < Steps.Count) { Steps.RemoveAt(index); Recompute(); }
     }
 
+    /// <summary>Swap a position step up with its predecessor. Only RunOnce steps move,
+    /// and only swap with an adjacent RunOnce — so the terminal Loop/KeepAlive step can
+    /// never move and a position step can never end up past it.</summary>
+    public void MoveStepUp(int index)
+    {
+        if (index <= 0 || index >= Steps.Count) return;
+        if (Steps[index].Iteration != StepIteration.RunOnce || Steps[index - 1].Iteration != StepIteration.RunOnce) return;
+        Steps.Move(index, index - 1);
+        Recompute();
+    }
+
+    /// <summary>Swap a position step down with its successor. Only RunOnce steps move,
+    /// and only swap with an adjacent RunOnce — so the terminal Loop/KeepAlive step can
+    /// never move and a position step can never end up past it.</summary>
+    public void MoveStepDown(int index)
+    {
+        if (index < 0 || index >= Steps.Count - 1) return;
+        if (Steps[index].Iteration != StepIteration.RunOnce || Steps[index + 1].Iteration != StepIteration.RunOnce) return;
+        Steps.Move(index, index + 1);
+        Recompute();
+    }
+
     public bool CanSave { get; private set; }
     public string? ValidationError { get; private set; }
 
