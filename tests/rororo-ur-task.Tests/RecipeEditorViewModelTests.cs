@@ -86,6 +86,31 @@ public class RecipeEditorViewModelTests
     }
 
     [Fact]
+    public void LoadFrom_PopulatesNameAndSteps_CanSaveBecomesTrue()
+    {
+        var vm = new RecipeEditorViewModel(new[] {
+            M("11111111-1111-1111-1111-111111111111", "walk"),
+            M("22222222-2222-2222-2222-222222222222", "mine") });
+        Assert.False(vm.CanSave);
+
+        var existing = new Recipe(Recipe.CurrentSchemaVersion, Guid.NewGuid().ToString(), "walk + mine",
+            new[]
+            {
+                new RecipeStep("11111111-1111-1111-1111-111111111111", StepIteration.RunOnce),
+                new RecipeStep("22222222-2222-2222-2222-222222222222", StepIteration.Loop),
+            },
+            RecordedAtUnixMs: 123);
+
+        vm.LoadFrom(existing);
+
+        Assert.Equal("walk + mine", vm.Name);
+        Assert.Equal(2, vm.Steps.Count);
+        Assert.Equal(StepIteration.RunOnce, vm.Steps[0].Iteration);
+        Assert.Equal(StepIteration.Loop, vm.Steps[1].Iteration);
+        Assert.True(vm.CanSave);
+    }
+
+    [Fact]
     public void Build_PlaceStamp_SkipsAllGamesMacro()
     {
         var macroA = new Macro(Macro.CurrentSchemaVersion, "11111111-1111-1111-1111-111111111111", "A", null, null, null, null, 0,

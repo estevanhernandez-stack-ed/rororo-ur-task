@@ -55,9 +55,9 @@ internal sealed class TrayService : IDisposable
         show.Click += (_, _) => SurfaceWindow();
         menu.Items.Add(show);
 
-        var newRecipe = new MenuItem { Header = "New recipe" };
-        newRecipe.Click += (_, _) => OpenNewRecipeEditor();
-        menu.Items.Add(newRecipe);
+        var recipes = new MenuItem { Header = "Recipes" };
+        recipes.Click += (_, _) => OpenRecipesLibrary();
+        menu.Items.Add(recipes);
 
         var openLogs = new MenuItem { Header = "Open log folder" };
         openLogs.Click += (_, _) => OpenLogFolder();
@@ -81,10 +81,10 @@ internal sealed class TrayService : IDisposable
     }
 
     /// <summary>
-    /// "New recipe" menu item: delegates to <see cref="PluginRuntime.OpenRecipeEditor"/>,
-    /// the shared wiring the main window's Recipes button also uses.
+    /// "Recipes" menu item: delegates to <see cref="PluginRuntime.OpenRecipesLibrary"/>,
+    /// the shared wiring the main window's RECIPES button also uses.
     /// </summary>
-    private void OpenNewRecipeEditor() => _runtime.OpenRecipeEditor(_window);
+    private void OpenRecipesLibrary() => _runtime.OpenRecipesLibrary(_window);
 
     private static void OpenLogFolder()
     {

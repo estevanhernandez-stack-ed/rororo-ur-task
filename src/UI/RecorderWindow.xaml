@@ -251,7 +251,7 @@
                     <Button Grid.Column="6"
                             Style="{StaticResource SecondaryButton}"
                             Padding="18,8"
-                            ToolTip="Open the recipe editor (position steps → loop/keep-alive)"
+                            ToolTip="Open your saved recipes (position steps → loop/keep-alive)"
                             Click="OnRecipesClicked">
                         <TextBlock Text="RECIPES" FontSize="12" HorizontalAlignment="Center" />
                     </Button>

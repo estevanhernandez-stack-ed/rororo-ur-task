@@ -323,15 +323,37 @@ internal sealed class PluginRuntime : IAsyncDisposable
         });
     }
 
-    // ---------- Recipe editor ----------
+    // ---------- Recipe library + editor ----------
+
+    /// <summary>
+    /// Open (or bring forward) the saved-recipes library — every persisted
+    /// recipe with per-row Run/Edit/Delete, plus a NEW RECIPE entry point that
+    /// reuses <see cref="OpenRecipeEditor"/>. This is the entry point the tray's
+    /// "Recipes" item and the main window's RECIPES button open now — the bare
+    /// editor is reached FROM the library (New/Edit), never directly, so a
+    /// saved recipe is never orphaned behind an editor-only shortcut. Non-modal,
+    /// same rationale as <see cref="OpenRecipeEditor"/>.
+    /// </summary>
+    public void OpenRecipesLibrary(Window owner)
+    {
+        try
+        {
+            var window = new UI.RecipesWindow(this) { Owner = owner };
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.DiagLog.Write($"Recipes library failed to open: {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// Open a fresh <see cref="UI.RecipeEditorWindow"/> seeded with the current macro
     /// library and the live alt set. Non-modal (Show, not ShowDialog) so a running
     /// recipe loop doesn't block the rest of the plugin. Persistence is wired off
     /// the window's Saved event — Task 7's seam — so the window itself stays
-    /// decoupled from RecipeStore. Shared by the tray's "New recipe" menu item and
-    /// the main window's Recipes button so there's exactly one place this wiring lives.
+    /// decoupled from RecipeStore. Shared by RecipesWindow's NEW RECIPE button
+    /// so there's exactly one place this wiring lives.
     /// </summary>
     public void OpenRecipeEditor(Window owner)
     {

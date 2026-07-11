@@ -21,7 +21,32 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
     public ObservableCollection<Macro> Library { get; }
     public ObservableCollection<RecipeStep> Steps { get; } = new();
 
-    public string? Name { get; set; }
+    private string? _name;
+    public string? Name
+    {
+        get => _name;
+        set
+        {
+            if (_name == value) return;
+            _name = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Seed this VM's Name + Steps from an existing recipe — the Edit
+    /// flow's entry point (RecipesWindow's per-row Edit action). Clears any
+    /// current authoring state first. The loaded steps are already valid (they
+    /// came from a saved recipe), so Recompute() flips CanSave true immediately
+    /// — Save/Run are enabled without the user touching anything.</summary>
+    public void LoadFrom(Recipe recipe)
+    {
+        if (recipe is null) throw new ArgumentNullException(nameof(recipe));
+        Name = recipe.Name;
+        Steps.Clear();
+        foreach (var step in recipe.Steps)
+            Steps.Add(step);
+        Recompute();
+    }
 
     public void AddPositionStep(string macroId)
     {

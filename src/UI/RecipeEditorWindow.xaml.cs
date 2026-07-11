@@ -63,23 +63,34 @@ public partial class RecipeEditorWindow : Window
     private readonly ObservableCollection<AltRowItem> _altRows;
     private readonly ObservableCollection<StepRowItem> _stepRows = new();
     private readonly PluginRuntime _runtime;
+    private readonly string? _existingId;
 
     /// <summary>
     /// Task 7's live-runner seam: <paramref name="runtime"/> supplies the composed
     /// RecipeRunner (SequencePlayer/AssignmentRunner-backed) via
     /// <see cref="PluginRuntime.RunRecipe"/> for the Run button. Persistence stays
     /// decoupled — callers wire it off <see cref="Saved"/>, same as before.
+    ///
+    /// <paramref name="existing"/> is the RecipesWindow Edit seam: when supplied,
+    /// the VM is seeded from it (<see cref="RecipeEditorViewModel.LoadFrom"/>) and
+    /// its Id is reused on Save/Run so editing overwrites the same on-disk file
+    /// instead of cloning a new recipe alongside the original. Null (the default)
+    /// preserves the New-recipe behavior every existing 3-arg call site expects.
     /// </summary>
     internal RecipeEditorWindow(
         IReadOnlyList<Macro> library,
         IReadOnlyList<AccountRegistry.AccountInfo> alts,
-        PluginRuntime runtime)
+        PluginRuntime runtime,
+        Recipe? existing = null)
     {
         InitializeComponent();
 
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _existingId = existing?.Id;
         _vm = new RecipeEditorViewModel(library);
         DataContext = _vm;
+        if (existing is not null)
+            _vm.LoadFrom(existing); // sets Name (PropertyChanged updates the bound TextBox) + Steps before the sync layers below read them
 
         _altPicker = new PlaybackTargetPickerViewModel(alts, preferredUserId: null, multiSelect: true);
         AltPanel.DataContext = _altPicker; // enables the Select all/none row's Visibility={Binding MultiSelect}
@@ -183,7 +194,8 @@ public partial class RecipeEditorWindow : Window
     private void OnSaveClicked(object sender, RoutedEventArgs e)
     {
         if (!_vm.CanSave) return;
-        BuiltRecipe = _vm.Build(Guid.NewGuid().ToString(), _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var id = _existingId ?? Guid.NewGuid().ToString();
+        BuiltRecipe = _vm.Build(id, _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Saved?.Invoke(this, EventArgs.Empty);
         Close();
     }
@@ -193,7 +205,8 @@ public partial class RecipeEditorWindow : Window
     private void OnRunClicked(object sender, RoutedEventArgs e)
     {
         if (!_vm.CanSave || SelectedAlts.Count == 0) return;
-        BuiltRecipe = _vm.Build(Guid.NewGuid().ToString(), _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var id = _existingId ?? Guid.NewGuid().ToString();
+        BuiltRecipe = _vm.Build(id, _vm.Name, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Saved?.Invoke(this, EventArgs.Empty); // same persistence path as Save
         _runtime.RunRecipe(BuiltRecipe, SelectedAlts);
         Close();
