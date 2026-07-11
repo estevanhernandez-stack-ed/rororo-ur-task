@@ -3,14 +3,14 @@ using System.Runtime.InteropServices;
 namespace Labs626.UrTask.Hotkeys;
 
 /// <summary>
-/// Registers Ctrl+Shift+R (record toggle), Ctrl+Shift+P (play assignments), and
-/// Ctrl+Shift+A (abort) as Win32 global hotkeys for the plugin's lifetime. Bare
-/// Esc is ALSO an abort key, but registered on demand only while a macro plays
-/// (EnableAbortKey/DisableAbortKey) — a permanent bare-Esc grab swallows Esc
-/// system-wide for every app whenever the plugin runs. v0.1 used bare F8/F5/Esc,
-/// which hijacked those keys system-wide (browser refresh, IDE reload, Roblox
-/// Studio play); v0.2 moved record/play to chords; v0.3.1 closed the same hole
-/// on abort.
+/// Registers Ctrl+Shift+R (record toggle), Ctrl+Shift+P (play assignments),
+/// Ctrl+Shift+L (run routine), and Ctrl+Shift+A (abort) as Win32 global hotkeys
+/// for the plugin's lifetime. Bare Esc is ALSO an abort key, but registered on
+/// demand only while a macro plays (EnableAbortKey/DisableAbortKey) — a
+/// permanent bare-Esc grab swallows Esc system-wide for every app whenever the
+/// plugin runs. v0.1 used bare F8/F5/Esc, which hijacked those keys system-wide
+/// (browser refresh, IDE reload, Roblox Studio play); v0.2 moved record/play to
+/// chords; v0.3.1 closed the same hole on abort.
 ///
 /// Listens on its own background thread with a message pump — RegisterHotKey
 /// delivers WM_HOTKEY through the thread's message queue and needs a GetMessage
@@ -40,6 +40,7 @@ internal sealed class HotkeyService : IDisposable
     private const int VK_R = 0x52;
     private const int VK_P = 0x50;
     private const int VK_A = 0x41;
+    private const int VK_L = 0x4C;
     private const int VK_ESCAPE = 0x1B;
 
     // Hotkey ids — opaque to Win32; we use them to discriminate WM_HOTKEY wParam.
@@ -47,6 +48,7 @@ internal sealed class HotkeyService : IDisposable
     private const int ID_PLAY = 2;
     private const int ID_ABORT_BARE = 3;   // bare Esc — registered only while a macro plays
     private const int ID_ABORT_CHORD = 4;  // Ctrl+Shift+A — registered for the plugin's lifetime
+    private const int ID_RUN_ROUTINE = 5;  // Ctrl+Shift+L — run the selected recipe/loadout routine
 
     private readonly object _lock = new();
     private Thread? _thread;
@@ -62,7 +64,7 @@ internal sealed class HotkeyService : IDisposable
     /// this to skip them at record time — but only when Ctrl+Shift is held
     /// (otherwise lowercase 'r'/'p' typing would get eaten).
     /// </summary>
-    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_A };
+    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_A, VK_L };
 
     /// <summary>VK code for the bare Esc hotkey — always filtered at record time.</summary>
     public static int AbortVkCode => VK_ESCAPE;
@@ -155,6 +157,10 @@ internal sealed class HotkeyService : IDisposable
                 throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+A) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_ABORT_CHORD);
 
+            if (!RegisterHotKey(IntPtr.Zero, ID_RUN_ROUTINE, chord, VK_L))
+                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+L) failed, win32 error {Marshal.GetLastWin32Error()}");
+            registered.Add(ID_RUN_ROUTINE);
+
             _running = true;
             _readySignal!.Set();
 
@@ -183,6 +189,7 @@ internal sealed class HotkeyService : IDisposable
                         ID_PLAY => HotkeyKind.Play,
                         ID_ABORT_BARE => HotkeyKind.Abort,
                         ID_ABORT_CHORD => HotkeyKind.Abort,
+                        ID_RUN_ROUTINE => HotkeyKind.RunRoutine,
                         _ => (HotkeyKind?)null,
                     };
                     if (kind is not null)
@@ -249,4 +256,4 @@ internal sealed class HotkeyService : IDisposable
     private static extern uint GetCurrentThreadId();
 }
 
-internal enum HotkeyKind { RecordToggle, Play, Abort }
+internal enum HotkeyKind { RecordToggle, Play, Abort, RunRoutine }

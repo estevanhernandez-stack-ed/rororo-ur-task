@@ -17,11 +17,20 @@ internal sealed class RecipeRowItem
         Recipe = recipe;
         DisplayName = string.IsNullOrWhiteSpace(recipe.Name) ? "(unnamed)" : recipe.Name!;
         Summary = BuildSummary(recipe);
+        // IsLoadout is Recipe.Terminal.Iteration == Done — position steps run
+        // once, then stop. Everything else (Loop/KeepAlive terminal) is a
+        // sustained routine — "RECIPE" in library-row language.
+        TypeBadge = recipe.IsLoadout ? "LOADOUT" : "RECIPE";
     }
 
     public Recipe Recipe { get; }
     public string DisplayName { get; }
     public string Summary { get; }
+
+    /// <summary>"LOADOUT" for a Done-terminal recipe (position steps run once,
+    /// then stop), else "RECIPE" (Loop/KeepAlive terminal — a sustained
+    /// routine). Drives the small mono type badge on the library row.</summary>
+    public string TypeBadge { get; }
 
     /// <summary>Defensive against a hand-edited/corrupted on-disk file with an
     /// empty Steps list — Recipe.Terminal indexes Steps[^1], which throws on
@@ -31,10 +40,15 @@ internal sealed class RecipeRowItem
     {
         if (recipe.Steps.Count == 0) return "0 steps — invalid recipe";
         var positionCount = recipe.PositionSteps.Count();
+        // Done → "RUN ONCE" mirrors StepRowItem.IterationLabel in
+        // RecipeEditorWindow.xaml.cs — the generic ToString() fallback below
+        // used to read the terminal-marker enum name ("DONE") here, which
+        // reads as "finished" rather than "runs once, no loop."
         var terminalLabel = recipe.Terminal.Iteration switch
         {
             StepIteration.Loop => "LOOP",
             StepIteration.KeepAlive => "KEEP-ALIVE",
+            StepIteration.Done => "RUN ONCE",
             _ => recipe.Terminal.Iteration.ToString().ToUpperInvariant(),
         };
         return $"{recipe.Steps.Count} steps · {positionCount} position → {terminalLabel}";

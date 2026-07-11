@@ -178,6 +178,14 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
         _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
 
+        // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
+        // RUN button uses, so the chord no-ops exactly when the button would be
+        // disabled (no routine selected, no alt checked, or a run already active).
+        _runtime.RunRoutineRequested += () => RaiseUI(() =>
+        {
+            if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
+        });
+
         // Account add/remove updates rows live. Also refresh Stack/Grid CanExecute
         // here — this (not RunnerProgress) is the actual trigger for "no alts
         // running" per spec; RelayCommand doesn't auto-requery like RelayCommand<T>.

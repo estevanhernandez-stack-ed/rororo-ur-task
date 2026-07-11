@@ -116,11 +116,34 @@
                                             </Grid.ColumnDefinitions>
 
                                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding DisplayName}"
-                                                           FontSize="13"
-                                                           FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource WhiteBrush}"
-                                                           TextTrimming="CharacterEllipsis" />
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding DisplayName}"
+                                                               FontSize="13"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource WhiteBrush}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               VerticalAlignment="Center" />
+                                                    <!-- Type badge — LOADOUT (Done terminal: position steps run
+                                                         once, then stop) vs RECIPE (Loop/KeepAlive terminal). -->
+                                                    <Border Grid.Column="1"
+                                                            Background="{DynamicResource RowBgBrush}"
+                                                            BorderBrush="{DynamicResource CyanBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="3"
+                                                            Padding="5,1"
+                                                            Margin="8,0,0,0"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding TypeBadge}"
+                                                                   FontFamily="{StaticResource MonoFont}"
+                                                                   FontSize="8"
+                                                                   Foreground="{DynamicResource CyanBrush}" />
+                                                    </Border>
+                                                </Grid>
                                                 <TextBlock Text="{Binding Summary}"
                                                            FontSize="10"
                                                            Foreground="{DynamicResource MutedTextBrush}"

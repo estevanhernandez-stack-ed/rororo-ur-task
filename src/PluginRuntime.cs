@@ -185,6 +185,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action<AssignmentProgress>? AssignmentProgressed;
 
     /// <summary>
+    /// Fires when the Ctrl+Shift+L global chord is pressed. The chord is
+    /// handled here (in <see cref="OnHotkey"/>), but "which routine + which
+    /// alts" lives on the VM (SelectedRoutine / AssignmentRow.IsCheckedForRoutine)
+    /// — the runtime knows nothing about that UI state, so it just raises this
+    /// and the VM decides whether/what to run. Fires on the hotkey thread; the
+    /// subscriber is responsible for marshaling to the UI dispatcher before
+    /// touching any ICommand or bound collection.
+    /// </summary>
+    public event Action? RunRoutineRequested;
+
+    /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
     /// in-place mutations (Rename, Delete) that go directly through MacroStore.
     /// </summary>
@@ -383,7 +394,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+A abort (Esc also aborts while playing).");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+A abort (Esc also aborts while playing).");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -527,6 +538,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
                     | (_activeRecipeRunner?.Abort() ?? false);
                 Log(aborted ? "Aborted." : "Abort ignored — nothing playing.");
+                break;
+
+            case HotkeyKind.RunRoutine:
+                // "Which routine + which alts" is VM state (SelectedRoutine,
+                // AssignmentRow.IsCheckedForRoutine) — the runtime doesn't own
+                // it, so just bridge the chord out and let the VM's
+                // RunRoutineCommand (same CanExecute the RUN button honors)
+                // decide whether to fire.
+                RunRoutineRequested?.Invoke();
                 break;
         }
     }

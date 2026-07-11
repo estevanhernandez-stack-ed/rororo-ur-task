@@ -675,11 +675,11 @@
                                         <Button Grid.Column="1"
                                                 Style="{StaticResource SecondaryButton}"
                                                 Command="{Binding RunRoutineCommand}"
-                                                ToolTip="Run the selected routine on the checked alts below"
+                                                ToolTip="Run the selected routine on the checked alts below (Ctrl+Shift+L)"
                                                 Padding="14,6">
                                             <StackPanel>
                                                 <TextBlock Text="RUN" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                                                <TextBlock Text="▸ routine" FontSize="8" Opacity="0.7" HorizontalAlignment="Center" />
+                                                <TextBlock Text="Ctrl+Shift+L" FontSize="9" Opacity="0.7" Margin="0,2,0,0" HorizontalAlignment="Center" />
                                             </StackPanel>
                                         </Button>
                                     </Grid>
