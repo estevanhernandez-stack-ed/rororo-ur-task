@@ -71,6 +71,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
+        // Assigned before the _sequence.Progress subscription below captures it, so the
+        // closure sees a definitely-assigned field (the event can't fire until playback).
+        _hotkeys = new HotkeyService();
 
         // Action bridge: accept RunMacro requests from sibling plugins (Ur-OCR).
         // Gated by the user preference; default on. The macro source is the same
@@ -110,7 +113,6 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         Recipes = new RecipeStore();
-        _hotkeys = new HotkeyService();
         _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
 
