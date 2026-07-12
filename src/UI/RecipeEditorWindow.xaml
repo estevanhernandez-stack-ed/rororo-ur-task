@@ -10,7 +10,7 @@
         FontFamily="{StaticResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen">
 
     <Border Background="{DynamicResource BgBrush}"

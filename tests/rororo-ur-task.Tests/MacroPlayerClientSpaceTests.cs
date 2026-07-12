@@ -25,11 +25,40 @@ public class MacroPlayerClientSpaceTests
         // Counts HwndForPid calls — keyboard-only client macros must never touch this
         // (no coordinates means no reason to resolve the target window at all).
         public int HwndForPidCalls;
+
+        // Maximize/RestoreDown bookkeeping, mirroring EnsureClientSize's real
+        // maximize-first flow. IsMaximizedFlag only flips which size ClientSize
+        // reports — it never mutates Client/Outer. RestoreDown just clears the
+        // flag and "leaves size as last-set" (whatever Client/ClientAfterResize
+        // already held before Maximize was called), same as Windows restoring a
+        // maximized window back to its pre-maximize rect.
+        public bool IsMaximizedFlag;
+        public int MaximizeCalls;
+        public int RestoreDownCalls;
+        // Configurable "maximized client size" a test can pin exactly. Left null
+        // to fall back to the fake's work area minus the (Outer - Client) chrome
+        // delta — mirrors ShowWindow(SW_MAXIMIZE) blowing past the max-track
+        // ceiling to fill the monitor's work area.
+        public (int W, int H)? MaximizedClient;
+
         private bool _resized;
 
         public IntPtr HwndForPid(int pid) { HwndForPidCalls++; return Hwnd; }
         public (int X, int Y)? ClientOrigin(IntPtr hwnd) => Origin;
-        public (int W, int H)? ClientSize(IntPtr hwnd) => _resized ? (ClientAfterResize ?? Client) : Client;
+
+        public (int W, int H)? ClientSize(IntPtr hwnd)
+        {
+            if (IsMaximizedFlag)
+            {
+                if (MaximizedClient is { } mc) return mc;
+                var work = WorkAreaFor(hwnd);
+                if (Outer is { } o && Client is { } c)
+                    return (work.W - (o.W - c.W), work.H - (o.H - c.H));
+                return (work.W, work.H);
+            }
+            return _resized ? (ClientAfterResize ?? Client) : Client;
+        }
+
         public (int X, int Y, int W, int H)? OuterRect(IntPtr hwnd) => Outer;
         public bool SetOuterRect(IntPtr hwnd, int x, int y, int w, int h)
         {
@@ -40,9 +69,9 @@ public class MacroPlayerClientSpaceTests
         public bool Minimize(IntPtr hwnd) => true;
         public bool Restore(IntPtr hwnd) => true;
         public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => (0, 0, 2560, 1440);
-        public void Maximize(IntPtr hwnd) { }
-        public void RestoreDown(IntPtr hwnd) { }
-        public bool IsMaximized(IntPtr hwnd) => false;
+        public void Maximize(IntPtr hwnd) { MaximizeCalls++; IsMaximizedFlag = true; }
+        public void RestoreDown(IntPtr hwnd) { RestoreDownCalls++; IsMaximizedFlag = false; }
+        public bool IsMaximized(IntPtr hwnd) => IsMaximizedFlag;
     }
 
     // Single mouse event used to trip the "macro has mouse events" gate in tests that
@@ -83,8 +112,21 @@ public class MacroPlayerClientSpaceTests
         Assert.Empty(metrics.SetCalls);
     }
 
-    /// <summary>Same technique as above — proves the resize call fires, then aborts
-    /// before real input via ClientOrigin() = null instead of completing the play.</summary>
+    /// <summary>
+    /// Resize path under the maximize-first flow: the fake pins an explicit
+    /// maximized client size (2560x1440 — a full monitor) that overshoots the
+    /// recorded 816x638 normal-window size, so EnsureClientSize restores back
+    /// down and fits the window to the exact recorded client size via the outer
+    /// delta. The new flow always anchors the fitted window at the work area's
+    /// top-left (0,0 in this fake) rather than the window's original position —
+    /// that's the documented tradeoff of maximize-first (it always re-anchors
+    /// top-left), so the expected SetOuterRect call reflects (0,0), not the
+    /// original (10,20). The resize sticks (ClientAfterResize matches recorded),
+    /// so playback proceeds past preflight into the event loop and only then
+    /// aborts via ClientOrigin() = null — same technique as the sibling tests,
+    /// proving the maximize/restore/resize path actually ran and injection was
+    /// reached, without synthesizing real input.
+    /// </summary>
     [Fact]
     public async Task ClientMacro_SizeMismatch_ResizesByClientDelta_AbortsBeforeInject()
     {
@@ -92,17 +134,35 @@ public class MacroPlayerClientSpaceTests
         {
             Client = (700, 500),
             Outer = (10, 20, 714, 542),          // chrome = 14 x 42
-            ClientAfterResize = (816, 638),      // resize verified
+            MaximizedClient = (2560, 1440),      // explicit override — full monitor
+            ClientAfterResize = (816, 638),      // resize verified — sticks
             Origin = null,                       // abort at inject time, not send time
         };
         var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
         var result = await player.PlayAsync(ClientMacro(816, 638, events: new[] { OneMouseMove }), targetUserId: 42);
         Assert.Equal(PlaybackOutcome.Aborted, result.Outcome);
         Assert.Contains("vanished", result.Reason);
+        Assert.Equal(1, metrics.MaximizeCalls);
+        Assert.Equal(1, metrics.RestoreDownCalls);
         var call = Assert.Single(metrics.SetCalls);
-        Assert.Equal((10, 20, 830, 680), call);  // outer grows by client delta, position kept
+        // Position is the work area's top-left (0,0), not the window's original
+        // position (10,20) — maximize-first always re-anchors there. Size still
+        // grows by the client delta: (816-700, 638-500) = (116, 138) added to the
+        // original outer (714, 542).
+        Assert.Equal((0, 0, 830, 680), call);
     }
 
+    /// <summary>
+    /// Resize-doesn't-stick path under the maximize-first flow: MaximizedClient is
+    /// left unset here, exercising the fake's *default* maximized-size
+    /// computation (work area minus chrome — 2546x1398), which still overshoots
+    /// the recorded 816x638 enough to reach the restore-and-fit branch. Restore +
+    /// fit-to-size runs, but the window's own minimum fights back and the
+    /// post-resize client size (750x520) never reaches the recorded 816x638 —
+    /// EnsureClientSize refuses instead of proceeding. Confirms no input was ever
+    /// injected by asserting Started never fired (Started only fires once the
+    /// resize preflight has succeeded).
+    /// </summary>
     [Fact]
     public async Task ClientMacro_ResizeDoesNotStick_Refuses()
     {
@@ -113,11 +173,16 @@ public class MacroPlayerClientSpaceTests
             ClientAfterResize = (750, 520),      // window's own minimum fought back
         };
         var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
+        bool started = false;
+        player.Started += (_, _) => started = true;
         // Refusal fires during preflight, before the event loop — one mouse event at
         // any timestamp is safe here, it never gets a chance to fire.
         var result = await player.PlayAsync(ClientMacro(816, 638, events: new[] { OneMouseMove }), targetUserId: 42);
         Assert.Equal(PlaybackOutcome.Refused, result.Outcome);
         Assert.Contains("recorded client size", result.Reason);
+        Assert.Equal(1, metrics.MaximizeCalls);
+        Assert.Equal(1, metrics.RestoreDownCalls);
+        Assert.False(started);
     }
 
     [Fact]

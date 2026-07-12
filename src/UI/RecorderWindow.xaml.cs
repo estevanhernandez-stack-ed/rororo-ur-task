@@ -68,9 +68,9 @@ public partial class RecorderWindow : Window
         else
         {
             MinWidth = 720;
-            MinHeight = 460;
+            MinHeight = 600;
             Width = 860;
-            Height = 560;
+            Height = 600;
             SizeToContent = SizeToContent.Manual;
         }
     }

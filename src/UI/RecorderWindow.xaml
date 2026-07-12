@@ -3,15 +3,15 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RoRoRo Ur Task"
         Icon="pack://application:,,,/icon.png"
-        Width="860" Height="560"
-        MinWidth="720" MinHeight="460"
+        Width="860" Height="600"
+        MinWidth="720" MinHeight="600"
         Background="{DynamicResource BgBrush}"
         Foreground="{DynamicResource WhiteBrush}"
         FontFamily="{StaticResource BodyFont}"
         Topmost="{Binding IsTopmost}"
         WindowStyle="None"
         AllowsTransparency="True"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen">
 
     <Window.InputBindings>
@@ -639,7 +639,11 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" /> <!-- recipes & loadouts card -->
                             <RowDefinition Height="10" />   <!-- gap -->
-                            <RowDefinition Height="*" />    <!-- assignments + activity card -->
+                            <!-- MinHeight keeps the assignments/activity card from being
+                                 squeezed to nothing when the window is shrunk — the
+                                 accounts area is the "active user" surface and must
+                                 always have room to render. -->
+                            <RowDefinition Height="*" MinHeight="230" /> <!-- assignments + activity card -->
                         </Grid.RowDefinitions>
 
                         <!-- Recipes & loadouts card — pick a saved routine, check which alts it
@@ -745,10 +749,18 @@
                                 CornerRadius="6">
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /> <!-- assignments header -->
-                                    <RowDefinition Height="*" />    <!-- assignment rows -->
-                                    <RowDefinition Height="Auto" /> <!-- activity header -->
-                                    <RowDefinition Height="150" />  <!-- activity log -->
+                                    <RowDefinition Height="Auto" />               <!-- assignments header -->
+                                    <!-- The accounts/alt rows get the flexible space and a
+                                         floor so they never collapse to unusable at small
+                                         window sizes — the ACTIVITY log below is capped
+                                         instead of fixed, so it yields space back first. -->
+                                    <RowDefinition Height="*" MinHeight="100" />  <!-- assignment rows -->
+                                    <RowDefinition Height="Auto" />               <!-- activity header -->
+                                    <!-- Auto + Min/Max instead of a hard-fixed 150: shrinks
+                                         down to MinHeight before it can crowd out the
+                                         assignment rows above, still caps growth at
+                                         MaxHeight when there's plenty of room. -->
+                                    <RowDefinition Height="Auto" MinHeight="40" MaxHeight="150" /> <!-- activity log -->
                                 </Grid.RowDefinitions>
 
                                 <!-- Assignments header -->
