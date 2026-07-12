@@ -205,7 +205,16 @@ internal sealed class MacroPlayer : IMacroPlayer
         var outer = _metrics.OuterRect(hwnd);
         if (outer is null) return PlaybackResult.Refused("Could not read target window rect.");
         var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), current.Value, (rw, rh));
-        _metrics.SetOuterRect(hwnd, outer.Value.X, outer.Value.Y, tw, th);
+
+        // Resizing alone can push the enlarged window below the taskbar if it was
+        // sitting low on screen — clamp position so the whole window (and every
+        // client coordinate the macro clicks) stays inside the work area.
+        var work = _metrics.WorkAreaFor(hwnd);
+        var (cx, cy, fits) = WindowSpaceMath.ClampToWorkArea((outer.Value.X, outer.Value.Y, tw, th), work);
+        if (!fits)
+            return PlaybackResult.Refused(
+                $"Recorded window size {rw}x{rh} is larger than the screen work area — can't fit it above the taskbar. Re-record smaller or use a bigger monitor.");
+        _metrics.SetOuterRect(hwnd, cx, cy, tw, th);
 
         var after = _metrics.ClientSize(hwnd);
         if (after != (rw, rh))

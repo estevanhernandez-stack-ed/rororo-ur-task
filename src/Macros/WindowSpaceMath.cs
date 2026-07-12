@@ -24,4 +24,24 @@ public static class WindowSpaceMath
         (int W, int H) currentOuter, (int W, int H) currentClient, (int W, int H) targetClient)
         => (currentOuter.W - currentClient.W + targetClient.W,
             currentOuter.H - currentClient.H + targetClient.H);
+
+    /// <summary>
+    /// Clamp a target outer rect's POSITION so the whole window fits inside the
+    /// monitor work area (screen minus taskbar). Returns the adjusted top-left
+    /// and whether it fits at all — false when the window is larger than the
+    /// work area in either dimension, since no position keeps it fully
+    /// on-screen; the caller should refuse rather than let clicks land
+    /// off-screen.
+    /// </summary>
+    public static (int X, int Y, bool Fits) ClampToWorkArea(
+        (int X, int Y, int W, int H) rect, (int X, int Y, int W, int H) work)
+    {
+        if (rect.W > work.W || rect.H > work.H)
+            return (rect.X, rect.Y, false);
+        int maxX = work.X + work.W - rect.W;
+        int maxY = work.Y + work.H - rect.H;
+        int x = Math.Min(Math.Max(rect.X, work.X), maxX);
+        int y = Math.Min(Math.Max(rect.Y, work.Y), maxY);
+        return (x, y, true);
+    }
 }
