@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.PluginHost;
 
@@ -28,6 +29,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
         Assignments = new ObservableCollection<AssignmentRow>();
+        SavedRoutines = new ObservableCollection<Recipe>();
+        Toasts = new ObservableCollection<ToastItem>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
@@ -53,6 +56,49 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
 
         ResetAssignmentsCommand = new RelayCommand(() => _runtime.ResetAssignments());
+
+        // Routine (recipe/loadout) run surface — targets exactly the alts checked
+        // via AssignmentRow.IsCheckedForRoutine, independent of macro assignment.
+        // CanExecute already gates on a selected routine + ≥1 checked alt, but the
+        // execute body re-checks (RecipesWindow.OnRunClicked does the same for its
+        // own picker) — RunRecipe itself also refuses an empty list, but checking
+        // here avoids even attempting the call if Execute is ever invoked directly.
+        RunRoutineCommand = new RelayCommand(
+            () =>
+            {
+                if (SelectedRoutine is not { } routine) return;
+                var targets = Assignments.Where(r => r.IsCheckedForRoutine).Select(r => r.Alt).ToList();
+                if (targets.Count == 0) return;
+                _runtime.RunRecipe(routine, targets);
+            },
+            () => SelectedRoutine is not null && Assignments.Any(r => r.IsCheckedForRoutine) && !IsRunnerActive);
+
+        // Single RUN/STOP toggle for the routine strip button — mirrors
+        // TogglePlayStopCommand. Stopping always routes through TriggerAbort
+        // (the same Esc/Ctrl+Shift+A abort surface) rather than calling
+        // _activeRecipeRunner.Abort() directly, because a routine can be a
+        // looping recipe (_runner active) OR a loadout mid-position
+        // (_sequence active) — TriggerAbort's Abort case already covers both.
+        ToggleRoutineRunCommand = new RelayCommand(
+            () =>
+            {
+                if (IsRoutineRunning)
+                {
+                    _runtime.TriggerAbort();
+                    return;
+                }
+                if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
+            },
+            () => IsRoutineRunning || (SelectedRoutine is not null && Assignments.Any(r => r.IsCheckedForRoutine)));
+
+        SelectAllRoutineAltsCommand = new RelayCommand(() =>
+        {
+            foreach (var row in Assignments) row.IsCheckedForRoutine = true;
+        });
+        SelectNoneRoutineAltsCommand = new RelayCommand(() =>
+        {
+            foreach (var row in Assignments) row.IsCheckedForRoutine = false;
+        });
 
         StackWindowsCommand = new RelayCommand(() => _runtime.ArrangeStack(), CanArrange);
         GridWindowsCommand = new RelayCommand(() => _runtime.ArrangeGrid(), CanArrange);
@@ -112,6 +158,23 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsConnected));
         };
         _runtime.StatusLogged += LogStatus;
+        // RecipeRunner's positioning/loop-setup failures (missing macro, all
+        // alts failed to position) never reach AssignmentProgressed or
+        // SequenceProgressed — RunRecipe only surfaces them via Log()/
+        // StatusLogged (see PluginRuntime.RunRecipe's `runner.Progress +=`).
+        // Recognize those two failure phases by the "(Phase)." suffix that
+        // handler renders and toast them too, so a recipe that can't even
+        // start isn't silently buried in the activity log. Log() already
+        // dispatches to the UI thread before raising StatusLogged, so no
+        // RaiseUI wrap needed here (mirrors LogStatus above).
+        _runtime.StatusLogged += line =>
+        {
+            if (line.Contains($"({nameof(RecipeRunPhase.MacroMissing)}).", StringComparison.Ordinal)
+                || line.Contains($"({nameof(RecipeRunPhase.AllAltsFailed)}).", StringComparison.Ordinal))
+            {
+                ShowError(line);
+            }
+        };
         _runtime.MacrosChanged += () =>
         {
             _allMacros = _runtime.Store.LoadAll().Macros;
@@ -129,6 +192,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.SequenceProgressed += p =>
         {
             SequenceProgress = p;
+            // Position/one-shot refusal path (e.g. the off-screen-resize refusal
+            // from MacroPlayer.EnsureClientSize during a recipe's positioning
+            // step) — SequencePlayer emits a Refused-phase progress event with
+            // Reason set alongside its per-alt AltOutcome. This event can fire
+            // from a background thread (SequencePlayer.PlayAsync runs off the UI
+            // thread), so ShowError is explicitly dispatched via RaiseUI.
+            if (p.Phase == SequencePhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+            {
+                var reason = p.Reason;
+                RaiseUI(() => ShowError(reason));
+            }
             if (p.Phase == SequencePhase.Focusing && p.Index == 0 && p.Total > 1)
             {
                 _wasCompactBeforeSequence = IsCompact;
@@ -151,7 +225,37 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             foreach (var r in Assignments) r.AssignedMacro = null;
             RecomputePairings();
         });
-        _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
+        _runtime.AssignmentProgressed += p => RaiseUI(() =>
+        {
+            RunnerProgress = p;
+            // Round-robin loop / recipe-loop refusal path — same off-screen-resize
+            // (and similar preflight) refusals surface here for the terminal
+            // Loop/KeepAlive step. Already inside RaiseUI, so ShowError runs on
+            // the UI thread.
+            if (p.Phase == AssignmentPhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+                ShowError(p.Reason);
+        });
+
+        // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
+        // RUN button uses, so the chord no-ops exactly when the button would be
+        // disabled (no routine selected, no alt checked, or a run already active).
+        // The STOP half of the chord never reaches here — PluginRuntime.OnHotkey
+        // intercepts it and aborts directly, so this handler only ever starts.
+        _runtime.RunRoutineRequested += () => RaiseUI(() =>
+        {
+            if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
+        });
+
+        // Mirrors PluginRuntime.IsRecipeRunning into IsRoutineRunning so the
+        // routine strip's RUN/STOP toggle (button + Ctrl+Shift+L label) reflects
+        // both looping recipes and loadouts — RecipeRunner.RunAsync is "running"
+        // for both, a loadout just returns after its position steps instead of
+        // looping.
+        _runtime.RecipeRunningChanged += () => RaiseUI(() =>
+        {
+            IsRoutineRunning = _runtime.IsRecipeRunning;
+            RaiseRoutineCommandStates();
+        });
 
         // Account add/remove updates rows live. Also refresh Stack/Grid CanExecute
         // here — this (not RunnerProgress) is the actual trigger for "no alts
@@ -175,6 +279,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         // Seed current alts on construction
         foreach (var alt in _runtime.Accounts.Snapshot()) AddAssignmentRow(alt);
+
+        // Seed the routine picker so it's populated even before the window's
+        // first Activated fires (RefreshRoutines is re-called there too, to
+        // pick up recipes saved/edited/deleted elsewhere while this window is open).
+        RefreshRoutines();
     }
 
     // ---------- Collections ----------
@@ -182,6 +291,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ObservableCollection<Macro> Macros { get; }
     public ObservableCollection<string> StatusLines { get; }
     public ObservableCollection<AssignmentRow> Assignments { get; }
+    public ObservableCollection<Recipe> SavedRoutines { get; }
+    public ObservableCollection<ToastItem> Toasts { get; }
 
     // ---------- Commands ----------
 
@@ -191,6 +302,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand MarkMacroActiveCommand { get; }
     public ICommand ToggleAltAssignmentCommand { get; }
     public ICommand ResetAssignmentsCommand { get; }
+    public ICommand RunRoutineCommand { get; }
+    public ICommand ToggleRoutineRunCommand { get; }
+    public ICommand SelectAllRoutineAltsCommand { get; }
+    public ICommand SelectNoneRoutineAltsCommand { get; }
     public ICommand PlayAssignmentsCommand { get; }
     public ICommand StopAssignmentsCommand { get; }
     public ICommand TogglePlayStopCommand { get; }
@@ -357,6 +472,73 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public bool HasActiveAssignment => _activeAssignmentMacro is not null;
     public string ActiveAssignmentName => _activeAssignmentMacro?.Name ?? "(none)";
 
+    // ---------- Routine (recipe/loadout) run surface ----------
+
+    private Recipe? _selectedRoutine;
+    /// <summary>The saved recipe/loadout picked in the ASSIGNMENTS pane's routine
+    /// strip. RUN targets whichever alts have <see cref="AssignmentRow.IsCheckedForRoutine"/>
+    /// checked — independent of the macro-assignment pairing above.</summary>
+    public Recipe? SelectedRoutine
+    {
+        get => _selectedRoutine;
+        set
+        {
+            if (Equals(_selectedRoutine, value)) return;
+            _selectedRoutine = value;
+            OnPropertyChanged();
+            RaiseRoutineCommandStates();
+        }
+    }
+
+    private bool _isRoutineRunning;
+    /// <summary>True while a routine (a looping recipe OR a loadout) is active
+    /// via <see cref="PluginRuntime.RunRecipe"/> — mirrors
+    /// <see cref="PluginRuntime.IsRecipeRunning"/>, kept in sync through
+    /// RecipeRunningChanged. Drives the routine strip's RUN/STOP toggle, same
+    /// shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
+    /// A loadout mid-flight (position steps, no loop) still needs a way to stop,
+    /// not just a looping recipe — that's why this isn't gated on IsRunnerActive.</summary>
+    public bool IsRoutineRunning
+    {
+        get => _isRoutineRunning;
+        private set
+        {
+            if (_isRoutineRunning == value) return;
+            _isRoutineRunning = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>"STOP" while a routine (recipe or loadout) is running, else "RUN". Drives the routine strip's toggle button label.</summary>
+    public string RoutineRunButtonLabel => IsRoutineRunning ? "STOP" : "RUN";
+
+    /// <summary>Re-query CanExecute on the routine commands and re-notify the
+    /// button label. Plain RelayCommand doesn't auto-requery (see
+    /// OnAssignmentRowPropertyChanged for the same pattern) — this is the one
+    /// place both routine commands' gating conditions (SelectedRoutine,
+    /// checked alts, IsRoutineRunning) get re-evaluated from.</summary>
+    private void RaiseRoutineCommandStates()
+    {
+        (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ToggleRoutineRunCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(RoutineRunButtonLabel));
+    }
+
+    /// <summary>Re-read every saved recipe/loadout from disk. Called on window
+    /// Activated so a routine saved/edited/deleted elsewhere (Recipes library,
+    /// recipe editor) shows up here without a restart. Preserves the current
+    /// selection by id across the reload when it still exists.</summary>
+    public void RefreshRoutines()
+    {
+        var previousId = _selectedRoutine?.Id;
+        var recipes = _runtime.Recipes.LoadAll().Recipes
+            .OrderBy(r => r.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        SavedRoutines.Clear();
+        foreach (var recipe in recipes) SavedRoutines.Add(recipe);
+        SelectedRoutine = previousId is null ? null : SavedRoutines.FirstOrDefault(r => r.Id == previousId);
+    }
+
     // ---------- Assignment: paired-alt visibility (1:1 multi-pair display) ----------
 
     // Map of MacroId → paired alt DisplayName. Re-issued as a new instance whenever
@@ -435,6 +617,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(PlayStopButtonLabel));
         }
     }
@@ -557,6 +740,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             : $"Exported {macros.Count} macros → {Path.GetFileName(path)}");
     }
 
+    /// <summary>Render a single macro as a standalone AutoHotkey (v1 or v2) script and
+    /// write it to <paramref name="path"/>. Best-effort port — see
+    /// <see cref="AutoHotkeyExporter"/> for the caveats baked into the file header.</summary>
+    public void ExportMacroAsAutoHotkey(Macro macro, AhkVersion version, string path)
+    {
+        if (macro is null) return;
+        var script = AutoHotkeyExporter.Export(macro, version);
+        File.WriteAllText(path, script); // .NET default is UTF-8 without a BOM, matching ExportMacros above.
+        LogStatus($"Exported '{macro.Name ?? "(unnamed)"}' → {Path.GetFileName(path)} (AutoHotkey {(version == AhkVersion.V1 ? "v1" : "v2")})");
+    }
+
     /// <summary>
     /// Import macros from bundle (or bare single-macro) files. Imports are
     /// additive: every imported macro gets a fresh id and a deduped name, so an
@@ -603,19 +797,71 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         while (StatusLines.Count > StatusLogLimit) StatusLines.RemoveAt(StatusLines.Count - 1);
     }
 
+    // ---------- Toasts: transient, themed surfacing for playback errors/refusals ----------
+
+    private static readonly TimeSpan ToastDedupWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(5);
+
+    private string? _lastToastMessage;
+    private DateTimeOffset _lastToastAt;
+
+    /// <summary>
+    /// Surface a playback refusal/error as a transient, auto-dismissing toast —
+    /// callers are the Refused-phase handlers above plus the recipe-failure
+    /// StatusLogged filter. Must run on the UI thread (callers already dispatch
+    /// via RaiseUI where the source event isn't already on it) since it mutates
+    /// the bound <see cref="Toasts"/> collection and starts a DispatcherTimer.
+    /// Dedup: see <see cref="ToastDedup.ShouldSuppress"/> — a loop that refuses
+    /// on the same reason every cycle must not spam identical toasts.
+    /// </summary>
+    public void ShowError(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (ToastDedup.ShouldSuppress(_lastToastMessage, _lastToastAt, message, now, ToastDedupWindow))
+            return;
+        _lastToastMessage = message;
+        _lastToastAt = now;
+
+        var toast = new ToastItem(message, ToastSeverity.Error, now);
+        Toasts.Add(toast);
+
+        var timer = new DispatcherTimer { Interval = ToastLifetime };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            Toasts.Remove(toast);
+        };
+        timer.Start();
+    }
+
     // ---------- Assignment helpers ----------
 
     private void AddAssignmentRow(AccountRegistry.AccountInfo alt)
     {
         if (Assignments.Any(r => r.Alt.Pid == alt.Pid)) return;
         var existing = _runtime.GetAssignment(alt.Pid);
-        Assignments.Add(new AssignmentRow(alt) { AssignedMacro = existing });
+        var row = new AssignmentRow(alt) { AssignedMacro = existing };
+        row.PropertyChanged += OnAssignmentRowPropertyChanged;
+        Assignments.Add(row);
     }
 
     private void RemoveAssignmentRow(int pid)
     {
         var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
-        if (row is not null) Assignments.Remove(row);
+        if (row is null) return;
+        row.PropertyChanged -= OnAssignmentRowPropertyChanged;
+        Assignments.Remove(row);
+    }
+
+    /// <summary>Routine-checkbox toggles change RunRoutineCommand's and
+    /// ToggleRoutineRunCommand's CanExecute (both require ≥1 checked alt);
+    /// plain RelayCommand doesn't auto-requery.</summary>
+    private void OnAssignmentRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AssignmentRow.IsCheckedForRoutine))
+            RaiseRoutineCommandStates();
     }
 
     private void RefreshAssignmentRow(int pid, Macro? macro)

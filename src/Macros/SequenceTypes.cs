@@ -7,6 +7,7 @@ public enum SequencePhase
     Focusing,    // SetForegroundWindow called, waiting for inter-alt delay
     Playing,     // MacroPlayer.PlayAsync running on this alt
     Settling,    // delay between alts (post-play)
+    Refused,     // this alt's macro was refused/aborted (see SequenceProgress.Reason) — sequence continues to the next alt
     Aborted,     // sequence was aborted by user
     Done,        // all alts processed
 }
@@ -18,7 +19,8 @@ public sealed record SequenceProgress(
     SequencePhase Phase,
     int Completed,
     int Failed,
-    int Skipped);
+    int Skipped,
+    string? Reason = null);                      // set on Phase == Refused; carries PlaybackResult.Reason / focus-failure text
 
 public sealed record AltOutcome(
     AccountRegistry.AccountInfo Alt,

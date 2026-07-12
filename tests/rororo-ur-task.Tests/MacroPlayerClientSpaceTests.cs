@@ -1,10 +1,31 @@
+using System.IO;
+using Labs626.UrTask.Diagnostics;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Tests;
 
-public class MacroPlayerClientSpaceTests
+// EnsureClientSize now writes DiagLog lines — join the shared "DiagLog" collection
+// (see DiagLogTests) and redirect Directory to a scratch temp dir so this suite
+// never touches the real %LOCALAPPDATA% log and never races other DiagLog-touching
+// test classes.
+[Collection("DiagLog")]
+public class MacroPlayerClientSpaceTests : IDisposable
 {
+    private readonly string _dir;
+
+    public MacroPlayerClientSpaceTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "urtask-macroplayer-" + Guid.NewGuid().ToString("N"));
+        DiagLog.Directory = _dir;
+        DiagLog.ResetForTests();
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch { }
+    }
+
     private sealed class FakeForeground : IForegroundWatcher
     {
         public AccountRegistry.AccountInfo? Current { get; set; }
@@ -25,21 +46,71 @@ public class MacroPlayerClientSpaceTests
         // Counts HwndForPid calls — keyboard-only client macros must never touch this
         // (no coordinates means no reason to resolve the target window at all).
         public int HwndForPidCalls;
+
+        // Maximize/RestoreDown bookkeeping, mirroring EnsureClientSize's real
+        // try-fit-then-maximize flow. IsMaximizedFlag only flips which size
+        // ClientSize reports — it never mutates Client/Outer. RestoreDown just
+        // clears the flag and "leaves size as last-set" (whatever
+        // Client/ClientAfterResize already held before Maximize was called), same
+        // as Windows restoring a maximized window back to its pre-maximize rect.
+        public bool IsMaximizedFlag;
+        public int MaximizeCalls;
+        public int RestoreDownCalls;
+        // Configurable "maximized client size" a test can pin exactly. Left null
+        // to fall back to the fake's work area minus the (Outer - Client) chrome
+        // delta — mirrors ShowWindow(SW_MAXIMIZE) blowing past the max-track
+        // ceiling to fill the monitor's work area.
+        public (int W, int H)? MaximizedClient;
+        // Simulates the real OS's max-track ceiling on SetWindowPos: SetOuterRect
+        // silently grants at most this outer size no matter what was requested.
+        // Defaults to a monitor-sized bound (matching the default WorkAreaFor) so
+        // a windowed-fit request for a full-screen recording's client size gets
+        // capped short — the exact mechanism behind Este's bug.
+        public (int W, int H) MaxOuter = (2560, 1440);
+        // Monitor work area returned by WorkAreaFor. Defaults to a plain 2560x1440
+        // monitor; the ultrawide regression test overrides it to 3440x1392 (Este's
+        // real monitor) to reproduce the work-area-overhang bug exactly.
+        public (int X, int Y, int W, int H) WorkArea = (0, 0, 2560, 1440);
+
         private bool _resized;
 
         public IntPtr HwndForPid(int pid) { HwndForPidCalls++; return Hwnd; }
         public (int X, int Y)? ClientOrigin(IntPtr hwnd) => Origin;
-        public (int W, int H)? ClientSize(IntPtr hwnd) => _resized ? (ClientAfterResize ?? Client) : Client;
+
+        public (int W, int H)? ClientSize(IntPtr hwnd)
+        {
+            if (IsMaximizedFlag)
+            {
+                if (MaximizedClient is { } mc) return mc;
+                var work = WorkAreaFor(hwnd);
+                if (Outer is { } o && Client is { } c)
+                    return (work.W - (o.W - c.W), work.H - (o.H - c.H));
+                return (work.W, work.H);
+            }
+            return _resized ? (ClientAfterResize ?? Client) : Client;
+        }
+
         public (int X, int Y, int W, int H)? OuterRect(IntPtr hwnd) => Outer;
         public bool SetOuterRect(IntPtr hwnd, int x, int y, int w, int h)
         {
             SetCalls.Add((x, y, w, h));
+            // OS max-track cap: grant at most MaxOuter, then derive the resulting
+            // client size via the (constant) chrome delta — same assumption
+            // WindowSpaceMath.OuterSizeForClient makes on the real Win32 side.
+            int grantedW = Math.Min(w, MaxOuter.W);
+            int grantedH = Math.Min(h, MaxOuter.H);
+            ClientAfterResize = Outer is { } o && Client is { } c
+                ? (grantedW - (o.W - c.W), grantedH - (o.H - c.H))
+                : (grantedW, grantedH);
             _resized = true;
             return SetResult;
         }
         public bool Minimize(IntPtr hwnd) => true;
         public bool Restore(IntPtr hwnd) => true;
-        public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => (0, 0, 2560, 1440);
+        public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => WorkArea;
+        public void Maximize(IntPtr hwnd) { MaximizeCalls++; IsMaximizedFlag = true; }
+        public void RestoreDown(IntPtr hwnd) { RestoreDownCalls++; IsMaximizedFlag = false; }
+        public bool IsMaximized(IntPtr hwnd) => IsMaximizedFlag;
     }
 
     // Single mouse event used to trip the "macro has mouse events" gate in tests that
@@ -80,41 +151,165 @@ public class MacroPlayerClientSpaceTests
         Assert.Empty(metrics.SetCalls);
     }
 
-    /// <summary>Same technique as above — proves the resize call fires, then aborts
-    /// before real input via ClientOrigin() = null instead of completing the play.</summary>
+    /// <summary>
+    /// Test A' — THE REGRESSION GUARD for Este's real ultrawide bug. Work area
+    /// 3440x1392 (his monitor), chrome 16x39, recorded client 1718x1360 — the
+    /// outer rect a windowed fit needs is 1734x1399, exactly 7px TALLER than the
+    /// work area (matches the live diag log verbatim: "windowed outer 1734x1399
+    /// exceeds work area 3440x1392"). The old algorithm treated any outer rect
+    /// that didn't fully fit the work area as unreachable and fell back to
+    /// maximize-and-leave, blowing the window up to 3440-wide and scattering every
+    /// recorded click. The new algorithm doesn't care whether the outer rect fits
+    /// the work area — only whether the OS actually grants the requested CLIENT
+    /// size (clicks are client-relative) — so with MaxOuter big enough that
+    /// SetOuterRect grants the full request, it succeeds as a normal window, a
+    /// few px taller than the work area, and never maximizes.
+    /// </summary>
     [Fact]
-    public async Task ClientMacro_SizeMismatch_ResizesByClientDelta_AbortsBeforeInject()
+    public async Task ClientMacro_UltrawideWorkAreaOverhang_WindowedFitSucceeds_NotMaximized()
     {
         var metrics = new FakeMetrics
         {
             Client = (700, 500),
-            Outer = (10, 20, 714, 542),          // chrome = 14 x 42
-            ClientAfterResize = (816, 638),      // resize verified
-            Origin = null,                       // abort at inject time, not send time
+            Outer = (10, 20, 716, 539),         // chrome = 16 x 39
+            WorkArea = (0, 0, 3440, 1392),      // Este's real ultrawide work area
+            MaxOuter = (3440, 1450),            // OS grants the requested 1734x1399 outer in full
+            Origin = null,                      // abort at inject time, not send time
+        };
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
+        var result = await player.PlayAsync(ClientMacro(1718, 1360, events: new[] { OneMouseMove }), targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Aborted, result.Outcome);
+        Assert.Contains("vanished", result.Reason); // proves EnsureClientSize returned null (proceed)
+        var call = Assert.Single(metrics.SetCalls);
+        Assert.Equal((1734, 1399), (call.w, call.h));   // outer requested = client + chrome, uncapped by work-area fit
+        Assert.Equal((10, 0), (call.x, call.y));        // X kept from current position, Y pinned to work-area top
+        Assert.Equal((1718, 1360), metrics.ClientSize(metrics.Hwnd)!.Value);
+        Assert.Equal(0, metrics.MaximizeCalls);
+        Assert.False(metrics.IsMaximizedFlag);
+    }
+
+    /// <summary>
+    /// Test B — the common case: a normal windowed recording whose recorded
+    /// client size is comfortably reachable via a windowed fit. EnsureClientSize
+    /// returns as soon as the fit lands within Slop — no maximize flash. The
+    /// window keeps its current X (10) rather than snapping to the work area's
+    /// left edge — only Y is pinned to the work-area top.
+    /// </summary>
+    [Fact]
+    public async Task ClientMacro_NormalRecording_WindowedFitSucceeds_NoMaximize()
+    {
+        var metrics = new FakeMetrics
+        {
+            Client = (700, 500),
+            Outer = (10, 20, 714, 542),      // chrome = 14 x 42
+            Origin = null,                   // abort at inject time, not send time
         };
         var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
         var result = await player.PlayAsync(ClientMacro(816, 638, events: new[] { OneMouseMove }), targetUserId: 42);
+
         Assert.Equal(PlaybackOutcome.Aborted, result.Outcome);
         Assert.Contains("vanished", result.Reason);
+        Assert.Equal(0, metrics.MaximizeCalls);
+        Assert.Equal(0, metrics.RestoreDownCalls);
         var call = Assert.Single(metrics.SetCalls);
-        Assert.Equal((10, 20, 830, 680), call);  // outer grows by client delta, position kept
+        // X kept at the window's current position (10), Y pinned to the work
+        // area's top (0) — max vertical room to grow into. Outer = client + chrome.
+        Assert.Equal((10, 0, 830, 680), call);
+        Assert.Equal((816, 638), metrics.ClientSize(metrics.Hwnd)!.Value);
+        Assert.False(metrics.IsMaximizedFlag);
     }
 
+    /// <summary>
+    /// Test E — recorded on a bigger monitor than this one: even a free windowed
+    /// resize can't reach the recorded client size — the OS (MaxOuter, standing in
+    /// for the real max-track ceiling) caps the SetOuterRect request short, and
+    /// the resulting client size lands well past Slop from what was recorded.
+    /// EnsureClientSize refuses with actionable advice rather than leave the
+    /// window silently undersized (and clicks silently off-target). Never calls
+    /// Maximize — this macro has no RecordedMaximized stamp, so only the windowed
+    /// path is attempted.
+    /// </summary>
     [Fact]
-    public async Task ClientMacro_ResizeDoesNotStick_Refuses()
+    public async Task ClientMacro_RecordedLargerThanThisMonitor_WindowedFitCapped_Refuses()
+    {
+        var metrics = new FakeMetrics
+        {
+            Client = (700, 500),
+            Outer = (10, 20, 714, 542),      // chrome = 14 x 42
+            // MaxOuter left at its default (2560x1440) — well short of the outer
+            // rect (5014x3042) a 5000x3000 client would need.
+        };
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
+        bool started = false;
+        player.Started += (_, _) => started = true;
+        var result = await player.PlayAsync(ClientMacro(5000, 3000, events: new[] { OneMouseMove }), targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Refused, result.Outcome);
+        Assert.Contains("recorded on a larger screen", result.Reason);
+        Assert.Contains("re-record the macro on this monitor", result.Reason);
+        Assert.Equal(0, metrics.MaximizeCalls);   // no RecordedMaximized stamp — windowed path only
+        Assert.Single(metrics.SetCalls);          // the windowed-fit attempt WAS made — just came up short
+        Assert.False(started);
+    }
+
+    /// <summary>
+    /// Test C — a macro explicitly stamped RecordedMaximized (record-time
+    /// IsMaximized was true) skips the windowed-fit attempt entirely and goes
+    /// straight to maximize-and-leave — no point spending a SetOuterRect call
+    /// that's guaranteed to get capped for a full-screen recording. This monitor's
+    /// maximized client size matches the recorded size, so playback proceeds.
+    /// </summary>
+    [Fact]
+    public async Task ClientMacro_RecordedMaximizedFlag_MonitorMatches_SkipsWindowedFit_LeavesMaximized()
     {
         var metrics = new FakeMetrics
         {
             Client = (700, 500),
             Outer = (10, 20, 714, 542),
-            ClientAfterResize = (750, 520),      // window's own minimum fought back
+            MaximizedClient = (2540, 1390),
+            Origin = null,
         };
+        var macro = ClientMacro(2540, 1390, events: new[] { OneMouseMove }) with { RecordedMaximized = true };
         var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
-        // Refusal fires during preflight, before the event loop — one mouse event at
-        // any timestamp is safe here, it never gets a chance to fire.
-        var result = await player.PlayAsync(ClientMacro(816, 638, events: new[] { OneMouseMove }), targetUserId: 42);
+        var result = await player.PlayAsync(macro, targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Aborted, result.Outcome);
+        Assert.Contains("vanished", result.Reason);
+        Assert.Equal(1, metrics.MaximizeCalls);
+        Assert.Empty(metrics.SetCalls);       // windowed-fit attempt skipped entirely
+        Assert.Equal(0, metrics.RestoreDownCalls);
+        Assert.True(metrics.IsMaximizedFlag);
+    }
+
+    /// <summary>
+    /// Test D — a macro stamped RecordedMaximized, but THIS monitor maximizes to a
+    /// different client size than what was recorded (different monitor/DPI since
+    /// record time). Maximizing can't reproduce the recorded size no matter what,
+    /// so EnsureClientSize refuses with the "recorded on a maximized ... re-record"
+    /// message rather than silently playing back at the wrong size.
+    /// </summary>
+    [Fact]
+    public async Task ClientMacro_RecordedMaximizedFlag_MonitorDiffers_Refuses()
+    {
+        var metrics = new FakeMetrics
+        {
+            Client = (700, 500),
+            Outer = (10, 20, 714, 542),
+            MaximizedClient = (2000, 1200), // this monitor's maximize doesn't match the recording
+        };
+        var macro = ClientMacro(2540, 1390, events: new[] { OneMouseMove }) with { RecordedMaximized = true };
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics);
+        bool started = false;
+        player.Started += (_, _) => started = true;
+        var result = await player.PlayAsync(macro, targetUserId: 42);
+
         Assert.Equal(PlaybackOutcome.Refused, result.Outcome);
-        Assert.Contains("recorded client size", result.Reason);
+        Assert.Contains("recorded on a maximized", result.Reason);
+        Assert.Contains("Re-record it on this monitor", result.Reason);
+        Assert.Equal(1, metrics.MaximizeCalls);
+        Assert.Empty(metrics.SetCalls);   // windowed-fit attempt skipped entirely — stamped RecordedMaximized
+        Assert.False(started);
     }
 
     [Fact]

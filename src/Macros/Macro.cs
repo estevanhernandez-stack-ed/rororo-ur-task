@@ -25,6 +25,12 @@ public sealed record Macro(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? RecordedClientH = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? RecordedMaximized = null,     // true when the anchor window was maximized at record-start —
+                                         // EnsureClientSize goes straight to maximize-and-leave for those;
+                                         // null = unknown (pre-existing macros) — tries a windowed fit
+                                         // (tolerating work-area overhang) and refuses with advice if
+                                         // even that can't reach the recorded client size
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     long? RecordedPlaceId = null,       // game identity at record time — soft metadata (v0.6, still schema v3
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? RecordedGameName = null,    //   so v0.5 readers still open shared bundles; nullable = "any game")

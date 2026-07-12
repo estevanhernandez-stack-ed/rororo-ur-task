@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "626labs.ur-task",
   "name": "RoRoRo Ur Task",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "contractVersion": "1.0",
   "publisher": "626 Labs LLC",
   "description": "Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record once, play on any alt — round-robin assignments, keep-alive, window-relative mouse macros, shareable macro bundles, an action bridge for sibling plugins, and theming that follows the host.",

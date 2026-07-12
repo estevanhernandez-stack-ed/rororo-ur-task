@@ -67,6 +67,7 @@ public partial class PlaybackTargetPickerWindow : Window
     {
         InitializeComponent();
         _vm = new PlaybackTargetPickerViewModel(alts, preferredUserId, multiSelect);
+        DataContext = _vm; // enables the Select all/none row's Visibility={Binding MultiSelect} in XAML
 
         _rows = new ObservableCollection<AltRowItem>(
             alts.Select(a => new AltRowItem(a)));
@@ -104,6 +105,15 @@ public partial class PlaybackTargetPickerWindow : Window
             if (!_vm.MultiSelect && _vm.CanPlay) Confirm();
         }
     }
+
+    // ── Select all / select none ────────────────────────────────────────────
+    // Row visuals refresh the same way OnAltRowClicked's Toggle() does: the VM
+    // raises PropertyChanged, which the constructor's subscription routes to
+    // SyncRowsFromVm() — no separate refresh call needed here.
+
+    private void SelectAll_Click(object sender, RoutedEventArgs e) => _vm.SelectAll();
+
+    private void SelectNone_Click(object sender, RoutedEventArgs e) => _vm.SelectNone();
 
     // ── Footer button ────────────────────────────────────────────────────────
 

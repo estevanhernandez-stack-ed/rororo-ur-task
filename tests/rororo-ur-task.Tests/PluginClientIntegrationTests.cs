@@ -62,7 +62,8 @@ public class PluginClientIntegrationTests
             new EmptyAccounts(),
             bus,
             new NoOpLauncher(),
-            new PluginUITranslator(new NullUIHost()));
+            new PluginUITranslator(new NullUIHost()),
+            new NullActivitySnapshotProvider());
 
         // Production-shape interceptor — accessor returns null, plugin id comes
         // from x-plugin-id header injected by HeaderInjectingCallInvoker.
@@ -156,6 +157,14 @@ public class PluginClientIntegrationTests
     private sealed class EmptyAccounts : IRunningAccountsProvider
     {
         public IReadOnlyList<RunningAccountSnapshot> Snapshot() => Array.Empty<RunningAccountSnapshot>();
+    }
+
+    // Host's PluginHostService grew a required IActivitySnapshotProvider (9th ctor arg)
+    // with the contract-0.4.0 game-aware work; the integration test only needs a
+    // no-op snapshot source to construct it.
+    private sealed class NullActivitySnapshotProvider : IActivitySnapshotProvider
+    {
+        public IReadOnlyList<AccountActivitySnapshot> Snapshot() => Array.Empty<AccountActivitySnapshot>();
     }
 
     private sealed class NoOpLauncher : IPluginLaunchInvoker

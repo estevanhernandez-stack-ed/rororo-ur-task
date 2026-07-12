@@ -208,4 +208,88 @@ public class SequencePlayerTests
         Assert.Equal(2, player.CalledWithTargets.Count);
         Assert.DoesNotContain(targets[1].RobloxUserId, player.CalledWithTargets);
     }
+
+    // ── Refused-phase progress events (toast wiring — RecorderViewModel.ShowError) ──
+    //
+    // SequenceProgress previously had no way to carry a per-alt refusal reason
+    // through the Progress event (only the final SequenceResult.PerAlt did),
+    // so a UI subscriber had no way to toast e.g. the off-screen-resize
+    // refusal from MacroPlayer.EnsureClientSize during a recipe's positioning
+    // step. These tests cover the three points that now emit a
+    // SequencePhase.Refused progress event with Reason set.
+
+    [Fact]
+    public async Task PlayAsync_PlayerRefuses_EmitsRefusedProgressWithReason()
+    {
+        var player = new FakePlayer();
+        player.Results.Enqueue(PlaybackResult.Refused("Recorded window size 900x700 is larger than the screen work area."));
+
+        var fg = new FakeForeground();
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+
+        var targets = new[] { Alt(1001, 47821334, "Goldnail8") };
+        long lastFocused = 0;
+        fg.Resolver = () => targets.FirstOrDefault(a => a.RobloxUserId == lastFocused);
+
+        var refusedEvents = new List<SequenceProgress>();
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Focusing && prog.CurrentAlt is not null)
+                lastFocused = prog.CurrentAlt.RobloxUserId;
+            if (prog.Phase == SequencePhase.Refused)
+                refusedEvents.Add(prog);
+        };
+
+        await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        var refused = Assert.Single(refusedEvents);
+        Assert.Equal("Recorded window size 900x700 is larger than the screen work area.", refused.Reason);
+        Assert.Equal(targets[0].Pid, refused.CurrentAlt?.Pid);
+    }
+
+    [Fact]
+    public async Task PlayAsync_FocusFunctionFails_EmitsRefusedProgressWithReason()
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        // Injectable focus always fails with a reason.
+        var sequence = new SequencePlayer(player, fg, _ => (false, "AttachThreadInput failed."));
+
+        var targets = new[] { Alt(1001, 47821334, "Goldnail8") };
+
+        var refusedEvents = new List<SequenceProgress>();
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Refused) refusedEvents.Add(prog);
+        };
+
+        await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        var refused = Assert.Single(refusedEvents);
+        Assert.Equal("AttachThreadInput failed.", refused.Reason);
+        // Focus itself failed — MacroPlayer.PlayAsync must never have been called.
+        Assert.Empty(player.CalledWithTargets);
+    }
+
+    [Fact]
+    public async Task PlayAsync_ForegroundFlipFails_EmitsRefusedProgressWithReason()
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+
+        var targets = new[] { Alt(1001, 47821334, "Goldnail8") };
+        fg.Resolver = () => null; // never reports the target as foreground
+
+        var refusedEvents = new List<SequenceProgress>();
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Refused) refusedEvents.Add(prog);
+        };
+
+        await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        var refused = Assert.Single(refusedEvents);
+        Assert.Contains("Couldn't focus", refused.Reason);
+    }
 }

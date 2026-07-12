@@ -4,26 +4,23 @@ using System.Runtime.InteropServices;
 namespace Labs626.UrTask.PluginHost;
 
 /// <summary>
-/// Thin Win32 helper that bypasses Windows' cross-process focus-stealing
-/// restriction via the AttachThreadInput pattern.
-///
-/// Windows refuses a bare SetForegroundWindow call from a process that isn't
-/// already the foreground owner. The standard workaround: temporarily attach
-/// our thread's input queue to the current foreground thread's queue so the
-/// system treats our call as if it originated from the foreground app.
+/// Forces a target window to the foreground even when the user is idle. The
+/// AttachThreadInput trick alone is NOT enough on modern Windows: with no recent
+/// user input the foreground-lock timeout makes SetForegroundWindow silently
+/// no-op. The remedy layers three moves: attach to the foreground thread's input
+/// queue, temporarily zero the system foreground-lock timeout (restored right
+/// after), and BringWindowToTop. Callers still verify the foreground actually
+/// became the target pid before synthesizing input (the safety invariant), so a
+/// focus that still fails degrades to a skipped action, never a stray keystroke.
+/// Ported from ur-afk v0.5.2 (rororo-ur-afk/src/PluginHost/Win32Focus.cs).
 /// </summary>
 internal static class Win32Focus
 {
-    /// <summary>
-    /// Focus the main window of the process identified by <paramref name="pid"/>
-    /// using the AttachThreadInput workaround. Returns immediately after the
-    /// Win32 call — callers should add a settle delay (~150 ms) before relying
-    /// on foreground state.
-    /// </summary>
-    /// <returns>
-    /// <c>true</c> if the call reached SetForegroundWindow without error;
-    /// <c>false</c> with an error description otherwise.
-    /// </returns>
+    private const uint SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000;
+    private const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
+    private const uint SPIF_SENDCHANGE = 0x02;
+    private const int SW_RESTORE = 9;
+
     public static (bool ok, string? error) AttachAndFocus(int pid)
     {
         try
@@ -31,22 +28,31 @@ internal static class Win32Focus
             var hwnd = Process.GetProcessById(pid).MainWindowHandle;
             if (hwnd == IntPtr.Zero) return (false, "MainWindowHandle is null.");
 
+            if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+
             var fgHwnd = GetForegroundWindow();
-            var fgThreadId = fgHwnd != IntPtr.Zero
-                ? GetWindowThreadProcessId(fgHwnd, out _)
-                : 0u;
+            var fgThreadId = fgHwnd != IntPtr.Zero ? GetWindowThreadProcessId(fgHwnd, out _) : 0u;
             var ourThreadId = GetCurrentThreadId();
             bool attached = false;
             if (fgThreadId != 0 && fgThreadId != ourThreadId)
-            {
                 attached = AttachThreadInput(fgThreadId, ourThreadId, true);
-            }
+
+            uint savedTimeout = 0;
+            bool loweredLock = false;
             try
             {
+                if (SystemParametersInfoGet(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, ref savedTimeout, 0))
+                {
+                    SystemParametersInfoSet(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, SPIF_SENDCHANGE);
+                    loweredLock = true;
+                }
                 SetForegroundWindow(hwnd);
+                BringWindowToTop(hwnd);
             }
             finally
             {
+                if (loweredLock)
+                    SystemParametersInfoSet(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, new IntPtr(savedTimeout), SPIF_SENDCHANGE);
                 if (attached) AttachThreadInput(fgThreadId, ourThreadId, false);
             }
             return (true, null);
@@ -55,20 +61,24 @@ internal static class Win32Focus
         catch (Exception ex) { return (false, ex.Message); }
     }
 
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
-
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
-
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
-
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfoGet(uint uiAction, uint uiParam, ref uint pvParam, uint fWinIni);
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfoSet(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 }

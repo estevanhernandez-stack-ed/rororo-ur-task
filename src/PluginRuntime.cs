@@ -23,6 +23,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public AccountRegistry Accounts { get; }
     public MacroStore Store { get; }
+    public RecipeStore Recipes { get; }
 
     private readonly ForegroundWatcher _foreground;
     private readonly MacroRecorder _recorder;
@@ -40,9 +41,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
     private (int W, int H)? _recordingClientSize;
+    private bool? _recordingMaximized;
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
+    private RecipeRunner? _activeRecipeRunner;
 
     // ---------- Assignment state ----------
     private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
@@ -69,6 +72,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _sequence = new SequencePlayer(_player, _foreground);
         _runner = new AssignmentRunner(_player, _foreground);
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
+        // Assigned before the _sequence.Progress subscription below captures it, so the
+        // closure sees a definitely-assigned field (the event can't fire until playback).
+        _hotkeys = new HotkeyService();
 
         // Action bridge: accept RunMacro requests from sibling plugins (Ur-OCR).
         // Gated by the user preference; default on. The macro source is the same
@@ -83,6 +89,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _sequence.Progress += (_, p) =>
         {
             SequenceProgressed?.Invoke(p);
+            // Mirrors the AssignmentRunner.Progress handler below: a per-alt
+            // refusal (e.g. the client-size resize refusal from
+            // MacroPlayer.EnsureClientSize during a recipe's positioning step)
+            // otherwise only reaches the toast via RecorderViewModel's
+            // SequenceProgressed handler — it never lands in the activity log.
+            // Log() explicitly so the reason survives after the toast fades.
+            if (p.Phase == SequencePhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+                Log($"Sequence playback refused for {p.CurrentAlt?.DisplayName ?? "(unknown alt)"}: {p.Reason}");
             // Track whether a sequence is active so _player.Ended doesn't clear
             // the badge prematurely between alts.
             if (p.Phase == SequencePhase.Focusing && p.Index == 0)
@@ -107,7 +121,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
-        _hotkeys = new HotkeyService();
+        Recipes = new RecipeStore();
         _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
 
@@ -182,6 +196,31 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action<AssignmentProgress>? AssignmentProgressed;
 
     /// <summary>
+    /// Fires ONLY on the start half of the Ctrl+Shift+L chord — the stop half
+    /// (a routine already running) is handled entirely inside <see cref="OnHotkey"/>
+    /// and never reaches this event. "Which routine + which alts" lives on the
+    /// VM (SelectedRoutine / AssignmentRow.IsCheckedForRoutine) — the runtime
+    /// knows nothing about that UI state, so it just raises this and the VM
+    /// decides whether/what to run. Fires on the hotkey thread; the subscriber
+    /// is responsible for marshaling to the UI dispatcher before touching any
+    /// ICommand or bound collection.
+    /// </summary>
+    public event Action? RunRoutineRequested;
+
+    /// <summary>
+    /// True while a routine (a looping recipe OR a loadout — RecipeRunner.RunAsync
+    /// is "running" for both; a loadout just returns after its position steps
+    /// instead of looping) is active via <see cref="RunRecipe"/>. The VM mirrors
+    /// this into IsRoutineRunning to drive the routine strip's RUN/STOP toggle,
+    /// same shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
+    /// </summary>
+    public bool IsRecipeRunning => _activeRecipeRunner?.IsRunning ?? false;
+
+    /// <summary>Fires whenever a recipe run starts or ends — see <see cref="IsRecipeRunning"/>.
+    /// Fires on whatever thread the transition happened on; the subscriber marshals.</summary>
+    public event Action? RecipeRunningChanged;
+
+    /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
     /// in-place mutations (Rename, Delete) that go directly through MacroStore.
     /// </summary>
@@ -245,6 +284,138 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Log(note is null ? $"Restored {restored} alt window(s) to their original positions." : $"Reset: {note}");
     }
 
+    // ---------- Recipes (Task 7: wire RecipeRunner to the real runners) ----------
+
+    /// <summary>
+    /// Compose a <see cref="RecipeRunner"/> over the live <see cref="SequencePlayer"/>
+    /// (RunOnce position steps) and <see cref="AssignmentRunner"/> (terminal Loop/
+    /// KeepAlive), then kick it off fire-and-forget. Only one recipe runs at a time —
+    /// a prior active run is aborted first. Progress is surfaced through the same
+    /// Log/StatusLogged pipe the rest of playback uses (no separate recipe status
+    /// UI — reuses the existing activity feed instead of inventing a new one).
+    /// The bare-Esc / Ctrl+Shift+A abort chord (see <see cref="OnHotkey"/>) also
+    /// aborts the active recipe run — RunAsync's own delegates are literally
+    /// _sequence.PlayAsync / _runner.RunAsync, so this is the same abort surface
+    /// callers already know, not a new one.
+    /// </summary>
+    public void RunRecipe(Recipe recipe, IReadOnlyList<AccountRegistry.AccountInfo> selectedAlts)
+    {
+        if (recipe is null) throw new ArgumentNullException(nameof(recipe));
+        if (selectedAlts is null || selectedAlts.Count == 0)
+        {
+            Log("Run recipe — no alts selected.");
+            return;
+        }
+
+        if (_activeRecipeRunner is { IsRunning: true } prior)
+        {
+            Log("Another recipe is already running — aborting it to start this one.");
+            prior.Abort();
+        }
+
+        // Recipe takes over the shared AssignmentRunner surface: the recipe's terminal
+        // step drives the SAME _runner instance the plain Ctrl+Shift+P loop drives, and
+        // with the single-flight guard a still-running plain loop would make that
+        // terminal _runner.RunAsync silently refuse. Abort it now so the recipe owns
+        // the runner by the time its terminal step reaches it.
+        // Do NOT abort _sequence here — the recipe's own positioning uses
+        // _sequence.PlayAsync moments later (inside the Task.Run below); aborting it
+        // now risks the recipe's first position step refusing on a not-yet-cleared claim.
+        if (_runner.Abort())
+            Log("recipe takes over — aborting active loop");
+
+        // Load the macro library once up front — resolveMacro is called once per
+        // position step plus once for a Loop terminal, and re-reading + re-deserializing
+        // every macro file on each call turns an N-step recipe into N+1 full library
+        // reloads. Snapshot into a dictionary instead.
+        var macros = Store.LoadAll().Macros.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+
+        var runner = new RecipeRunner(
+            runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
+            runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
+            resolveMacro: id => macros.TryGetValue(id, out var m) ? m : null);
+        runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
+
+        _activeRecipeRunner = runner;
+        RecipeRunningChanged?.Invoke();
+        _hotkeys.EnableAbortKey(); // Esc/Ctrl+Shift+A aborts for the whole recipe run
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await runner.RunAsync(recipe, selectedAlts);
+                Log($"Recipe '{recipe.Name ?? "(unnamed)"}' finished.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Recipe run error: {ex.Message}");
+            }
+            finally
+            {
+                if (ReferenceEquals(_activeRecipeRunner, runner))
+                {
+                    _activeRecipeRunner = null;
+                    RecipeRunningChanged?.Invoke();
+                }
+                RefreshAbortKey();
+            }
+        });
+    }
+
+    // ---------- Recipe library + editor ----------
+
+    /// <summary>
+    /// Open (or bring forward) the saved-recipes library — every persisted
+    /// recipe with per-row Run/Edit/Delete, plus a NEW RECIPE entry point that
+    /// reuses <see cref="OpenRecipeEditor"/>. This is the entry point the tray's
+    /// "Recipes" item and the main window's RECIPES button open now — the bare
+    /// editor is reached FROM the library (New/Edit), never directly, so a
+    /// saved recipe is never orphaned behind an editor-only shortcut. Non-modal,
+    /// same rationale as <see cref="OpenRecipeEditor"/>.
+    /// </summary>
+    public void OpenRecipesLibrary(Window owner)
+    {
+        try
+        {
+            var window = new UI.RecipesWindow(this) { Owner = owner };
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.DiagLog.Write($"Recipes library failed to open: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Open a fresh <see cref="UI.RecipeEditorWindow"/> seeded with the current macro
+    /// library and the live alt set. Non-modal (Show, not ShowDialog) so a running
+    /// recipe loop doesn't block the rest of the plugin. Persistence is wired off
+    /// the window's Saved event — Task 7's seam — so the window itself stays
+    /// decoupled from RecipeStore. Shared by RecipesWindow's NEW RECIPE button
+    /// so there's exactly one place this wiring lives.
+    /// </summary>
+    public void OpenRecipeEditor(Window owner)
+    {
+        try
+        {
+            var library = Store.LoadAll().Macros;
+            var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
+            var editor = new UI.RecipeEditorWindow(library, alts, this) { Owner = owner };
+            editor.Saved += (_, _) =>
+            {
+                if (editor.BuiltRecipe is { } recipe)
+                    Recipes.Save(recipe);
+            };
+            editor.Show();
+        }
+        catch (Exception ex)
+        {
+            // Menu click / button click — nowhere dedicated to report; leave a trace like OpenLogFolder does.
+            Diagnostics.DiagLog.Write($"Recipe editor failed to open: {ex.Message}");
+        }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -252,7 +423,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+A abort (Esc also aborts while playing).");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+A abort (Esc also aborts while playing).");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -286,6 +457,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _bridgeCts.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
+        try { _activeRecipeRunner?.Abort(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -305,6 +477,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _runner.Abort(); } catch { }
         try { _sequence.Abort(); } catch { }
         try { _player.Abort(); } catch { }
+        // The recipe runner has its own token — aborting the sub-runners above only
+        // cancels THEIR internal tokens, not the recipe's. Without this, RecipeRunner
+        // never observes cancellation and starts a fresh terminal loop against
+        // orphaned PIDs after the host is gone.
+        try { _activeRecipeRunner?.Abort(); } catch { }
 
         // Marshal to UI thread for the WPF shutdown. If we can't reach the
         // dispatcher (rare race), fall back to a hard exit so we don't linger.
@@ -333,6 +510,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // A recipe owns the shared runner surface while it's active — refuse
+                // rather than starting a concurrent plain loop underneath it.
+                if (_activeRecipeRunner is { IsRunning: true })
+                {
+                    Log("recipe running — ignoring Play");
+                    break;
+                }
+
                 // Toggle: if a round-robin is already running, Ctrl+Shift+P stops it
                 // (same as Esc). Rescue affordance — the chord that started it can
                 // also stop it, so users aren't trapped if they reach for the chord
@@ -379,8 +564,29 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Abort:
-                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort();
+                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
+                    | (_activeRecipeRunner?.Abort() ?? false);
                 Log(aborted ? "Aborted." : "Abort ignored — nothing playing.");
+                break;
+
+            case HotkeyKind.RunRoutine:
+                // Toggle: a routine already running (looping recipe OR loadout —
+                // IsRunning covers both) means Ctrl+Shift+L stops it, same rescue
+                // affordance TogglePlayStopCommand gives Ctrl+Shift+P. Otherwise
+                // "which routine + which alts" is VM state (SelectedRoutine,
+                // AssignmentRow.IsCheckedForRoutine) — the runtime doesn't own
+                // it, so bridge the chord out and let the VM's RunRoutineCommand
+                // (same CanExecute the RUN button honors) decide whether to fire.
+                if (_activeRecipeRunner is { IsRunning: true })
+                {
+                    _activeRecipeRunner.Abort();
+                    _sequence.Abort();
+                    _runner.Abort();
+                    _player.Abort();
+                    Log("Routine stopped (Ctrl+Shift+L).");
+                    break;
+                }
+                RunRoutineRequested?.Invoke();
                 break;
         }
     }
@@ -393,7 +599,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     private void RefreshAbortKey()
     {
-        if (_runner.IsRunning || _sequenceActive || _playerActive)
+        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false))
             _hotkeys.EnableAbortKey();
         else
             _hotkeys.DisableAbortKey();
@@ -424,6 +630,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 clientAnchorHwnd: anchorHwnd);
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
+            _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
             _recordingBoundAccount = account;
             // Presence fills game identity AFTER the launch event (0.4.0 contract
             // semantics), so the registry entry captured above may carry no game
@@ -490,6 +697,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             CoordSpace: isClientSpace ? Macro.CoordSpaceClient : Macro.CoordSpaceScreen,
             RecordedClientW: isClientSpace ? _recordingClientSize?.W : null,
             RecordedClientH: isClientSpace ? _recordingClientSize?.H : null,
+            RecordedMaximized: isClientSpace ? _recordingMaximized : null,
             RecordedPlaceId: boundFresh is { PlaceId: > 0 } ? boundFresh.PlaceId : null,
             RecordedGameName: string.IsNullOrEmpty(boundFresh?.PlaceName) ? null : boundFresh!.PlaceName);
 
@@ -497,6 +705,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         {
             Store.Save(macro);
             _recordingClientSize = null;
+            _recordingMaximized = null;
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));

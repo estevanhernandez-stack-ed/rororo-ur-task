@@ -30,6 +30,20 @@ internal sealed class AssignmentRow : INotifyPropertyChanged
     public string DisplayMacroName => _assigned?.Name ?? "Keep-alive (Space)";
     public bool HasMacro => _assigned is not null;
 
+    private bool _isCheckedForRoutine;
+    /// <summary>Per-alt selection for routine (recipe/loadout) runs — independent
+    /// of <see cref="AssignedMacro"/>; the two coexist on the same row.</summary>
+    public bool IsCheckedForRoutine
+    {
+        get => _isCheckedForRoutine;
+        set
+        {
+            if (_isCheckedForRoutine == value) return;
+            _isCheckedForRoutine = value;
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>Soft warning: game-scoped macro paired with an alt known to be in a different game.</summary>
     public bool HasGameMismatch => MacroGameFilter.IsMismatch(_assigned, Alt.PlaceId);
 

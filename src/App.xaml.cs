@@ -47,8 +47,9 @@ public partial class App : Application
         var vm = new RecorderViewModel(_runtime);
         DiagLog.Write("startup: window");
         _window = new RecorderWindow { DataContext = vm };
+        _window.RecipesRequested = () => _runtime.OpenRecipesLibrary(_window);
         DiagLog.Write("startup: tray");
-        _tray = new TrayService(_window);
+        _tray = new TrayService(_window, _runtime);
         _runtime.StateChanged += () => _tray.UpdateState(_runtime.State);
 
         DiagLog.Write("startup: window shown");

@@ -32,4 +32,18 @@ public interface IWindowMetrics
 
     /// <summary>Work area (taskbar-excluded) of the monitor hosting the window.</summary>
     (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd);
+
+    /// <summary>
+    /// Maximize the window. Unlike a plain <see cref="SetOuterRect"/>, maximize is
+    /// honored by the OS regardless of the window's max-track size ceiling and
+    /// anchors it top-left on its monitor — the mechanism <c>EnsureClientSize</c>
+    /// leans on to reach a recorded full-screen client size.
+    /// </summary>
+    void Maximize(IntPtr hwnd);
+
+    /// <summary>Restore a maximized window back to a normal, resizable state.</summary>
+    void RestoreDown(IntPtr hwnd);
+
+    /// <summary>True if the window is currently maximized (zoomed).</summary>
+    bool IsMaximized(IntPtr hwnd);
 }

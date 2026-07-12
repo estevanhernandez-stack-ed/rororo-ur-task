@@ -8,9 +8,14 @@ namespace Labs626.UrTask.UI;
 
 public partial class RecorderWindow : Window
 {
+    /// <summary>Wired by App.xaml.cs to <see cref="PluginRuntime.OpenRecipeEditor"/>
+    /// so the RECIPES button doesn't need a runtime reference of its own.</summary>
+    internal Action? RecipesRequested { get; set; }
+
     public RecorderWindow()
     {
         InitializeComponent();
+        NativeResizeBehavior.Attach(this);
         Loaded += (_, _) =>
         {
             if (DataContext is RecorderViewModel vm)
@@ -18,6 +23,15 @@ public partial class RecorderWindow : Window
                 vm.PropertyChanged += OnViewModelPropertyChanged;
                 ApplyCompactState(vm.IsCompact);
             }
+        };
+
+        // Re-read the saved-routines list every time this window regains focus —
+        // mirrors RecipesWindow's Activated-refresh so a recipe/loadout saved,
+        // edited, or deleted in the (non-modal) Recipes library or editor shows
+        // up in the routine picker here without a restart.
+        Activated += (_, _) =>
+        {
+            if (DataContext is RecorderViewModel vm) vm.RefreshRoutines();
         };
     }
 
@@ -54,9 +68,9 @@ public partial class RecorderWindow : Window
         else
         {
             MinWidth = 720;
-            MinHeight = 460;
+            MinHeight = 600;
             Width = 860;
-            Height = 560;
+            Height = 600;
             SizeToContent = SizeToContent.Manual;
         }
     }
@@ -72,6 +86,8 @@ public partial class RecorderWindow : Window
         if (DataContext is RecorderViewModel vm)
             vm.IsCompact = !vm.IsCompact;
     }
+
+    private void OnRecipesClicked(object sender, RoutedEventArgs e) => RecipesRequested?.Invoke();
 
     // ── Macro card handlers ────────────────────────────────────────────────
 
@@ -182,6 +198,36 @@ public partial class RecorderWindow : Window
         try
         {
             vm.ExportMacros(macros, dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Export failed: {ex.Message}", "RoRoRo Ur Task",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void OnMacroExportAhkV1Clicked(object sender, RoutedEventArgs e) => ExportAsAutoHotkey(sender, AhkVersion.V1);
+
+    private void OnMacroExportAhkV2Clicked(object sender, RoutedEventArgs e) => ExportAsAutoHotkey(sender, AhkVersion.V2);
+
+    /// <summary>Mirrors <see cref="ExportWithDialog"/>'s SaveFileDialog pattern for the
+    /// AutoHotkey exporter — .ahk filter, macro-name-derived default filename.</summary>
+    private void ExportAsAutoHotkey(object sender, AhkVersion version)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not Macro macro
+            || DataContext is not RecorderViewModel vm) return;
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = version == AhkVersion.V1 ? "Export as AutoHotkey v1" : "Export as AutoHotkey v2",
+            FileName = SuggestExportFileName(macro.Name) + ".ahk",
+            DefaultExt = ".ahk",
+            Filter = "AutoHotkey script (*.ahk)|*.ahk",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            vm.ExportMacroAsAutoHotkey(macro, version, dlg.FileName);
         }
         catch (Exception ex)
         {

@@ -58,6 +58,29 @@ internal sealed class PlaybackTargetPickerViewModel : INotifyPropertyChanged
             if (!MultiSelect) _selection.Clear();
             _selection.Add(alt);
         }
+        RaiseSelectionChanged();
+    }
+
+    /// <summary>Select every alt (multi-select only; no-op in single-select).</summary>
+    public void SelectAll()
+    {
+        if (!MultiSelect) return;
+        foreach (var alt in Alts)
+            if (!_selection.Any(a => a.RobloxUserId == alt.RobloxUserId))
+                _selection.Add(alt);
+        RaiseSelectionChanged();
+    }
+
+    /// <summary>Clear the selection.</summary>
+    public void SelectNone()
+    {
+        if (_selection.Count == 0) return;
+        _selection.Clear();
+        RaiseSelectionChanged();
+    }
+
+    private void RaiseSelectionChanged()
+    {
         OnPropertyChanged(nameof(SelectedTargets));
         OnPropertyChanged(nameof(CanPlay));
         OnPropertyChanged(nameof(PlayButtonLabel));

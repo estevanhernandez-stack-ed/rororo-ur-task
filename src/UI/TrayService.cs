@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
@@ -16,10 +17,12 @@ internal sealed class TrayService : IDisposable
 {
     private readonly TaskbarIcon _icon;
     private readonly Window _window;
+    private readonly PluginRuntime _runtime;
 
-    public TrayService(Window window)
+    public TrayService(Window window, PluginRuntime runtime)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
 
         _icon = new TaskbarIcon
         {
@@ -52,6 +55,10 @@ internal sealed class TrayService : IDisposable
         show.Click += (_, _) => SurfaceWindow();
         menu.Items.Add(show);
 
+        var recipes = new MenuItem { Header = "Recipes" };
+        recipes.Click += (_, _) => OpenRecipesLibrary();
+        menu.Items.Add(recipes);
+
         var openLogs = new MenuItem { Header = "Open log folder" };
         openLogs.Click += (_, _) => OpenLogFolder();
         menu.Items.Add(openLogs);
@@ -72,6 +79,12 @@ internal sealed class TrayService : IDisposable
         _window.Activate();
         _window.Focus();
     }
+
+    /// <summary>
+    /// "Recipes" menu item: delegates to <see cref="PluginRuntime.OpenRecipesLibrary"/>,
+    /// the shared wiring the main window's RECIPES button also uses.
+    /// </summary>
+    private void OpenRecipesLibrary() => _runtime.OpenRecipesLibrary(_window);
 
     private static void OpenLogFolder()
     {

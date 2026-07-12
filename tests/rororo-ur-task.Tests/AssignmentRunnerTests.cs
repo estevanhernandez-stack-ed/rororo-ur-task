@@ -91,6 +91,99 @@ public class AssignmentRunnerTests
     }
 
     /// <summary>
+    /// Fake player that signals when it has been entered and then holds until
+    /// the test releases it. Mirrors SequencePlayerReentryGuardTests'
+    /// BlockingFakePlayer — lets the test pin the round-robin loop mid-flight
+    /// (inside the Playing phase) so a concurrent second RunAsync call can be
+    /// attempted deterministically instead of racing on real delays.
+    /// </summary>
+    private sealed class BlockingFakePlayer : IMacroPlayer
+    {
+        private readonly TaskCompletionSource _entered;
+        private readonly TaskCompletionSource _release;
+        private int _enteredCount;
+
+        public BlockingFakePlayer(TaskCompletionSource entered, TaskCompletionSource release)
+        {
+            _entered = entered;
+            _release = release;
+        }
+
+        public int EnteredCount => _enteredCount;
+        public bool IsPlaying => false;
+        public event EventHandler<PlaybackStartedArgs>? Started;
+        public event EventHandler<PlaybackEndedArgs>? Ended;
+
+        public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
+        {
+            Interlocked.Increment(ref _enteredCount);
+            _entered.TrySetResult();
+            await _release.Task.ConfigureAwait(false);
+            return PlaybackResult.Completed();
+        }
+
+        public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
+            => Task.FromResult(PlaybackResult.Completed());
+
+        public bool Abort() => false;
+    }
+
+    /// <summary>
+    /// Regression for the AssignmentRunner concurrency bug: RunAsync used to
+    /// unconditionally create and assign _activeCts on every call, so a second
+    /// concurrent invocation would clobber the first's token — each finally
+    /// block then disposed/nulled the shared field out from under the other,
+    /// and two round-robin loops could run at once against the same alt
+    /// windows. Fixed to mirror SequencePlayer.PlayAsync's atomic
+    /// Interlocked.CompareExchange claim: a second concurrent call must
+    /// refuse and return promptly without starting a second loop.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ConcurrentEntry_SecondCallRefusesWithoutStartingSecondLoop()
+    {
+        var macro = NewMacro("guard-test");
+        var alt1 = Alt(1001, 47821334, "Goldnail8");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var player = new BlockingFakePlayer(entered, release);
+        var fg = new FakeForeground { Resolver = () => alt1 };
+
+        var runner = new AssignmentRunner(player, fg, _ => (true, null));
+        var assignments = new List<Assignment> { new(alt1, macro) };
+
+        // ── FIRST call: start but don't await yet — it loops forever until
+        // cancelled, and is currently pinned mid-flight inside PlayAsync (the
+        // "Playing" phase) courtesy of BlockingFakePlayer. ──
+        using var firstCts = new CancellationTokenSource();
+        var firstTask = runner.RunAsync(assignments, firstCts.Token);
+
+        // Wait until the fake player signals it's mid-flight.
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(runner.IsRunning, "Expected the round-robin loop to be mid-flight.");
+
+        // ── SECOND call: must be refused atomically — it must NOT clobber the
+        // first loop's token or start a concurrent pass. It must return
+        // promptly (bounded wait — a hang here means the guard didn't fire). ──
+        using var secondCts = new CancellationTokenSource();
+        var secondTask = runner.RunAsync(assignments, secondCts.Token);
+        await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The first loop is still the one (and only one) running — untouched
+        // by the refused second call.
+        Assert.True(runner.IsRunning, "First loop must still be running after the second call was refused.");
+        Assert.Equal(1, player.EnteredCount);
+
+        // ── Unwind: release the blocked player call, then cancel the first
+        // loop so it can observe cancellation and exit cleanly. ──
+        release.TrySetResult();
+        firstCts.Cancel();
+        try { await firstTask; } catch (OperationCanceledException) { /* acceptable unwind path */ }
+
+        Assert.False(runner.IsRunning);
+    }
+
+    /// <summary>
     /// 2-alt scenario: alt1 has a macro, alt2 is unassigned (keep-alive).
     /// Cancel after the first full pass (both alts visited). Assert:
     ///   - PlayAsync called once for alt1 with the correct macro
