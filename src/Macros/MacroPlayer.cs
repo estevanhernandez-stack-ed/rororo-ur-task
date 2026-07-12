@@ -190,29 +190,28 @@ internal sealed class MacroPlayer : IMacroPlayer
     /// <summary>
     /// Ensure the target window's client area matches the macro's recorded size.
     ///
-    /// Try-fit-then-maximize is the mechanism: for a macro recorded in a
-    /// maximized/full-screen window, the recorded client size is ~ the monitor's
-    /// work area, so the OUTER rect needed to reproduce it as a normal (restored)
-    /// window is wider than the monitor once chrome is added back in.
-    /// <c>SetWindowPos</c> is capped by the window's max-track ceiling — derived
-    /// from the monitor size — so a normal window can never reach that outer
-    /// size. An earlier version of this method tried to *predict* that ceiling by
-    /// comparing the recorded size against the maximized client size; the
-    /// prediction was wrong for full-screen recordings and always fell through to
-    /// a "restore then resize" branch that shrank the window and left it stuck
-    /// small — confirmed live (went full screen, then back to the pre-fullscreen
-    /// size, still failed).
+    /// Reproduce-client-size-with-overhang is the mechanism: clicks are recorded
+    /// client-relative, so only the client SIZE has to match — the window itself
+    /// is allowed to hang a few pixels off the edge of the monitor's work area
+    /// (under the taskbar, off a side) and playback still lands pixel-correct.
+    /// An earlier version treated any outer rect that didn't fully fit the work
+    /// area as unreachable and fell back to maximizing the window; that's only
+    /// correct for a macro that was actually RECORDED maximized. For a windowed
+    /// recording it's catastrophic — confirmed live on an ultrawide monitor
+    /// (work area 3440x1392): a 1718x1360-client windowed recording needed a
+    /// 1734x1399 outer rect, 7px taller than the work area, tripped the old
+    /// "doesn't fit" check, and got blown up to a 3440-wide maximized window —
+    /// every recorded click then landed in the wrong place.
     ///
-    /// This version stops predicting and asks the OS directly: attempt an exact
-    /// windowed fit first (no maximize flash for the common case — a normal
-    /// windowed recording), then read back what the OS actually gave the window.
-    /// If it matches (within <see cref="Slop"/>) or the target outer rect doesn't
-    /// even fit the work area, fall back to maximize-and-leave —
-    /// <c>ShowWindow(SW_MAXIMIZE)</c> is exempt from the max-track ceiling and
-    /// always anchors top-left, so it reliably reaches a full-screen recording's
-    /// size. A macro explicitly stamped <see cref="Macro.RecordedMaximized"/>
-    /// skips the windowed-fit attempt and goes straight to maximize-and-leave;
-    /// older macros (stamp is null — unknown) always try the windowed fit first.
+    /// This version only maximizes when the macro says it was recorded maximized
+    /// (<see cref="Macro.RecordedMaximized"/>) — the one case where the recorded
+    /// client size IS the work area and a windowed resize can never reach it.
+    /// Otherwise it resizes the window to reproduce the recorded client size as a
+    /// free window, pinned to the work area's top (the failure mode above was
+    /// vertical overhang, so keep the full client height visible from the top
+    /// down) and clamped horizontally to stay on-screen. If even a free window
+    /// can't reach the recorded size, it refuses with actionable advice instead
+    /// of silently mis-clicking.
     ///
     /// The window is intentionally left resized (round-robin then resizes each alt
     /// once, not per cycle). Returns null to proceed, or a Refused result.
@@ -220,7 +219,6 @@ internal sealed class MacroPlayer : IMacroPlayer
     private PlaybackResult? EnsureClientSize(IntPtr hwnd, Macro macro)
     {
         const int Slop = 2;  // px — DPI rounding tolerance for "reached the size".
-        const int Tol = 100; // px — recorded-vs-maximized tolerance (taskbar height at any DPI + chrome + rounding).
 
         if (macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
             return PlaybackResult.Refused("Client-space macro is missing its recorded client size — re-record it.");
@@ -233,13 +231,18 @@ internal sealed class MacroPlayer : IMacroPlayer
             return null;
         }
 
-        // Explicit intent from the recording: it was maximized, so don't waste a
-        // windowed-fit attempt that's guaranteed to overshoot the max-track ceiling.
+        // Recorded maximized/full-screen: the only faithful reproduction is to
+        // maximize (its client size == the work area); a windowed resize can
+        // never reach it.
         if (macro.RecordedMaximized == true)
-            return MaximizeAndLeave(hwnd, rw, rh, Tol);
+            return MaximizeAndLeave(hwnd, rw, rh, Slop);
 
-        // Attempt an exact windowed fit first — no maximize flash for the common
-        // case (a normal windowed recording).
+        // Windowed recording: reproduce the recorded CLIENT size. Clicks are
+        // client-relative, so only the client size must match — the window may
+        // overhang the work area (a few px under the taskbar is harmless). Pin
+        // the top to the work-area top so the full client height is visible from
+        // the top; keep the current X, clamped fully on-screen, to preserve
+        // side-by-side tiling.
         if (_metrics.IsMaximized(hwnd)) _metrics.RestoreDown(hwnd);
         var outer = _metrics.OuterRect(hwnd);
         var rc = _metrics.ClientSize(hwnd);
@@ -248,55 +251,51 @@ internal sealed class MacroPlayer : IMacroPlayer
 
         var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), rc.Value, (rw, rh));
         var work = _metrics.WorkAreaFor(hwnd);
-        var (_, _, fits) = WindowSpaceMath.ClampToWorkArea((work.X, work.Y, tw, th), work);
-
-        if (fits)
+        int x = Math.Max(work.X, Math.Min(outer.Value.X, work.X + work.W - tw)); // keep X, clamp fully on-screen (left-align if wider than screen)
+        int y = work.Y;                                                          // pin to top — the failure mode was vertical overhang
+        _metrics.SetOuterRect(hwnd, x, y, tw, th);
+        var after = _metrics.ClientSize(hwnd);
+        if (after is not null && Math.Abs(after.Value.W - rw) <= Slop && Math.Abs(after.Value.H - rh) <= Slop)
         {
-            // Anchor at the work area's top-left — max room to grow into.
-            _metrics.SetOuterRect(hwnd, work.X, work.Y, tw, th);
-            var after = _metrics.ClientSize(hwnd);
-            if (after is not null && Math.Abs(after.Value.W - rw) <= Slop && Math.Abs(after.Value.H - rh) <= Slop)
-            {
-                Diagnostics.DiagLog.Write($"EnsureClientSize: windowed-fit ok: {rw}x{rh}.");
-                return null;
-            }
-            Diagnostics.DiagLog.Write(
-                $"EnsureClientSize: windowed-fit capped: wanted {rw}x{rh} got {after?.W}x{after?.H} -> maximize-and-leave.");
-        }
-        else
-        {
-            Diagnostics.DiagLog.Write(
-                $"EnsureClientSize: windowed outer {tw}x{th} exceeds work area {work.W}x{work.H} -> maximize-and-leave.");
+            Diagnostics.DiagLog.Write($"EnsureClientSize: windowed-fit ok: {rw}x{rh} at {x},{y}.");
+            return null;
         }
 
-        // Fell through: recorded size is maximized-magnitude / unreachable as a
-        // normal window on this monitor.
-        return MaximizeAndLeave(hwnd, rw, rh, Tol);
+        // Couldn't reach the recorded client size even as a free window —
+        // recorded on a larger monitor than this one. Advise, don't silently
+        // mis-click.
+        Diagnostics.DiagLog.Write(
+            $"EnsureClientSize: windowed-fit UNREACHABLE: wanted {rw}x{rh} got {after?.W}x{after?.H}, work {work.W}x{work.H}.");
+        return PlaybackResult.Refused(
+            $"Couldn't size this window to the macro's recorded {rw}x{rh} (got {after?.W}x{after?.H}). It looks recorded on a larger screen — move the window fully on-screen and retry, or re-record the macro on this monitor.");
     }
 
     /// <summary>
-    /// Maximize the target window and leave it maximized — the fallback when an
-    /// exact windowed fit can't reach the recorded client size (full-screen
-    /// recording, or a macro explicitly stamped <see cref="Macro.RecordedMaximized"/>).
+    /// Maximize the target window to reproduce a macro that was recorded on a
+    /// maximized/full-screen window — its recorded client size is the monitor's
+    /// work area at record time, which a windowed resize can never reach.
     /// <c>ShowWindow(SW_MAXIMIZE)</c> is exempt from the max-track ceiling that
-    /// caps a plain <c>SetWindowPos</c>/<c>SetOuterRect</c>, so it reliably reaches
-    /// the monitor's full work area regardless of the recorded size. Refuses only
-    /// when the recorded size is bigger than this monitor can produce even
-    /// maximized — a genuinely larger monitor/DPI than at record time.
+    /// caps a plain <c>SetWindowPos</c>/<c>SetOuterRect</c>, so it reliably
+    /// reaches this monitor's full work area regardless of the recorded size.
+    /// Refuses when this monitor's maximized client size doesn't match the
+    /// recorded size — a genuinely different monitor/DPI than at record time.
     /// </summary>
-    private PlaybackResult? MaximizeAndLeave(IntPtr hwnd, int rw, int rh, int tol)
+    private PlaybackResult? MaximizeAndLeave(IntPtr hwnd, int rw, int rh, int slop)
     {
         _metrics.Maximize(hwnd);
         var m = _metrics.ClientSize(hwnd);
-        if (m is null) return PlaybackResult.Refused("Could not read target window size after maximize.");
+        if (m is null) return PlaybackResult.Refused("Could not read window size after maximize.");
         var (mw, mh) = m.Value;
 
-        if (rw > mw + tol || rh > mh + tol)
-            return PlaybackResult.Refused(
-                $"Recorded client size {rw}x{rh} is larger than this monitor's maximized size {mw}x{mh} — recorded on a bigger screen. Re-record on this monitor.");
+        if (Math.Abs(mw - rw) <= slop && Math.Abs(mh - rh) <= slop)
+        {
+            Diagnostics.DiagLog.Write($"EnsureClientSize: leave-maximized ok: recorded {rw}x{rh}, maximized {mw}x{mh}.");
+            return null;
+        }
 
-        Diagnostics.DiagLog.Write($"EnsureClientSize: leave-maximized: recorded {rw}x{rh}, maximized {mw}x{mh}.");
-        return null; // leave it maximized; client coords line up within a few px.
+        Diagnostics.DiagLog.Write($"EnsureClientSize: recorded-maximized {rw}x{rh} but this monitor maximizes to {mw}x{mh}.");
+        return PlaybackResult.Refused(
+            $"This macro was recorded on a maximized {rw}x{rh} window, but this screen maximizes to {mw}x{mh}. Re-record it on this monitor.");
     }
 
     // ---------- Held-state tracking + release ----------

@@ -89,6 +89,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _sequence.Progress += (_, p) =>
         {
             SequenceProgressed?.Invoke(p);
+            // Mirrors the AssignmentRunner.Progress handler below: a per-alt
+            // refusal (e.g. the client-size resize refusal from
+            // MacroPlayer.EnsureClientSize during a recipe's positioning step)
+            // otherwise only reaches the toast via RecorderViewModel's
+            // SequenceProgressed handler — it never lands in the activity log.
+            // Log() explicitly so the reason survives after the toast fades.
+            if (p.Phase == SequencePhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+                Log($"Sequence playback refused for {p.CurrentAlt?.DisplayName ?? "(unknown alt)"}: {p.Reason}");
             // Track whether a sequence is active so _player.Ended doesn't clear
             // the badge prematurely between alts.
             if (p.Phase == SequencePhase.Focusing && p.Index == 0)

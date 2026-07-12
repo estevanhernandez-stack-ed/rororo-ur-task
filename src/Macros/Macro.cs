@@ -25,9 +25,11 @@ public sealed record Macro(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? RecordedClientH = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    bool? RecordedMaximized = null,     // true when the anchor window was maximized at record-start;
-                                         // null = unknown (pre-existing macros) — EnsureClientSize tries
-                                         // a windowed fit first and only falls back to maximize-and-leave
+    bool? RecordedMaximized = null,     // true when the anchor window was maximized at record-start —
+                                         // EnsureClientSize goes straight to maximize-and-leave for those;
+                                         // null = unknown (pre-existing macros) — tries a windowed fit
+                                         // (tolerating work-area overhang) and refuses with advice if
+                                         // even that can't reach the recorded client size
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     long? RecordedPlaceId = null,       // game identity at record time — soft metadata (v0.6, still schema v3
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
