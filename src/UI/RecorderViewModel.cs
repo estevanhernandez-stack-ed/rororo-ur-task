@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.PluginHost;
 
@@ -29,6 +30,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         StatusLines = new ObservableCollection<string>();
         Assignments = new ObservableCollection<AssignmentRow>();
         SavedRoutines = new ObservableCollection<Recipe>();
+        Toasts = new ObservableCollection<ToastItem>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
         StopCommand = new RelayCommand(_runtime.TriggerAbort);
@@ -156,6 +158,23 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsConnected));
         };
         _runtime.StatusLogged += LogStatus;
+        // RecipeRunner's positioning/loop-setup failures (missing macro, all
+        // alts failed to position) never reach AssignmentProgressed or
+        // SequenceProgressed — RunRecipe only surfaces them via Log()/
+        // StatusLogged (see PluginRuntime.RunRecipe's `runner.Progress +=`).
+        // Recognize those two failure phases by the "(Phase)." suffix that
+        // handler renders and toast them too, so a recipe that can't even
+        // start isn't silently buried in the activity log. Log() already
+        // dispatches to the UI thread before raising StatusLogged, so no
+        // RaiseUI wrap needed here (mirrors LogStatus above).
+        _runtime.StatusLogged += line =>
+        {
+            if (line.Contains($"({nameof(RecipeRunPhase.MacroMissing)}).", StringComparison.Ordinal)
+                || line.Contains($"({nameof(RecipeRunPhase.AllAltsFailed)}).", StringComparison.Ordinal))
+            {
+                ShowError(line);
+            }
+        };
         _runtime.MacrosChanged += () =>
         {
             _allMacros = _runtime.Store.LoadAll().Macros;
@@ -173,6 +192,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.SequenceProgressed += p =>
         {
             SequenceProgress = p;
+            // Position/one-shot refusal path (e.g. the off-screen-resize refusal
+            // from MacroPlayer.EnsureClientSize during a recipe's positioning
+            // step) — SequencePlayer emits a Refused-phase progress event with
+            // Reason set alongside its per-alt AltOutcome. This event can fire
+            // from a background thread (SequencePlayer.PlayAsync runs off the UI
+            // thread), so ShowError is explicitly dispatched via RaiseUI.
+            if (p.Phase == SequencePhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+            {
+                var reason = p.Reason;
+                RaiseUI(() => ShowError(reason));
+            }
             if (p.Phase == SequencePhase.Focusing && p.Index == 0 && p.Total > 1)
             {
                 _wasCompactBeforeSequence = IsCompact;
@@ -195,7 +225,16 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             foreach (var r in Assignments) r.AssignedMacro = null;
             RecomputePairings();
         });
-        _runtime.AssignmentProgressed += p => RaiseUI(() => RunnerProgress = p);
+        _runtime.AssignmentProgressed += p => RaiseUI(() =>
+        {
+            RunnerProgress = p;
+            // Round-robin loop / recipe-loop refusal path — same off-screen-resize
+            // (and similar preflight) refusals surface here for the terminal
+            // Loop/KeepAlive step. Already inside RaiseUI, so ShowError runs on
+            // the UI thread.
+            if (p.Phase == AssignmentPhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+                ShowError(p.Reason);
+        });
 
         // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
         // RUN button uses, so the chord no-ops exactly when the button would be
@@ -253,6 +292,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ObservableCollection<string> StatusLines { get; }
     public ObservableCollection<AssignmentRow> Assignments { get; }
     public ObservableCollection<Recipe> SavedRoutines { get; }
+    public ObservableCollection<ToastItem> Toasts { get; }
 
     // ---------- Commands ----------
 
@@ -755,6 +795,45 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         StatusLines.Insert(0, line);
         while (StatusLines.Count > StatusLogLimit) StatusLines.RemoveAt(StatusLines.Count - 1);
+    }
+
+    // ---------- Toasts: transient, themed surfacing for playback errors/refusals ----------
+
+    private static readonly TimeSpan ToastDedupWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(5);
+
+    private string? _lastToastMessage;
+    private DateTimeOffset _lastToastAt;
+
+    /// <summary>
+    /// Surface a playback refusal/error as a transient, auto-dismissing toast —
+    /// callers are the Refused-phase handlers above plus the recipe-failure
+    /// StatusLogged filter. Must run on the UI thread (callers already dispatch
+    /// via RaiseUI where the source event isn't already on it) since it mutates
+    /// the bound <see cref="Toasts"/> collection and starts a DispatcherTimer.
+    /// Dedup: see <see cref="ToastDedup.ShouldSuppress"/> — a loop that refuses
+    /// on the same reason every cycle must not spam identical toasts.
+    /// </summary>
+    public void ShowError(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (ToastDedup.ShouldSuppress(_lastToastMessage, _lastToastAt, message, now, ToastDedupWindow))
+            return;
+        _lastToastMessage = message;
+        _lastToastAt = now;
+
+        var toast = new ToastItem(message, ToastSeverity.Error, now);
+        Toasts.Add(toast);
+
+        var timer = new DispatcherTimer { Interval = ToastLifetime };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            Toasts.Remove(toast);
+        };
+        timer.Start();
     }
 
     // ---------- Assignment helpers ----------

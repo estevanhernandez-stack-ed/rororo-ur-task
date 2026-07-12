@@ -864,6 +864,48 @@
                                Foreground="{DynamicResource MutedTextBrush}" />
                 </Border>
             </Grid>
+
+            <!-- Error toast overlay — floats above the title bar and content (spans
+                 both outer rows) so playback refusals surface even in compact mode,
+                 not just when the ACTIVITY log happens to be visible/scrolled to.
+                 IsHitTestVisible="False": toasts auto-dismiss (RecorderViewModel.
+                 ShowError, ~5s) rather than requiring a click, so they never block
+                 the buttons/rows underneath. -->
+            <ItemsControl Grid.Row="0" Grid.RowSpan="2"
+                          Panel.ZIndex="1000"
+                          IsHitTestVisible="False"
+                          HorizontalAlignment="Right"
+                          VerticalAlignment="Bottom"
+                          Margin="0,0,16,16"
+                          ItemsSource="{Binding Toasts}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- RowBgBrush field + magenta left accent, mirroring the
+                             ≠ GAME mismatch chip's warning treatment elsewhere in
+                             this window. -->
+                        <Border Background="{DynamicResource RowBgBrush}"
+                                BorderBrush="{DynamicResource MagentaBrush}"
+                                BorderThickness="3,1,1,1"
+                                CornerRadius="6"
+                                Padding="12,9"
+                                Margin="0,8,0,0"
+                                MaxWidth="320">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="16" ShadowDepth="2" Opacity="0.45" />
+                            </Border.Effect>
+                            <TextBlock Text="{Binding Message}"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource WhiteBrush}"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </Grid>
     </Border>
 </Window>

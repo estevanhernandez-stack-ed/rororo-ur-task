@@ -82,6 +82,7 @@ internal sealed class SequencePlayer
                 {
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
                     failed++;
+                    EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
                     continue;
                 }
                 try { await Task.Delay(delay, _activeCts.Token).ConfigureAwait(false); }
@@ -96,9 +97,10 @@ internal sealed class SequencePlayer
                 var fg = _foreground.ResolveForegroundAccount();
                 if (fg is null || fg.RobloxUserId != target.RobloxUserId)
                 {
-                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused,
-                        $"Couldn't focus {target.DisplayName} — window may be minimized or frozen."));
+                    var focusFlipReason = $"Couldn't focus {target.DisplayName} — window may be minimized or frozen.";
+                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusFlipReason));
                     failed++;
+                    EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusFlipReason));
                     continue;
                 }
 
@@ -122,6 +124,14 @@ internal sealed class SequencePlayer
                     case PlaybackOutcome.Completed: completed++; break;
                     case PlaybackOutcome.Refused:
                     case PlaybackOutcome.Aborted: failed++; break;
+                }
+                // Mirrors AssignmentRunner: Refused and Aborted both mean "this alt's
+                // macro didn't play to completion" from the caller's perspective —
+                // surface the reason so it doesn't vanish silently (e.g. the
+                // off-screen-resize refusal from MacroPlayer.EnsureClientSize).
+                if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted && playResult.Reason is not null)
+                {
+                    EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, playResult.Reason));
                 }
             }
 
