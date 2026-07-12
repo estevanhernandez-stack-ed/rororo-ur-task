@@ -214,6 +214,12 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (!fits)
             return PlaybackResult.Refused(
                 $"Recorded window size {rw}x{rh} is larger than the screen work area — can't fit it above the taskbar. Re-record smaller or use a bigger monitor.");
+        // Move to the clamped position FIRST (at the current size), THEN resize.
+        // Resizing in place while the window sits low gets clamped by the OS to what
+        // fits from the window's current top — so the recorded size is never reached
+        // and positioning fails. The window has to move up before it can grow.
+        if ((cx, cy) != (outer.Value.X, outer.Value.Y))
+            _metrics.SetOuterRect(hwnd, cx, cy, outer.Value.W, outer.Value.H);
         _metrics.SetOuterRect(hwnd, cx, cy, tw, th);
 
         var after = _metrics.ClientSize(hwnd);
