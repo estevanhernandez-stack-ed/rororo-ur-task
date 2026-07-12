@@ -677,12 +677,25 @@
                                                   ToolTip="Pick a saved recipe or loadout to run"
                                                   Margin="0,0,8,0" />
                                         <Button Grid.Column="1"
-                                                Style="{StaticResource SecondaryButton}"
-                                                Command="{Binding RunRoutineCommand}"
-                                                ToolTip="Run the selected routine on the checked alts below (Ctrl+Shift+L)"
+                                                Command="{Binding ToggleRoutineRunCommand}"
+                                                ToolTip="Run the selected routine on the checked alts below, or stop the active run (Ctrl+Shift+L)"
                                                 Padding="14,6">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                    <Style.Triggers>
+                                                        <!-- Swap to outlined magenta while running, same treatment as
+                                                             the PLAY/STOP toggle, so RUN vs STOP reads at a glance. -->
+                                                        <DataTrigger Binding="{Binding IsRoutineRunning}" Value="True">
+                                                            <Setter Property="Background" Value="Transparent" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource MagentaBrush}" />
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource MagentaBrush}" />
+                                                            <Setter Property="BorderThickness" Value="1" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
                                             <StackPanel>
-                                                <TextBlock Text="RUN" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                                <TextBlock Text="{Binding RoutineRunButtonLabel}" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
                                                 <TextBlock Text="Ctrl+Shift+L" FontSize="9" Opacity="0.7" Margin="0,2,0,0" HorizontalAlignment="Center" />
                                             </StackPanel>
                                         </Button>

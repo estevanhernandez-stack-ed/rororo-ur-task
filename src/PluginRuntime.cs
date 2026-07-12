@@ -185,15 +185,29 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public event Action<AssignmentProgress>? AssignmentProgressed;
 
     /// <summary>
-    /// Fires when the Ctrl+Shift+L global chord is pressed. The chord is
-    /// handled here (in <see cref="OnHotkey"/>), but "which routine + which
-    /// alts" lives on the VM (SelectedRoutine / AssignmentRow.IsCheckedForRoutine)
-    /// — the runtime knows nothing about that UI state, so it just raises this
-    /// and the VM decides whether/what to run. Fires on the hotkey thread; the
-    /// subscriber is responsible for marshaling to the UI dispatcher before
-    /// touching any ICommand or bound collection.
+    /// Fires ONLY on the start half of the Ctrl+Shift+L chord — the stop half
+    /// (a routine already running) is handled entirely inside <see cref="OnHotkey"/>
+    /// and never reaches this event. "Which routine + which alts" lives on the
+    /// VM (SelectedRoutine / AssignmentRow.IsCheckedForRoutine) — the runtime
+    /// knows nothing about that UI state, so it just raises this and the VM
+    /// decides whether/what to run. Fires on the hotkey thread; the subscriber
+    /// is responsible for marshaling to the UI dispatcher before touching any
+    /// ICommand or bound collection.
     /// </summary>
     public event Action? RunRoutineRequested;
+
+    /// <summary>
+    /// True while a routine (a looping recipe OR a loadout — RecipeRunner.RunAsync
+    /// is "running" for both; a loadout just returns after its position steps
+    /// instead of looping) is active via <see cref="RunRecipe"/>. The VM mirrors
+    /// this into IsRoutineRunning to drive the routine strip's RUN/STOP toggle,
+    /// same shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
+    /// </summary>
+    public bool IsRecipeRunning => _activeRecipeRunner?.IsRunning ?? false;
+
+    /// <summary>Fires whenever a recipe run starts or ends — see <see cref="IsRecipeRunning"/>.
+    /// Fires on whatever thread the transition happened on; the subscriber marshals.</summary>
+    public event Action? RecipeRunningChanged;
 
     /// <summary>
     /// Fire MacrosChanged on the UI thread. Called by the ViewModel after
@@ -312,6 +326,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
 
         _activeRecipeRunner = runner;
+        RecipeRunningChanged?.Invoke();
         _hotkeys.EnableAbortKey(); // Esc/Ctrl+Shift+A aborts for the whole recipe run
 
         _ = Task.Run(async () =>
@@ -328,7 +343,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
             finally
             {
                 if (ReferenceEquals(_activeRecipeRunner, runner))
+                {
                     _activeRecipeRunner = null;
+                    RecipeRunningChanged?.Invoke();
+                }
                 RefreshAbortKey();
             }
         });
@@ -541,11 +559,22 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.RunRoutine:
-                // "Which routine + which alts" is VM state (SelectedRoutine,
+                // Toggle: a routine already running (looping recipe OR loadout —
+                // IsRunning covers both) means Ctrl+Shift+L stops it, same rescue
+                // affordance TogglePlayStopCommand gives Ctrl+Shift+P. Otherwise
+                // "which routine + which alts" is VM state (SelectedRoutine,
                 // AssignmentRow.IsCheckedForRoutine) — the runtime doesn't own
-                // it, so just bridge the chord out and let the VM's
-                // RunRoutineCommand (same CanExecute the RUN button honors)
-                // decide whether to fire.
+                // it, so bridge the chord out and let the VM's RunRoutineCommand
+                // (same CanExecute the RUN button honors) decide whether to fire.
+                if (_activeRecipeRunner is { IsRunning: true })
+                {
+                    _activeRecipeRunner.Abort();
+                    _sequence.Abort();
+                    _runner.Abort();
+                    _player.Abort();
+                    Log("Routine stopped (Ctrl+Shift+L).");
+                    break;
+                }
                 RunRoutineRequested?.Invoke();
                 break;
         }

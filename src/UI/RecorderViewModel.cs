@@ -70,6 +70,25 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
                 _runtime.RunRecipe(routine, targets);
             },
             () => SelectedRoutine is not null && Assignments.Any(r => r.IsCheckedForRoutine) && !IsRunnerActive);
+
+        // Single RUN/STOP toggle for the routine strip button — mirrors
+        // TogglePlayStopCommand. Stopping always routes through TriggerAbort
+        // (the same Esc/Ctrl+Shift+A abort surface) rather than calling
+        // _activeRecipeRunner.Abort() directly, because a routine can be a
+        // looping recipe (_runner active) OR a loadout mid-position
+        // (_sequence active) — TriggerAbort's Abort case already covers both.
+        ToggleRoutineRunCommand = new RelayCommand(
+            () =>
+            {
+                if (IsRoutineRunning)
+                {
+                    _runtime.TriggerAbort();
+                    return;
+                }
+                if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
+            },
+            () => IsRoutineRunning || (SelectedRoutine is not null && Assignments.Any(r => r.IsCheckedForRoutine)));
+
         SelectAllRoutineAltsCommand = new RelayCommand(() =>
         {
             foreach (var row in Assignments) row.IsCheckedForRoutine = true;
@@ -181,9 +200,22 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
         // RUN button uses, so the chord no-ops exactly when the button would be
         // disabled (no routine selected, no alt checked, or a run already active).
+        // The STOP half of the chord never reaches here — PluginRuntime.OnHotkey
+        // intercepts it and aborts directly, so this handler only ever starts.
         _runtime.RunRoutineRequested += () => RaiseUI(() =>
         {
             if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
+        });
+
+        // Mirrors PluginRuntime.IsRecipeRunning into IsRoutineRunning so the
+        // routine strip's RUN/STOP toggle (button + Ctrl+Shift+L label) reflects
+        // both looping recipes and loadouts — RecipeRunner.RunAsync is "running"
+        // for both, a loadout just returns after its position steps instead of
+        // looping.
+        _runtime.RecipeRunningChanged += () => RaiseUI(() =>
+        {
+            IsRoutineRunning = _runtime.IsRecipeRunning;
+            RaiseRoutineCommandStates();
         });
 
         // Account add/remove updates rows live. Also refresh Stack/Grid CanExecute
@@ -231,6 +263,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand ToggleAltAssignmentCommand { get; }
     public ICommand ResetAssignmentsCommand { get; }
     public ICommand RunRoutineCommand { get; }
+    public ICommand ToggleRoutineRunCommand { get; }
     public ICommand SelectAllRoutineAltsCommand { get; }
     public ICommand SelectNoneRoutineAltsCommand { get; }
     public ICommand PlayAssignmentsCommand { get; }
@@ -413,8 +446,42 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             if (Equals(_selectedRoutine, value)) return;
             _selectedRoutine = value;
             OnPropertyChanged();
-            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
         }
+    }
+
+    private bool _isRoutineRunning;
+    /// <summary>True while a routine (a looping recipe OR a loadout) is active
+    /// via <see cref="PluginRuntime.RunRecipe"/> — mirrors
+    /// <see cref="PluginRuntime.IsRecipeRunning"/>, kept in sync through
+    /// RecipeRunningChanged. Drives the routine strip's RUN/STOP toggle, same
+    /// shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
+    /// A loadout mid-flight (position steps, no loop) still needs a way to stop,
+    /// not just a looping recipe — that's why this isn't gated on IsRunnerActive.</summary>
+    public bool IsRoutineRunning
+    {
+        get => _isRoutineRunning;
+        private set
+        {
+            if (_isRoutineRunning == value) return;
+            _isRoutineRunning = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>"STOP" while a routine (recipe or loadout) is running, else "RUN". Drives the routine strip's toggle button label.</summary>
+    public string RoutineRunButtonLabel => IsRoutineRunning ? "STOP" : "RUN";
+
+    /// <summary>Re-query CanExecute on the routine commands and re-notify the
+    /// button label. Plain RelayCommand doesn't auto-requery (see
+    /// OnAssignmentRowPropertyChanged for the same pattern) — this is the one
+    /// place both routine commands' gating conditions (SelectedRoutine,
+    /// checked alts, IsRoutineRunning) get re-evaluated from.</summary>
+    private void RaiseRoutineCommandStates()
+    {
+        (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ToggleRoutineRunCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(RoutineRunButtonLabel));
     }
 
     /// <summary>Re-read every saved recipe/loadout from disk. Called on window
@@ -709,12 +776,13 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         Assignments.Remove(row);
     }
 
-    /// <summary>Routine-checkbox toggles change RunRoutineCommand's CanExecute
-    /// (it requires ≥1 checked alt); plain RelayCommand doesn't auto-requery.</summary>
+    /// <summary>Routine-checkbox toggles change RunRoutineCommand's and
+    /// ToggleRoutineRunCommand's CanExecute (both require ≥1 checked alt);
+    /// plain RelayCommand doesn't auto-requery.</summary>
     private void OnAssignmentRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(AssignmentRow.IsCheckedForRoutine))
-            (RunRoutineCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
     }
 
     private void RefreshAssignmentRow(int pid, Macro? macro)
