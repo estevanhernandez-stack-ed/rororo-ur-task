@@ -85,6 +85,7 @@ public partial class RecipeEditorWindow : Window
         Recipe? existing = null)
     {
         InitializeComponent();
+        NativeResizeBehavior.Attach(this);
 
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _existingId = existing?.Id;

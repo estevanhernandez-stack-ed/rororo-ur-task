@@ -78,6 +78,7 @@ public partial class RecipesWindow : Window
     internal RecipesWindow(PluginRuntime runtime)
     {
         InitializeComponent();
+        NativeResizeBehavior.Attach(this);
 
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         RecipeList.ItemsSource = _rows;

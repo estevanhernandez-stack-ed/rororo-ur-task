@@ -15,6 +15,7 @@ public partial class RecorderWindow : Window
     public RecorderWindow()
     {
         InitializeComponent();
+        NativeResizeBehavior.Attach(this);
         Loaded += (_, _) =>
         {
             if (DataContext is RecorderViewModel vm)
