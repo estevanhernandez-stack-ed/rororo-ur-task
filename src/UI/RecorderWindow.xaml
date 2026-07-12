@@ -634,223 +634,268 @@
                         </Grid>
                     </Border>
 
-                    <!-- Right pane: assignments (top) + activity (bottom) -->
-                    <Border Grid.Column="2"
-                            Background="{DynamicResource RowBgBrush}"
-                            BorderBrush="{DynamicResource DividerBrush}"
-                            BorderThickness="1"
-                            CornerRadius="6">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" /> <!-- assignments header -->
-                                <RowDefinition Height="*" />    <!-- assignment rows -->
-                                <RowDefinition Height="Auto" /> <!-- activity header -->
-                                <RowDefinition Height="150" />  <!-- activity log -->
-                            </Grid.RowDefinitions>
+                    <!-- Right pane: recipes & loadouts (top) + assignments/activity (bottom) -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /> <!-- recipes & loadouts card -->
+                            <RowDefinition Height="10" />   <!-- gap -->
+                            <RowDefinition Height="*" />    <!-- assignments + activity card -->
+                        </Grid.RowDefinitions>
 
-                            <!-- Assignments header -->
-                            <Border Grid.Row="0" Padding="11,9,11,7">
-                                <StackPanel>
-                                    <TextBlock Text="ASSIGNMENTS"
-                                               FontFamily="{StaticResource MonoFont}"
-                                               FontSize="9"
-                                               Foreground="{DynamicResource CyanBrush}" />
-                                    <TextBlock Text="Click a macro to mark it · click an alt row to assign · unassigned alts get keep-alive (Space)"
-                                               FontSize="9"
-                                               Foreground="{DynamicResource MutedTextBrush}"
-                                               Margin="0,3,0,0"
-                                               TextWrapping="Wrap" />
+                        <!-- Recipes & loadouts card — pick a saved routine, check which alts it
+                             runs on via the checkbox on each assignment row below, hit RUN.
+                             Explicit selection only: no popup, nothing auto-wiped. -->
+                        <Border Grid.Row="0"
+                                Background="{DynamicResource RowBgBrush}"
+                                BorderBrush="{DynamicResource DividerBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="11,9">
+                            <StackPanel>
+                                <TextBlock Text="RECIPES &amp; LOADOUTS"
+                                           FontFamily="{StaticResource MonoFont}"
+                                           FontSize="9"
+                                           Foreground="{DynamicResource CyanBrush}" />
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
 
-                                    <!-- Routine (recipe/loadout) run strip — pick a saved routine, check
-                                         which alts it runs on via the checkbox on each row below, hit RUN.
-                                         Explicit selection only: no popup, nothing auto-wiped. -->
-                                    <Grid Margin="0,10,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <ComboBox Grid.Column="0"
-                                                  Style="{StaticResource ThemedComboBox}"
+                                    <!-- Picker + ghost placeholder overlay. The TextBlock sits on top
+                                         of the (non-editable) ComboBox, matching its font/size/padding,
+                                         and only shows while SelectedRoutine is null. -->
+                                    <Grid Grid.Column="0" Margin="0,0,8,0">
+                                        <ComboBox Style="{StaticResource ThemedComboBox}"
                                                   ItemsSource="{Binding SavedRoutines}"
                                                   DisplayMemberPath="Name"
                                                   SelectedItem="{Binding SelectedRoutine, Mode=TwoWay}"
-                                                  ToolTip="Pick a saved recipe or loadout to run"
-                                                  Margin="0,0,8,0" />
-                                        <Button Grid.Column="1"
-                                                Command="{Binding ToggleRoutineRunCommand}"
-                                                ToolTip="Run the selected routine on the checked alts below, or stop the active run (Ctrl+Shift+L)"
-                                                Padding="14,6">
-                                            <Button.Style>
-                                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                  ToolTip="Pick a saved recipe or loadout to run" />
+                                        <TextBlock Text="Pick a saved recipe or loadout to run"
+                                                   FontFamily="{StaticResource BodyFont}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   Margin="8,6"
+                                                   VerticalAlignment="Center"
+                                                   IsHitTestVisible="False">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
                                                     <Style.Triggers>
-                                                        <!-- Swap to outlined magenta while running, same treatment as
-                                                             the PLAY/STOP toggle, so RUN vs STOP reads at a glance. -->
-                                                        <DataTrigger Binding="{Binding IsRoutineRunning}" Value="True">
-                                                            <Setter Property="Background" Value="Transparent" />
-                                                            <Setter Property="Foreground" Value="{DynamicResource MagentaBrush}" />
-                                                            <Setter Property="BorderBrush" Value="{DynamicResource MagentaBrush}" />
-                                                            <Setter Property="BorderThickness" Value="1" />
+                                                        <DataTrigger Binding="{Binding SelectedRoutine}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Visible" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </Button.Style>
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding RoutineRunButtonLabel}" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                                                <TextBlock Text="Ctrl+Shift+L" FontSize="9" Opacity="0.7" Margin="0,2,0,0" HorizontalAlignment="Center" />
-                                            </StackPanel>
-                                        </Button>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </Grid>
-                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                        <TextBlock Text="target alts:"
-                                                   FontFamily="{StaticResource MonoFont}"
-                                                   FontSize="8"
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   VerticalAlignment="Center"
-                                                   Margin="0,0,8,0" />
-                                        <Button Content="Select all"
-                                                Style="{StaticResource SecondaryButton}"
-                                                Command="{Binding SelectAllRoutineAltsCommand}"
-                                                FontSize="9"
-                                                Padding="9,4"
-                                                Margin="0,0,6,0" />
-                                        <Button Content="Select none"
-                                                Style="{StaticResource SecondaryButton}"
-                                                Command="{Binding SelectNoneRoutineAltsCommand}"
-                                                FontSize="9"
-                                                Padding="9,4" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
 
-                            <!-- Assignment rows -->
-                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Assignments}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Margin="6,3"
-                                                    CornerRadius="5"
-                                                    Padding="10,7"
-                                                    Cursor="Hand"
-                                                    MouseLeftButtonDown="OnAssignmentRowClicked">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{DynamicResource BgBrush}" />
-                                                        <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+                                    <Button Grid.Column="1"
+                                            Command="{Binding ToggleRoutineRunCommand}"
+                                            ToolTip="Run the selected routine on the checked alts below, or stop the active run (Ctrl+Shift+L)"
+                                            Padding="14,6">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                <Style.Triggers>
+                                                    <!-- Swap to outlined magenta while running, same treatment as
+                                                         the PLAY/STOP toggle, so RUN vs STOP reads at a glance. -->
+                                                    <DataTrigger Binding="{Binding IsRoutineRunning}" Value="True">
+                                                        <Setter Property="Background" Value="Transparent" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource MagentaBrush}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource MagentaBrush}" />
                                                         <Setter Property="BorderThickness" Value="1" />
-                                                        <Style.Triggers>
-                                                            <!-- Active alt during cycle: cyan outline + tint so the row
-                                                                 being played reads at a glance without window-hopping. -->
-                                                            <DataTrigger Value="True">
-                                                                <DataTrigger.Binding>
-                                                                    <MultiBinding Converter="{StaticResource IntEquals}" Mode="OneWay">
-                                                                        <Binding Path="Alt.Pid" Mode="OneWay" />
-                                                                        <Binding Path="DataContext.CurrentRunnerAltPid"
-                                                                                 RelativeSource="{RelativeSource AncestorType=Window}"
-                                                                                 Mode="OneWay" />
-                                                                    </MultiBinding>
-                                                                </DataTrigger.Binding>
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
-                                                                <Setter Property="BorderThickness" Value="2" />
-                                                                <Setter Property="Background" Value="{DynamicResource RowHoverBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="Auto" />
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <!-- Routine-target checkbox — independent of the macro assignment
-                                                         at right; both coexist on the same row. Handles its own click
-                                                         (WPF marks the bubbling MouseLeftButtonDown Handled inside
-                                                         ButtonBase), so it never also fires the row's
-                                                         OnAssignmentRowClicked macro-assign toggle below. -->
-                                                    <CheckBox Grid.Column="0"
-                                                              IsChecked="{Binding IsCheckedForRoutine, Mode=TwoWay}"
-                                                              VerticalAlignment="Center"
-                                                              Margin="0,0,8,0"
-                                                              ToolTip="Target this alt for the next routine RUN" />
-                                                    <StackPanel Grid.Column="1">
-                                                        <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
-                                                        <TextBlock Text="{Binding DisplayMacroName}"
-                                                                   FontSize="10"
-                                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                                   Margin="0,2,0,0" />
-                                                    </StackPanel>
-                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <!-- Soft mismatch warning — macro recorded in a different game.
-                                                             Advisory only; playback is never blocked. -->
-                                                        <Border Background="{DynamicResource RowBgBrush}"
-                                                                BorderBrush="{DynamicResource MagentaBrush}"
-                                                                BorderThickness="1"
-                                                                CornerRadius="3"
-                                                                Padding="6,2"
-                                                                Margin="0,0,6,0"
-                                                                ToolTip="{Binding GameMismatchHint}"
-                                                                Visibility="{Binding HasGameMismatch, Converter={StaticResource BoolToVisibility}}">
-                                                            <TextBlock Text="≠ GAME"
-                                                                       FontFamily="{StaticResource MonoFont}"
-                                                                       FontSize="8"
-                                                                       Foreground="{DynamicResource MagentaBrush}"
-                                                                       FontWeight="SemiBold" />
-                                                        </Border>
-                                                        <Border Background="{DynamicResource RowBgBrush}"
-                                                                BorderBrush="{DynamicResource CyanBrush}"
-                                                                BorderThickness="1"
-                                                                CornerRadius="3"
-                                                                Padding="6,2"
-                                                                Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
-                                                            <TextBlock Text="ASSIGNED"
-                                                                       FontSize="8"
-                                                                       Foreground="{DynamicResource CyanBrush}"
-                                                                       FontWeight="SemiBold" />
-                                                        </Border>
-                                                    </StackPanel>
-                                                </Grid>
-                                            </Border>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding RoutineRunButtonLabel}" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                            <TextBlock Text="Ctrl+Shift+L" FontSize="9" Opacity="0.7" Margin="0,2,0,0" HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <TextBlock Text="target alts:"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               FontSize="8"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0" />
+                                    <Button Content="Select all"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding SelectAllRoutineAltsCommand}"
+                                            FontSize="9"
+                                            Padding="9,4"
+                                            Margin="0,0,6,0" />
+                                    <Button Content="Select none"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding SelectNoneRoutineAltsCommand}"
+                                            FontSize="9"
+                                            Padding="9,4" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Assignments + activity card -->
+                        <Border Grid.Row="2"
+                                Background="{DynamicResource RowBgBrush}"
+                                BorderBrush="{DynamicResource DividerBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /> <!-- assignments header -->
+                                    <RowDefinition Height="*" />    <!-- assignment rows -->
+                                    <RowDefinition Height="Auto" /> <!-- activity header -->
+                                    <RowDefinition Height="150" />  <!-- activity log -->
+                                </Grid.RowDefinitions>
+
+                                <!-- Assignments header -->
+                                <Border Grid.Row="0" Padding="11,9,11,7">
+                                    <StackPanel>
+                                        <TextBlock Text="ASSIGNMENTS"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   FontSize="9"
+                                                   Foreground="{DynamicResource CyanBrush}" />
+                                        <TextBlock Text="Click a macro to mark it · click an alt row to assign · unassigned alts get keep-alive (Space)"
+                                                   FontSize="9"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   Margin="0,3,0,0"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Assignment rows -->
+                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding Assignments}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Margin="6,3"
+                                                        CornerRadius="5"
+                                                        Padding="10,7"
+                                                        Cursor="Hand"
+                                                        MouseLeftButtonDown="OnAssignmentRowClicked">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="{DynamicResource BgBrush}" />
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+                                                            <Setter Property="BorderThickness" Value="1" />
+                                                            <Style.Triggers>
+                                                                <!-- Active alt during cycle: cyan outline + tint so the row
+                                                                     being played reads at a glance without window-hopping. -->
+                                                                <DataTrigger Value="True">
+                                                                    <DataTrigger.Binding>
+                                                                        <MultiBinding Converter="{StaticResource IntEquals}" Mode="OneWay">
+                                                                            <Binding Path="Alt.Pid" Mode="OneWay" />
+                                                                            <Binding Path="DataContext.CurrentRunnerAltPid"
+                                                                                     RelativeSource="{RelativeSource AncestorType=Window}"
+                                                                                     Mode="OneWay" />
+                                                                        </MultiBinding>
+                                                                    </DataTrigger.Binding>
+                                                                    <Setter Property="BorderBrush" Value="{DynamicResource CyanBrush}" />
+                                                                    <Setter Property="BorderThickness" Value="2" />
+                                                                    <Setter Property="Background" Value="{DynamicResource RowHoverBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <!-- Routine-target checkbox — independent of the macro assignment
+                                                             at right; both coexist on the same row. Handles its own click
+                                                             (WPF marks the bubbling MouseLeftButtonDown Handled inside
+                                                             ButtonBase), so it never also fires the row's
+                                                             OnAssignmentRowClicked macro-assign toggle below. -->
+                                                        <CheckBox Grid.Column="0"
+                                                                  IsChecked="{Binding IsCheckedForRoutine, Mode=TwoWay}"
+                                                                  VerticalAlignment="Center"
+                                                                  Margin="0,0,8,0"
+                                                                  ToolTip="Target this alt for the next routine RUN" />
+                                                        <StackPanel Grid.Column="1">
+                                                            <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
+                                                            <TextBlock Text="{Binding DisplayMacroName}"
+                                                                       FontSize="10"
+                                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                                       Margin="0,2,0,0" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <!-- Soft mismatch warning — macro recorded in a different game.
+                                                                 Advisory only; playback is never blocked. -->
+                                                            <Border Background="{DynamicResource RowBgBrush}"
+                                                                    BorderBrush="{DynamicResource MagentaBrush}"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="3"
+                                                                    Padding="6,2"
+                                                                    Margin="0,0,6,0"
+                                                                    ToolTip="{Binding GameMismatchHint}"
+                                                                    Visibility="{Binding HasGameMismatch, Converter={StaticResource BoolToVisibility}}">
+                                                                <TextBlock Text="≠ GAME"
+                                                                           FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="8"
+                                                                           Foreground="{DynamicResource MagentaBrush}"
+                                                                           FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <Border Background="{DynamicResource RowBgBrush}"
+                                                                    BorderBrush="{DynamicResource CyanBrush}"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="3"
+                                                                    Padding="6,2"
+                                                                    Visibility="{Binding HasMacro, Converter={StaticResource BoolToVisibility}}">
+                                                                <TextBlock Text="ASSIGNED"
+                                                                           FontSize="8"
+                                                                           Foreground="{DynamicResource CyanBrush}"
+                                                                           FontWeight="SemiBold" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+
+                                <!-- Activity header -->
+                                <Border Grid.Row="2"
+                                        Padding="11,8,11,4"
+                                        BorderBrush="{DynamicResource DividerBrush}"
+                                        BorderThickness="0,1,0,0">
+                                    <TextBlock Text="ACTIVITY"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               FontSize="9"
+                                               Foreground="{DynamicResource MutedTextBrush}" />
+                                </Border>
+
+                                <!-- Activity log -->
+                                <ListBox Grid.Row="3"
+                                         ItemsSource="{Binding StatusLines}"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource MutedTextBrush}"
+                                         FontFamily="{StaticResource MonoFont}"
+                                         FontSize="10"
+                                         BorderThickness="0"
+                                         Margin="4,0,4,4"
+                                         HorizontalContentAlignment="Stretch"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-
-                            <!-- Activity header -->
-                            <Border Grid.Row="2"
-                                    Padding="11,8,11,4"
-                                    BorderBrush="{DynamicResource DividerBrush}"
-                                    BorderThickness="0,1,0,0">
-                                <TextBlock Text="ACTIVITY"
-                                           FontFamily="{StaticResource MonoFont}"
-                                           FontSize="9"
-                                           Foreground="{DynamicResource MutedTextBrush}" />
-                            </Border>
-
-                            <!-- Activity log -->
-                            <ListBox Grid.Row="3"
-                                     ItemsSource="{Binding StatusLines}"
-                                     Background="Transparent"
-                                     Foreground="{DynamicResource MutedTextBrush}"
-                                     FontFamily="{StaticResource MonoFont}"
-                                     FontSize="10"
-                                     BorderThickness="0"
-                                     Margin="4,0,4,4"
-                                     HorizontalContentAlignment="Stretch"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" />
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="Padding" Value="8,2" />
-                                        <Setter Property="Background" Value="Transparent" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                            </ListBox>
-                        </Grid>
-                    </Border>
+                                    </ListBox.ItemTemplate>
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Padding" Value="8,2" />
+                                            <Setter Property="Background" Value="Transparent" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+                    </Grid>
                 </Grid>
 
                 <!-- Row 3: footer -->
