@@ -41,6 +41,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
     private (int W, int H)? _recordingClientSize;
+    private bool? _recordingMaximized;
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
@@ -621,6 +622,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 clientAnchorHwnd: anchorHwnd);
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
+            _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
             _recordingBoundAccount = account;
             // Presence fills game identity AFTER the launch event (0.4.0 contract
             // semantics), so the registry entry captured above may carry no game
@@ -687,6 +689,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             CoordSpace: isClientSpace ? Macro.CoordSpaceClient : Macro.CoordSpaceScreen,
             RecordedClientW: isClientSpace ? _recordingClientSize?.W : null,
             RecordedClientH: isClientSpace ? _recordingClientSize?.H : null,
+            RecordedMaximized: isClientSpace ? _recordingMaximized : null,
             RecordedPlaceId: boundFresh is { PlaceId: > 0 } ? boundFresh.PlaceId : null,
             RecordedGameName: string.IsNullOrEmpty(boundFresh?.PlaceName) ? null : boundFresh!.PlaceName);
 
@@ -694,6 +697,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         {
             Store.Save(macro);
             _recordingClientSize = null;
+            _recordingMaximized = null;
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
