@@ -38,6 +38,12 @@ internal sealed class WindowMetrics : IWindowMetrics
 
     public bool Restore(IntPtr hwnd) { ShowWindow(hwnd, SW_RESTORE); return true; }
 
+    public void Maximize(IntPtr hwnd) => ShowWindow(hwnd, SW_MAXIMIZE);
+
+    public void RestoreDown(IntPtr hwnd) => ShowWindow(hwnd, SW_RESTORE);
+
+    public bool IsMaximized(IntPtr hwnd) => IsZoomed(hwnd);
+
     public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd)
     {
         var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -59,6 +65,7 @@ internal sealed class WindowMetrics : IWindowMetrics
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_MINIMIZE = 6;
+    private const int SW_MAXIMIZE = 3;
     private const int SW_RESTORE = 9;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -95,6 +102,10 @@ internal sealed class WindowMetrics : IWindowMetrics
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsZoomed(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);

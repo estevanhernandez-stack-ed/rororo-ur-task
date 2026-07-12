@@ -40,6 +40,9 @@ public class MacroPlayerClientSpaceTests
         public bool Minimize(IntPtr hwnd) => true;
         public bool Restore(IntPtr hwnd) => true;
         public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => (0, 0, 2560, 1440);
+        public void Maximize(IntPtr hwnd) { }
+        public void RestoreDown(IntPtr hwnd) { }
+        public bool IsMaximized(IntPtr hwnd) => false;
     }
 
     // Single mouse event used to trip the "macro has mouse events" gate in tests that

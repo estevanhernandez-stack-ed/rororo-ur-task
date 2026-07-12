@@ -189,43 +189,77 @@ internal sealed class MacroPlayer : IMacroPlayer
 
     /// <summary>
     /// Ensure the target window's client area matches the macro's recorded size.
-    /// One SetWindowPos sized by the client delta, then re-measure — chrome is
-    /// constant per style+DPI, so one pass converges. The window is intentionally
-    /// left resized (round-robin then resizes each alt once, not per cycle).
-    /// Returns null to proceed, or a Refused result.
+    ///
+    /// Maximize-first is the mechanism, not a nicety: a maximized/near-full-screen
+    /// recording has a client size at (or past) the window's max-track size, and a
+    /// plain <c>SetWindowPos</c> is clamped by the OS to that ceiling — it silently
+    /// caps the resize below the recorded size no matter where the window sits
+    /// first (an earlier "move up, then resize" attempt confirmed this live: the
+    /// ceiling is a SIZE limit, not a position problem, so moving first changes
+    /// nothing). <c>ShowWindow(SW_MAXIMIZE)</c> is exempt from the max-track
+    /// ceiling and always anchors the window top-left on its monitor, so it's used
+    /// to blow past the ceiling first; playback then either keeps the maximized
+    /// state (macro recorded maximized) or restores down and fits to the exact
+    /// recorded size (macro recorded at a smaller, normal size).
+    ///
+    /// The window is intentionally left resized (round-robin then resizes each alt
+    /// once, not per cycle). Returns null to proceed, or a Refused result.
     /// </summary>
     private PlaybackResult? EnsureClientSize(IntPtr hwnd, Macro macro)
     {
+        const int Slop = 2; // px — maximized client size can be off by a pixel or two from DPI rounding.
+
         if (macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
             return PlaybackResult.Refused("Client-space macro is missing its recorded client size — re-record it.");
         var current = _metrics.ClientSize(hwnd);
         if (current is null) return PlaybackResult.Refused("Could not read target window size.");
         if (current.Value == (rw, rh)) return null;
 
-        var outer = _metrics.OuterRect(hwnd);
-        if (outer is null) return PlaybackResult.Refused("Could not read target window rect.");
-        var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), current.Value, (rw, rh));
+        // Maximize first — reaches sizes past the max-track ceiling and anchors
+        // the window top-left, regardless of where it currently sits.
+        _metrics.Maximize(hwnd);
+        var maximized = _metrics.ClientSize(hwnd);
+        if (maximized is null)
+            return PlaybackResult.Refused("Could not read target window size after maximize.");
+        var (mw, mh) = maximized.Value;
 
-        // Resizing alone can push the enlarged window below the taskbar if it was
-        // sitting low on screen — clamp position so the whole window (and every
-        // client coordinate the macro clicks) stays inside the work area.
+        if (Math.Abs(mw - rw) <= Slop && Math.Abs(mh - rh) <= Slop)
+        {
+            // Recorded maximized/full-screen — the maximized client area already
+            // matches. Leave it maximized; nothing further to do.
+            return null;
+        }
+
+        if (mw < rw || mh < rh)
+        {
+            // Recorded size exceeds even the maximized window — a different
+            // monitor/DPI than at record time. Restoring down would only shrink
+            // further, so there's nothing left to try.
+            return PlaybackResult.Refused(
+                $"Recorded client size {rw}x{rh} exceeds the maximized window size {mw}x{mh} — different monitor/DPI than at record time.");
+        }
+
+        // Maximized is bigger than the recorded (normal-size) macro — restore to a
+        // normal, resizable window and fit it to the exact recorded client size,
+        // positioned at the work area's top-left so there's full room to grow into.
+        _metrics.RestoreDown(hwnd);
+        var outer = _metrics.OuterRect(hwnd);
+        var restoredClient = _metrics.ClientSize(hwnd);
+        if (outer is null || restoredClient is null)
+            return PlaybackResult.Refused("Could not read target window rect after restore.");
+        var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), restoredClient.Value, (rw, rh));
+
         var work = _metrics.WorkAreaFor(hwnd);
-        var (cx, cy, fits) = WindowSpaceMath.ClampToWorkArea((outer.Value.X, outer.Value.Y, tw, th), work);
+        var (_, _, fits) = WindowSpaceMath.ClampToWorkArea((work.X, work.Y, tw, th), work);
         if (!fits)
             return PlaybackResult.Refused(
                 $"Recorded window size {rw}x{rh} is larger than the screen work area — can't fit it above the taskbar. Re-record smaller or use a bigger monitor.");
-        // Move to the clamped position FIRST (at the current size), THEN resize.
-        // Resizing in place while the window sits low gets clamped by the OS to what
-        // fits from the window's current top — so the recorded size is never reached
-        // and positioning fails. The window has to move up before it can grow.
-        if ((cx, cy) != (outer.Value.X, outer.Value.Y))
-            _metrics.SetOuterRect(hwnd, cx, cy, outer.Value.W, outer.Value.H);
-        _metrics.SetOuterRect(hwnd, cx, cy, tw, th);
+        _metrics.SetOuterRect(hwnd, work.X, work.Y, tw, th);
 
         var after = _metrics.ClientSize(hwnd);
-        if (after != (rw, rh))
+        if (after is null || Math.Abs(after.Value.W - rw) > Slop || Math.Abs(after.Value.H - rh) > Slop)
             return PlaybackResult.Refused(
-                $"Couldn't resize target to recorded client size {rw}x{rh} (got {after?.W}x{after?.H}) — monitor too small or window minimum.");
+                $"Couldn't set target to recorded client size {rw}x{rh} (got {after?.W}x{after?.H}).");
         return null;
     }
 

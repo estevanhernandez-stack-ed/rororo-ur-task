@@ -29,6 +29,9 @@ public class WindowArrangeServiceTests
         public bool Minimize(IntPtr hwnd) { MinimizeCalls.Add(hwnd); return true; }
         public bool Restore(IntPtr hwnd) { RestoreCalls.Add(hwnd); return true; }
         public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => (0, 0, 2000, 1200);
+        public void Maximize(IntPtr hwnd) { }
+        public void RestoreDown(IntPtr hwnd) { }
+        public bool IsMaximized(IntPtr hwnd) => false;
     }
 
     private static AccountRegistry RegistryWith(params int[] pids)
