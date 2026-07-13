@@ -96,6 +96,11 @@ public class CadenceSchedulerTests
 
     /// Compat guard: an all-Active squad must still round-robin back-to-back,
     /// exactly as the old spin loop did. Actives are always runnable.
+    ///
+    /// Also locks the LIST-ORDER contract: Decide is stateless and returns the FIRST
+    /// Active it encounters (see the XML doc on Decide). Nothing here should ever change
+    /// to picking by, say, lowest pid or least-recently-run — that's the caller's job via
+    /// list rotation. If a future "optimization" reorders the pick, this must catch it.
     [Fact]
     public void AllActive_AlwaysRunsAnActive_NeverSleeps()
     {
@@ -103,13 +108,37 @@ public class CadenceSchedulerTests
 
         var d = CadenceScheduler.Decide(alts, nowMs: 0, nextActivePassCostMs: 5 * Min);
 
-        Assert.IsType<CadenceDecision.RunActive>(d);
+        var run = Assert.IsType<CadenceDecision.RunActive>(d);
+        Assert.Same(alts[0], run.Alt);   // FIRST in list order, not lowest pid / any other rule
     }
 
+    /// Anti-hot-spin guard: WakeAtMs must be strictly greater than nowMs. A regression to
+    /// SleepUntil(nowMs) type-checks fine but is a genuine 100%-CPU hot spin — the caller
+    /// sleeps for `WakeAtMs - nowMs` with no clamping, so a zero or negative gap means the
+    /// loop never actually sleeps.
     [Fact]
     public void NoAltsAtAll_Sleeps()
     {
-        var d = CadenceScheduler.Decide(Array.Empty<ScheduledAlt>(), nowMs: 0, nextActivePassCostMs: 0);
-        Assert.IsType<CadenceDecision.SleepUntil>(d);
+        const long nowMs = 0;
+        var d = CadenceScheduler.Decide(Array.Empty<ScheduledAlt>(), nowMs, nextActivePassCostMs: 0);
+        var sleep = Assert.IsType<CadenceDecision.SleepUntil>(d);
+        Assert.True(sleep.WakeAtMs > nowMs, "WakeAtMs must be strictly greater than nowMs or the loop hot-spins.");
+    }
+
+    /// Finding 1 (overflow): nextActivePassCostMs is derived from Macro.Duration, which comes
+    /// from the last event's timestamp in a user-editable on-disk JSON macro file. A
+    /// pathological value must not overflow `nowMs + nextActivePassCostMs` to negative — if it
+    /// did, `DueAtMs <= <negative>` would be false for every alt, nothing would ever look
+    /// urgent, RunActive would win forever, and every keep-alive would get silently kicked.
+    /// The urgency check must saturate instead, so a due keep-alive still gets serviced.
+    [Fact]
+    public void PathologicalNextActivePassCost_DoesNotOverflow_DueKeepAliveStillServiced()
+    {
+        var alts = new ScheduledAlt[] { Active(1), KeepAlive(2, dueAtMs: 5 * Min) };
+
+        var d = CadenceScheduler.Decide(alts, nowMs: 5 * Min, nextActivePassCostMs: long.MaxValue);
+
+        var svc = Assert.IsType<CadenceDecision.ServiceKeepAlive>(d);
+        Assert.Equal(2, svc.Alt.Assignment.Alt.Pid);
     }
 }

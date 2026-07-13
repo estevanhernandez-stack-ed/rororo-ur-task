@@ -41,15 +41,76 @@ internal abstract record CadenceDecision
 ///               the alt.
 /// So keep-alives win ties, but only when they actually need to — which is what lets
 /// the loop SLEEP the rest of the time instead of stealing focus every 1.25s.
+///
+/// The safety margin against Roblox's 20-minute idle floor does NOT live here — it's
+/// baked into the fire intervals in <see cref="KeepAliveIntervals"/> (11/17/12 minutes).
+/// This scheduler just reacts to whatever <c>DueAtMs</c> it's handed. A maintainer
+/// tightening those intervals toward 20 minutes erodes the gap-fit boundary this class
+/// depends on — backstop games (17-minute interval) only have ~3 minutes of headroom
+/// to begin with.
 /// </summary>
 internal static class CadenceScheduler
 {
+    /// <summary>
+    /// Decides what the runner should do next: service an overdue-or-soon-due keep-alive,
+    /// run the next active macro pass, or sleep until nothing needs attention.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Stateless and does not rotate the list.</b> When multiple Active alts are present,
+    /// this always returns the FIRST one encountered in <paramref name="alts"/> order. Fair
+    /// round-robin across Active alts is entirely the CALLER's responsibility — the caller
+    /// must rotate/requeue the serviced alt (e.g. move it to the back of the list) between
+    /// calls, or every alt after the first Active silently starves.
+    /// </para>
+    /// <para>
+    /// <b><paramref name="nextActivePassCostMs"/> must be a conservative UPPER BOUND</b> on
+    /// how long one more Active pass would take — not an average, not a typical case. This
+    /// method is called BETWEEN passes and cannot preempt one already running, so the entire
+    /// hard-deadline guarantee for keep-alives rests on that estimate never being exceeded.
+    /// An estimate that's too low lets a keep-alive get scheduled behind an active pass that
+    /// outruns it, which is exactly the deadline miss this scheduler exists to prevent.
+    /// </para>
+    /// <para>
+    /// <b><see cref="CadenceDecision.SleepUntil.WakeAtMs"/> is always strictly greater than
+    /// <paramref name="nowMs"/>.</b> The caller sleeps for <c>WakeAtMs - nowMs</c> without
+    /// clamping to a minimum, so this invariant is what keeps that sleep from collapsing to
+    /// zero (or negative) and busy-spinning the loop.
+    /// </para>
+    /// </remarks>
+    /// <param name="alts">
+    /// Every alt currently under management, KeepAlive and Active mixed, in the caller's
+    /// chosen order. List order is significant — see the round-robin note above.
+    /// </param>
+    /// <param name="nowMs">Current monotonic time in milliseconds.</param>
+    /// <param name="nextActivePassCostMs">
+    /// A conservative upper bound, in milliseconds, on how long one more Active macro pass
+    /// would take. Used as the gap-fit lookahead: a keep-alive is urgent if it would miss its
+    /// deadline should one more Active pass run before it. Pass 0 when no Active alt is queued.
+    /// Must be <c>&gt;= 0</c>.
+    /// </param>
+    /// <returns>
+    /// The single next action: <see cref="CadenceDecision.ServiceKeepAlive"/> for the most
+    /// overdue urgent keep-alive, else <see cref="CadenceDecision.RunActive"/> for the first
+    /// Active in list order, else <see cref="CadenceDecision.SleepUntil"/> until the earliest
+    /// keep-alive deadline (or a short default poll if there are no keep-alives at all).
+    /// </returns>
     public static CadenceDecision Decide(
         IReadOnlyList<ScheduledAlt> alts, long nowMs, long nextActivePassCostMs)
     {
         ScheduledAlt? urgent = null;
         ScheduledAlt? nextActive = null;
         long earliestDue = long.MaxValue;
+
+        // Saturating, not raw `+`: nextActivePassCostMs is derived from Macro.Duration,
+        // which comes from the last event's timestamp in a user-editable on-disk JSON
+        // macro file. A pathological duration (e.g. long.MaxValue) would otherwise
+        // overflow nowMs + nextActivePassCostMs to negative, making `DueAtMs <= <negative>`
+        // false for every alt — nothing would ever look urgent, RunActive would win forever,
+        // and every keep-alive would get silently kicked. Clamping to long.MaxValue instead
+        // keeps the urgency check unconditionally true for any real DueAtMs, which is the
+        // safe failure mode here.
+        long urgencyHorizonMs = SaturatingAdd(nowMs, nextActivePassCostMs);
 
         foreach (var alt in alts)
         {
@@ -59,7 +120,7 @@ internal static class CadenceScheduler
 
                 // Would this alt miss its deadline if we ran one more active pass first?
                 // (With no actives, nextActivePassCostMs is 0 and this is simply "is it due".)
-                if (alt.DueAtMs <= nowMs + nextActivePassCostMs)
+                if (alt.DueAtMs <= urgencyHorizonMs)
                 {
                     // Earliest deadline first — the most overdue alt is the most at risk.
                     if (urgent is null || alt.DueAtMs < urgent.DueAtMs) urgent = alt;
@@ -75,6 +136,19 @@ internal static class CadenceScheduler
         if (nextActive is not null) return new CadenceDecision.RunActive(nextActive);
 
         // Nothing active, nothing due: SLEEP. This is the whole feature.
+        //
+        // earliestDue == long.MaxValue is the "no keep-alives exist at all" sentinel (the
+        // seed value never got overwritten by the loop above). It must stay reserved for
+        // that meaning — if a future change ever wants long.MaxValue as a legitimate
+        // DueAtMs (e.g. to encode a paused alt that's never due), this fallback needs to
+        // change too, or a paused alt would be indistinguishable from "no keep-alives".
         return new CadenceDecision.SleepUntil(earliestDue == long.MaxValue ? nowMs + 1_000 : earliestDue);
     }
+
+    /// <summary>
+    /// Adds two non-negative millisecond timestamps, clamping to <see cref="long.MaxValue"/>
+    /// instead of wrapping to negative on overflow.
+    /// </summary>
+    private static long SaturatingAdd(long a, long b)
+        => long.MaxValue - a < b ? long.MaxValue : a + b;
 }
