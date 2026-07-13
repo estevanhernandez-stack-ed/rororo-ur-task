@@ -287,10 +287,18 @@ public class AssignmentRunnerTests
         });
         fg.Resolver = () => alt2; // always return alt2 as foreground
 
+        // alt2 (succeeds) listed FIRST, alt1 (always fails) SECOND — deliberately, not
+        // the original assignment order. RunActiveAsync's focus-fail path now takes a
+        // bounded 30s backoff before yielding (the Active-side hot-spin fix), and this
+        // test's compat ctor runs on the REAL clock (real Task.Delay), not a fake one.
+        // With the failing alt first in round-robin order, that 30s real Sleep would
+        // block the loop before alt2 ever got a look, blowing well past this test's 5s
+        // real-time budget. Ordering the succeeding alt first guarantees it plays
+        // before alt1's failure (and backoff) is ever reached.
         var assignments = new List<Assignment>
         {
-            Assignment.WithDerivedRole(alt1, macro),
             Assignment.WithDerivedRole(alt2, macro),
+            Assignment.WithDerivedRole(alt1, macro),
         };
 
         var phases = new List<(int index, AssignmentPhase phase)>();
@@ -299,8 +307,12 @@ public class AssignmentRunnerTests
         runner.Progress += (_, p) =>
         {
             phases.Add((p.IndexInCycle, p.Phase));
-            // Cancel at the start of cycle 2 so we capture a complete first cycle.
-            if (p.Cycle == 2 && p.Phase == AssignmentPhase.Focusing) cts.Cancel();
+            // Cancel the instant alt1's Skipped fires, but only once alt2 has already
+            // played — cancelling here lands INSIDE RunActiveAsync's focus-fail branch,
+            // before its `await _deps.Sleep(FocusRetryBackoffMs, ct)` is entered, so
+            // that Sleep observes an already-cancelled token and returns immediately
+            // instead of genuinely backing off for 30 real seconds.
+            if (p.Phase == AssignmentPhase.Skipped && player.Calls.Count >= 1) cts.Cancel();
         };
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -309,8 +321,8 @@ public class AssignmentRunnerTests
         try { await runner.RunAsync(assignments, linked.Token); }
         catch (OperationCanceledException) { }
 
-        // alt1 should have been skipped (focus failed) in cycle 1
-        Assert.Contains(phases, p => p.phase == AssignmentPhase.Skipped && p.index == 0);
+        // alt1 is now second in list order, so its IndexInCycle is 1.
+        Assert.Contains(phases, p => p.phase == AssignmentPhase.Skipped && p.index == 1);
         // alt2 should have been played (focus succeeded) at least once
         Assert.True(player.Calls.Count >= 1, $"Expected at least 1 PlayAsync call for alt2, got {player.Calls.Count}");
         Assert.All(player.Calls, call => Assert.Equal(alt2.RobloxUserId, call.userId));

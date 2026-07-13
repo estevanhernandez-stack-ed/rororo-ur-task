@@ -46,10 +46,20 @@ public class CadenceRunnerTests
         public bool IsPlaying => false;
         public event EventHandler<PlaybackStartedArgs>? Started;
         public event EventHandler<PlaybackEndedArgs>? Ended;
-        public Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
+
+        // Test seam for the pass-cost ratchet: lets a macro's REAL cost diverge from
+        // its DECLARED Macro.Duration, mirroring what MacroPlayer.EnsureClientSize
+        // actually does in production — a synchronous Win32 window resize that costs
+        // real time but never shows up in the macro's recorded event data at all.
+        // Defaults to a no-op Sleep, so every test that doesn't set these is unaffected.
+        public long RealPlayCostMs { get; set; }
+        public Func<long, CancellationToken, Task> AdvanceClockBy { get; set; } = (_, _) => Task.CompletedTask;
+
+        public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
         {
             Plays.Add(targetUserId);
-            return Task.FromResult(PlaybackResult.Completed());
+            if (RealPlayCostMs > 0) await AdvanceClockBy(RealPlayCostMs, external).ConfigureAwait(false);
+            return PlaybackResult.Completed();
         }
         public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
             => Task.FromResult(PlaybackResult.Completed());
@@ -64,7 +74,8 @@ public class CadenceRunnerTests
 
     private sealed record Rig(
         AssignmentRunner Runner, FakeClock Clock, CancellationTokenSource Cts,
-        List<int> Taps, List<int> Focused, List<IntPtr> Restored, FakePlayer Player, Func<int> Iterations);
+        List<int> Taps, List<long> TapTimes, List<int> Focused, List<IntPtr> Restored,
+        FakePlayer Player, Func<int> Iterations);
 
     // Generous relative to any correctly gap-fit scenario in these tests (which need
     // at most low thousands of loop iterations for a simulated hour) — only a
@@ -84,9 +95,10 @@ public class CadenceRunnerTests
     {
         var clock = new FakeClock();
         var fg = new FakeForeground();
-        var player = new FakePlayer();
+        var player = new FakePlayer { AdvanceClockBy = clock.Sleep };
         var cts = new CancellationTokenSource();
         var taps = new List<int>();
+        var tapTimes = new List<long>();
         var focused = new List<int>();
         var restored = new List<IntPtr>();
         var currentPid = 0;
@@ -119,11 +131,12 @@ public class CadenceRunnerTests
             },
             CaptureForeground: () => new IntPtr(0xBEEF),     // sentinel: "the user's window"
             RestoreForeground: h => restored.Add(h),
-            SendKeepAlive: () => taps.Add(currentPid),       // counted, never injected
+            SendKeepAlive: () => { taps.Add(currentPid); tapTimes.Add(clock.NowMs); },  // counted, never injected
             KeepAliveIntervalMs: _ => keepAliveIntervalMs);
 
         return new Rig(
-            new AssignmentRunner(player, fg, deps), clock, cts, taps, focused, restored, player, () => iterations);
+            new AssignmentRunner(player, fg, deps), clock, cts, taps, tapTimes, focused, restored, player,
+            () => iterations);
     }
 
     /// THE regression. One keep-alive alt on a 12-minute interval, one simulated hour.
@@ -205,10 +218,24 @@ public class CadenceRunnerTests
     /// Active alt fully starved (zero farming). The guard must force real progress
     /// (run the Active) between repeat non-due looks at the same stuck keep-alive, so
     /// farming isn't starved even though the keep-alive itself never resolves.
+    ///
+    /// The Active macro is deliberately 15 minutes — LONGER than the 12-minute
+    /// keep-alive interval. That's the actual trigger condition for the livelock this
+    /// guard exists to stop: the gap-fit lookahead in <see cref="CadenceScheduler.Decide"/>
+    /// only ever re-flags a not-yet-due keep-alive as "urgent" when a single Active
+    /// pass could outrun the time remaining until it's genuinely due — which requires
+    /// passCost to be comparable to (here, greater than) the interval itself. A short
+    /// macro (e.g. 60s against a 12-minute interval) can never manufacture that
+    /// condition, so a test built on one is a TAUTOLOGY: it passes whether or not the
+    /// guard exists, because the guard's branch is never even reached. Verified by
+    /// hand: reverting the guard (always calling ServiceKeepAliveAsync directly,
+    /// dropping the gapFittedSinceActivePass forced-progress branch) turns this RED —
+    /// the Active alt is fully starved (zero plays) and the keep-alive is
+    /// re-attempted thousands of times without ever completing a pass in between.
     [Fact]
     public async Task KeepAliveVerifyAlwaysFails_DoesNotStarveActives_AndNeverTapsAGhostForeground()
     {
-        var active = new Assignment(Alt(1), MacroOfLength(60 * 1000), CadenceRole.Active);
+        var active = new Assignment(Alt(1), MacroOfLength(15 * Min), CadenceRole.Active);
         var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
         var assignments = new[] { active, keep };
 
@@ -223,7 +250,7 @@ public class CadenceRunnerTests
         var taps = new List<int>();
         var focused = new List<int>();
         var iterations = 0;
-        const long runForMs = 60 * Min;
+        const long runForMs = 90 * Min;
 
         var deps = new CadenceDeps(
             Focus: pid =>
@@ -253,7 +280,7 @@ public class CadenceRunnerTests
         catch (OperationCanceledException) { }
 
         Assert.Empty(taps);   // verify never once passes, so Space is never sent
-        Assert.True(player.Plays.Count > 5, "the Active alt must keep farming despite the stuck keep-alive");
+        Assert.True(player.Plays.Count >= 3, "the Active alt must keep farming despite the stuck keep-alive");
         Assert.True(iterations < MaxIterations, "hit the busy-spin tripwire — the guard didn't stop the hijack loop");
 
         // The core forward-progress invariant: the keep-alive may be re-attempted only
@@ -271,27 +298,81 @@ public class CadenceRunnerTests
     /// re-selecting the same overdue alt, ServiceKeepAliveAsync keeps failing focus
     /// synchronously, and the loop never calls Sleep at all, meaning even the clock
     /// never advances. That's not just a hijack, it's a 100%-CPU non-yielding hang.
-    /// The forward-progress guard's "no Active to fall back on" branch is what
-    /// converts this into the intended bounded 30s retry poll instead.
+    ///
+    /// Requires an Active alt with a pass cost >= the keep-alive interval, same as the
+    /// verify-fail test above and for the same reason: with ZERO Actives present,
+    /// NextActivePassCostMs is always 0, so Decide's urgency horizon collapses to
+    /// exactly `now` — "urgent via gap-fit" and "genuinely overdue" become the same
+    /// condition, and the guard's non-genuinely-overdue branch can never fire. A
+    /// keep-alive-only fixture literally cannot distinguish a guarded runner from an
+    /// unguarded one (this is the same fact that makes the guard's old
+    /// `firstActive is null` fallback dead code — removed as Minor-1). Verified by
+    /// hand: reverting the guard turns this RED too — the keep-alive is refocused
+    /// thousands of times with the Active fully starved.
     [Fact]
     public async Task KeepAliveFocusAlwaysFails_LoopYieldsInsteadOfSpinning()
     {
-        var alt = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
-        var rig = Build(new[] { alt }, runForMs: 60 * Min, focusOverride: _ => (false, "window not found"));
+        var active = new Assignment(Alt(1), MacroOfLength(15 * Min), CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+
+        // Custom rig, mirroring the verify-fail test above: Focus reports ok=FALSE for
+        // the keep-alive on every attempt (a crashed/closed alt's stale pid) but
+        // succeeds — and really lands — for the Active alt.
+        var clock = new FakeClock();
+        var fg = new FakeForeground();
+        var player = new FakePlayer();
+        var cts = new CancellationTokenSource();
+        var taps = new List<int>();
+        var focused = new List<int>();
+        var restored = new List<IntPtr>();
+        var iterations = 0;
+        const long runForMs = 90 * Min;
+
+        var deps = new CadenceDeps(
+            Focus: pid =>
+            {
+                focused.Add(pid);
+                if (pid == keep.Alt.Pid) return (false, "window not found");
+                fg.Current = active.Alt;
+                return (true, null);
+            },
+            ClockMs: () =>
+            {
+                if (Interlocked.Increment(ref iterations) > MaxIterations) cts.Cancel();
+                return clock.Now();
+            },
+            Sleep: (ms, ct) =>
+            {
+                var t = clock.Sleep(ms, ct);
+                if (clock.NowMs >= runForMs) cts.Cancel();
+                return t;
+            },
+            CaptureForeground: () => new IntPtr(0xBEEF),
+            RestoreForeground: h => restored.Add(h),
+            SendKeepAlive: () => taps.Add(2),
+            KeepAliveIntervalMs: _ => TwelveMin);
+
+        var runner = new AssignmentRunner(player, fg, deps);
 
         // Wall-clock safety net: a real regression here is a genuine synchronous
         // infinite loop, which no amount of fake-clock jumping will end on its own —
         // this bounds the test's own failure to a few seconds instead of a true hang.
-        var run = rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+        var run = runner.RunAsync(assignments, cts.Token);
         await run.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Empty(rig.Taps);                 // focus never once succeeds
-        Assert.True(rig.Iterations() < MaxIterations,
+        Assert.Empty(taps);                     // keep-alive focus never once succeeds
+        Assert.Empty(restored);                 // Minor-4: focus never landed, so nothing to restore
+        Assert.True(iterations < MaxIterations,
             "hit the busy-spin tripwire — a stuck focus never yielded to the clock");
-        // Bounded 30s retry, not a spin: roughly one attempt per 30s of simulated
-        // time, comfortably under a per-1.25s cadence over a simulated hour.
-        Assert.True(rig.Focused.Count < 500,
-            $"keep-alive focus attempted {rig.Focused.Count}x in a simulated hour — the spin loop is back");
+        Assert.True(player.Plays.Count >= 3, "the Active alt must keep farming despite the stuck keep-alive");
+
+        // Same forward-progress invariant as the verify-fail test: the keep-alive is
+        // re-attempted only once per intervening Active pass, never back-to-back.
+        var keepAliveFocusAttempts = focused.Count(p => p == keep.Alt.Pid);
+        Assert.True(keepAliveFocusAttempts <= player.Plays.Count + 1,
+            $"keep-alive was focused {keepAliveFocusAttempts}x against only {player.Plays.Count} Active passes — " +
+            "it was re-serviced without an intervening RunActive, the spin loop is back");
     }
 
     /// IMPORTANT regression: cancelling mid-settle (the 1s sleep between a successful
@@ -335,5 +416,110 @@ public class CadenceRunnerTests
 
         Assert.False(tapped, "cancellation landed before the tap — Space must not have been sent");
         Assert.Contains(new IntPtr(0xBEEF), restored);
+    }
+
+    /// <summary>
+    /// THE highest-value missing test: the pass-cost ratchet. A macro's DECLARED
+    /// duration (Macro.Duration, the last event's timestamp) is only an estimate —
+    /// MacroPlayer.EnsureClientSize does unmodeled synchronous Win32 window resizing
+    /// that never shows up in the macro's recorded events at all, so the REAL cost of
+    /// a pass can run far longer than what NextActivePassCostMs's static formula sees.
+    /// RunActiveAsync times every pass end to end and ratchets
+    /// ScheduledAlt.ObservedPassCostMs up so later lookaheads use the real number —
+    /// without that, a keep-alive's deadline can be missed by the full overrun of a
+    /// single pass, because Decide is only consulted BETWEEN passes and can't preempt
+    /// one already running past its estimate.
+    ///
+    /// Here the macro DECLARES 10 seconds but really costs 10 minutes (via
+    /// FakePlayer's AdvanceClockBy seam) against a 12-minute keep-alive interval.
+    /// Verified by hand: reverting the ratchet (NextActivePassCostMs returns just the
+    /// static estimate; RunActiveAsync's finally block no longer updates
+    /// ObservedPassCostMs) turns this RED — the first pass runs "for free" by the
+    /// static estimate's reckoning, so Decide lets it start right as the keep-alive
+    /// was approaching due, and the keep-alive doesn't get serviced until that whole
+    /// 10-minute pass finishes on top of however much of the interval had already
+    /// elapsed — comfortably past Roblox's 20-minute idle kick floor.
+    /// </summary>
+    [Fact]
+    public async Task ActivePassRealCostExceedsDeclaredDuration_RatchetKeepsKeepAliveGapWithinTheKickFloor()
+    {
+        var declaredMacro = MacroOfLength(10 * 1000);              // DECLARES 10 seconds
+        var active = new Assignment(Alt(1), declaredMacro, CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+
+        var rig = Build(assignments, runForMs: 60 * Min);
+        rig.Player.RealPlayCostMs = 10 * Min;                       // REALLY costs 10 minutes
+        rig.Player.AdvanceClockBy = rig.Clock.Sleep;
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.NotEmpty(rig.Player.Plays);                          // farming still happened
+        Assert.True(rig.TapTimes.Count >= 2, "need at least 2 taps to measure a gap");
+
+        var maxGapMs = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).Max();
+        Assert.True(maxGapMs < 20 * Min,
+            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — past Roblox's 20-minute idle kick floor");
+    }
+
+    /// <summary>
+    /// Design ruling, pinned rather than left as an accident: when a single Active
+    /// pass costs >= the keep-alive interval, CadenceScheduler.Decide's gap-fit
+    /// lookahead correctly refuses to ALWAYS preempt for urgency. Honoring urgency
+    /// unconditionally would recreate the livelock the forward-progress guard exists
+    /// to stop — farming would NEVER run, which is strictly worse than an occasional
+    /// stretched (but still safe) keep-alive gap, since the user would get zero
+    /// farming value at all. The 12-minute keep-alive interval carries 8 minutes of
+    /// margin against Roblox's real 20-minute idle kick floor, so a gap stretched by
+    /// one long pass is safe by design.
+    /// </summary>
+    [Fact]
+    public async Task PassCostAtOrAboveInterval_ActivesStillFarm_AndKeepAliveGapStaysUnderTheKickFloor()
+    {
+        var active = new Assignment(Alt(1), MacroOfLength(15 * Min), CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+        var rig = Build(assignments, runForMs: 90 * Min);
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.NotEmpty(rig.Player.Plays);   // (a) Active still farms — no starvation
+
+        Assert.True(rig.TapTimes.Count >= 2, "need at least 2 taps to measure a gap");
+        var maxGapMs = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).Max();
+        Assert.True(maxGapMs < 20 * Min,   // (b) the stretched gap stays under the kick floor
+            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — past Roblox's 20-minute idle kick floor");
+    }
+
+    /// <summary>
+    /// The Active-side mirror of KeepAliveFocusAlwaysFails_LoopYieldsInsteadOfSpinning:
+    /// a lone Active alt whose Roblox client crashed (a stale pid) fails Focus on
+    /// EVERY attempt. RunActiveAsync's focus-fail branch used to return with no await
+    /// at all — Decide keeps handing back the same always-runnable Active (Actives
+    /// have no DueAtMs gate the way keep-alives do), the fake clock never advances,
+    /// and nothing ever yields: a genuine 100%-CPU non-yielding hang, not just a
+    /// hijack. Measured before the fix: 200,002 iterations in ~47ms of wall time with
+    /// the simulated clock stuck at 0. The fix mirrors ServiceKeepAliveAsync's bounded
+    /// 30s backoff.
+    /// </summary>
+    [Fact]
+    public async Task ActiveFocusAlwaysFails_LoopYieldsInsteadOfSpinning()
+    {
+        var alt = new Assignment(Alt(1), MacroOfLength(60 * 1000), CadenceRole.Active);
+        var rig = Build(new[] { alt }, runForMs: 60 * Min, focusOverride: _ => (false, "window not found"));
+
+        // Wall-clock safety net: a real regression here is a genuine synchronous
+        // infinite loop, which no amount of fake-clock jumping will end on its own —
+        // this bounds the test's own failure to a few seconds instead of a true hang.
+        var run = rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Empty(rig.Player.Plays);        // focus never once succeeds, so nothing ever plays
+        Assert.True(rig.Iterations() < MaxIterations,
+            "hit the busy-spin tripwire — a stuck focus never yielded to the clock");
+        // Bounded 30s retry, not a spin: at most ~2 attempts per minute of simulated
+        // time, comfortably under a per-iteration cadence over a simulated hour.
+        Assert.True(rig.Focused.Count < 500,
+            $"Active focus attempted {rig.Focused.Count}x in a simulated hour — the spin loop is back");
     }
 }
