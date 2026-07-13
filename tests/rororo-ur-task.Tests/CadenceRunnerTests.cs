@@ -55,11 +55,18 @@ public class CadenceRunnerTests
         public long RealPlayCostMs { get; set; }
         public Func<long, CancellationToken, Task> AdvanceClockBy { get; set; } = (_, _) => Task.CompletedTask;
 
+        // CRITICAL 1 test seam: lets a test force PlayAsync to come back
+        // Refused/Aborted instead of Completed, mirroring what
+        // MacroPlayer.EnsureClientSize returning Refused synchronously looks like
+        // from AssignmentRunner's side. Defaults to Completed(), so every existing
+        // test that doesn't set this is unaffected.
+        public PlaybackResult Result { get; set; } = PlaybackResult.Completed();
+
         public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
         {
             Plays.Add(targetUserId);
             if (RealPlayCostMs > 0) await AdvanceClockBy(RealPlayCostMs, external).ConfigureAwait(false);
-            return PlaybackResult.Completed();
+            return Result;
         }
         public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
             => Task.FromResult(PlaybackResult.Completed());
@@ -221,21 +228,44 @@ public class CadenceRunnerTests
         Assert.True(rig.Player.Plays.Count > 5, "actives must run back-to-back, not sleep");
     }
 
+    /// <summary>
     /// Gap-fitting end to end: a long Active pass must not starve the keep-alive.
     /// The 5-minute macro means the lookahead sees a keep-alive coming due inside the
-    /// next pass and services it FIRST.
+    /// next pass and services it FIRST (against the default 12-minute interval).
+    ///
+    /// IMPORTANT 4 fix: this used to never set <see cref="FakePlayer.RealPlayCostMs"/>,
+    /// so the "5-minute" Active pass actually completed in ~0 simulated ms — every
+    /// assertion below passed whether or not the gap-fit lookahead this test claims
+    /// to cover was even wired up, because a pass costing nothing never competes
+    /// against the keep-alive's interval for anything. Its two siblings
+    /// (<see cref="PassCostAtOrAboveInterval_ActivesStillFarm_AndKeepAliveGapStaysUnderTheKickFloor"/>,
+    /// <see cref="SafeButStretchedGap_DoesNotWarn_FalsePositiveGuard"/>) already carry
+    /// the RealPlayCostMs treatment; this gives it the same, plus a gap assertion
+    /// instead of a bare NotEmpty. Verified by hand: commenting out the
+    /// RealPlayCostMs line below turns this back into the pre-fix tautology — every
+    /// assertion, including the new gap one, still passes GREEN (the pass completes
+    /// instantly, so the keep-alive just fires on its own ~12-minute cadence
+    /// regardless of any gap-fit behavior at all).
+    /// </summary>
     [Fact]
     public async Task LongActivePass_StillLetsTheKeepAliveFire()
     {
         var active = new Assignment(Alt(1), MacroOfLength(5 * Min), CadenceRole.Active);
         var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
-        var rig = Build(new[] { active, keep }, runForMs: 60 * Min);
+        var assignments = new[] { active, keep };
+        var rig = Build(assignments, runForMs: 60 * Min);
+        rig.Player.RealPlayCostMs = 5 * Min;   // REALLY costs 5 minutes, matching the declared duration
 
-        await rig.Runner.RunAsync(new[] { active, keep }, rig.Cts.Token);
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
 
         Assert.NotEmpty(rig.Player.Plays);                    // farming still happened
         Assert.NotEmpty(rig.Taps);                            // and the keep-alive still got fed
         Assert.All(rig.Taps, pid => Assert.Equal(2, pid));    // only the keep-alive alt is tapped
+
+        Assert.True(rig.TapTimes.Count >= 2, "need at least 2 taps to measure a gap");
+        var maxGapMs = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).Max();
+        Assert.True(maxGapMs < 20 * Min,
+            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — past Roblox's 20-minute idle kick floor");
     }
 
     /// CRITICAL regression, trigger 1 (the one that shipped): AttachAndFocus reports
@@ -556,6 +586,180 @@ public class CadenceRunnerTests
         // time, comfortably under a per-iteration cadence over a simulated hour.
         Assert.True(rig.Focused.Count < 500,
             $"Active focus attempted {rig.Focused.Count}x in a simulated hour — the spin loop is back");
+    }
+
+    /// <summary>
+    /// CRITICAL 1, the verify-fail quadrant: Focus reports ok=true (AttachAndFocus's
+    /// real contract whenever the target process merely HAS a main window) but the
+    /// foreground never actually flips to this alt — ServiceKeepAliveAsync's own doc
+    /// calls this "the MOST COMMON way a real service attempt fails," and before this
+    /// fix RunActiveAsync's verify-fail exit was a bare `return` with no backoff at
+    /// all. Decide has no DueAtMs gate for Active, so an unguarded exit here re-enters
+    /// Decide immediately and re-picks the SAME alt: a foreground steal roughly once a
+    /// second, forever — the exact bug this whole feature exists to kill.
+    ///
+    /// Build()'s Focus dep only stamps `fg.Current` when no <c>focusOverride</c> is
+    /// supplied — passing one that returns (true, null) without touching fg.Current
+    /// reproduces a permanently-stuck foreground-verify while Focus itself keeps
+    /// reporting success, deterministically.
+    ///
+    /// Verified by hand: reverting the verify-fail branch back to a bare `return`
+    /// (dropping the ConsecutiveFocusFailures increment, the warning, and the Sleep)
+    /// turns this RED on both bounds below — Focused climbs into the tens of
+    /// thousands and the iteration tripwire fires before the simulated hour ever
+    /// completes.
+    /// </summary>
+    [Fact]
+    public async Task ActiveVerifyAlwaysFails_DoesNotHijackForeground_BoundedBackoff()
+    {
+        var alt = new Assignment(Alt(1), MacroOfLength(60 * 1000), CadenceRole.Active);
+        var rig = Build(new[] { alt }, runForMs: 60 * Min, focusOverride: _ => (true, null));
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Warning) warnings.Add(p); };
+
+        // Wall-clock safety net, same rationale as ActiveFocusAlwaysFails above: a
+        // real regression here is a genuine synchronous infinite loop.
+        var run = rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Empty(rig.Player.Plays);   // verify never once passes, so PlayAsync is never reached
+        Assert.True(rig.Iterations() < MaxIterations,
+            "hit the busy-spin tripwire — a stuck foreground-verify never yielded to the clock");
+        Assert.True(rig.Focused.Count < 500,
+            $"Active focus attempted {rig.Focused.Count}x in a simulated hour despite the foreground never verifying — the spin loop is back");
+
+        // IMPORTANT 2: the Active path must surface the same "hasn't been
+        // focusable" warning a KeepAlive alt already gets, not vanish silently.
+        Assert.Contains(warnings, w => w.Reason is not null
+            && w.Reason.Contains("hasn't been focusable", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// CRITICAL 1, the always-Refused quadrant: Focus and the foreground-verify both
+    /// succeed — this alt IS genuinely focusable — but <c>PlayAsync</c> keeps coming
+    /// back Refused. This is a LIVE field path, not hypothetical:
+    /// <see cref="MacroPlayer"/>'s client-space preflight (<c>EnsureClientSize</c>)
+    /// returns Refused SYNCHRONOUSLY, with no waits, whenever a macro was recorded on
+    /// a bigger monitor than it's replaying on (the known ultrawide/window-size class
+    /// of failure). Before this fix: focus → 1s settle → verify ok → PlayAsync →
+    /// instant Refused → return → repeat — a foreground steal roughly once a SECOND
+    /// (bounded only by the mandatory 1s settle, since nothing else here ever
+    /// yielded), forever.
+    ///
+    /// Verified by hand: reverting the Refused/Aborted backoff (dropping the
+    /// ConsecutiveFocusFailures increment, the 3-strikes warning, and the Sleep,
+    /// leaving just the existing Refused progress emit) turns the Focused-count bound
+    /// below RED — the alt gets refocused on almost every one of the ~3,600
+    /// one-second beats in the simulated hour, comfortably over the 500 bound.
+    /// </summary>
+    [Fact]
+    public async Task ActiveAlwaysRefused_DoesNotHijackForeground_BoundedBackoff()
+    {
+        var alt = new Assignment(Alt(1), MacroOfLength(60 * 1000), CadenceRole.Active);
+        var rig = Build(new[] { alt }, runForMs: 60 * Min);
+        rig.Player.Result = PlaybackResult.Refused("stub: EnsureClientSize refused synchronously.");
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Warning) warnings.Add(p); };
+
+        var run = rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(rig.Player.Plays.Count > 0, "PlayAsync should have actually been attempted");
+        Assert.True(rig.Iterations() < MaxIterations,
+            "hit the busy-spin tripwire — a synchronously-refused PlayAsync never yielded to the clock");
+        Assert.True(rig.Focused.Count < 500,
+            $"Active focus attempted {rig.Focused.Count}x in a simulated hour despite PlayAsync refusing every time — the spin loop is back");
+
+        // IMPORTANT 2: repeated refusals get their own 3-strikes warning too — this
+        // alt WAS focusable, so it must not reuse the "hasn't been focusable" text.
+        Assert.Contains(warnings, w => w.Reason is not null
+            && w.Reason.Contains(alt.Alt.DisplayName, StringComparison.Ordinal)
+            && w.Reason.Contains("refused", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// CRITICAL 2 regression: an exception escaping the loop body (e.g.
+    /// MacroPlayer.PlayAsync throwing off a pathological on-disk
+    /// MacroEvent.TimestampMs — see MacroPlayer's Task.Delay cast) used to skip the
+    /// Stopped phase entirely, because the Stopped emit sat as the last line INSIDE
+    /// RunAsync's try block, after the loop, unreachable once the loop itself throws.
+    /// Stopped is the ONLY thing PluginRuntime hangs its ur-afk claim release off —
+    /// skipping it left the claim's 20s heartbeat rewriting a fresh heartbeatUtc
+    /// forever while nothing served the alts it claimed, and wedged
+    /// RecorderViewModel.IsRunnerActive (derived from the last progress Phase) in the
+    /// "running" state forever too.
+    ///
+    /// FakePlayer.AdvanceClockBy throwing simulates PlayAsync itself throwing (the
+    /// real ArgumentOutOfRangeException class of failure) — RunActiveAsync's own
+    /// catch only handles OperationCanceledException, so this propagates all the way
+    /// out of RunAsync, exactly the escape path Critical 2 describes.
+    ///
+    /// Verified by hand: reverting the fix (moving the Stopped emit back to the last
+    /// line of the try block, outside the finally) turns
+    /// <c>Assert.Contains(AssignmentPhase.Stopped, phases)</c> RED — Stopped never
+    /// fires when the exception is the reason the loop ends.
+    /// </summary>
+    [Fact]
+    public async Task ExceptionEscapingLoopBody_StillEmitsStoppedAndClearsIsRunning()
+    {
+        var alt = new Assignment(Alt(1), MacroOfLength(1_000), CadenceRole.Active);
+        var rig = Build(new[] { alt }, runForMs: 60 * Min);
+        rig.Player.RealPlayCostMs = 1;   // forces PlayAsync to actually invoke AdvanceClockBy
+        rig.Player.AdvanceClockBy = (_, _) => throw new ArgumentOutOfRangeException("delay");
+
+        var phases = new List<AssignmentPhase>();
+        rig.Runner.Progress += (_, p) => phases.Add(p.Phase);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token));
+
+        Assert.Contains(AssignmentPhase.Stopped, phases);
+        Assert.False(rig.Runner.IsRunning, "IsRunning must be false once the exception has unwound out of RunAsync");
+        Assert.False(rig.Runner.Abort(), "nothing should be left for Abort to cancel after the unwind");
+    }
+
+    /// <summary>
+    /// IMPORTANT 1 regression: the unschedulable-alt warning used to be computed
+    /// ONCE, up front, from the STATIC Macro.Duration estimate only — never
+    /// re-evaluated as <see cref="ScheduledAlt.ObservedPassCostMs"/> ratchets upward.
+    /// Concretely: a macro that DECLARES 2 minutes but really costs 25 minutes (an
+    /// unmodeled EnsureClientSize stall, say) against a 12-minute keep-alive interval
+    /// reads as safe up front (max(2min, 12min) = 12min, comfortably under the
+    /// 18-minute warn threshold) and would never warn — even once the ratchet learns
+    /// the real 25-minute cost and the realized keep-alive gap sails past Roblox's
+    /// 20-minute idle kick floor, silently, every cycle.
+    ///
+    /// Verified by hand: reverting the ratchet-triggered re-check (calling
+    /// CheckUnschedulableWarnings only once, up front, the way the original code
+    /// did) turns <c>Assert.Single(warnings)</c> below RED — zero warnings fire for
+    /// this exact scenario, because the static estimate alone never crosses the
+    /// threshold.
+    /// </summary>
+    [Fact]
+    public async Task RatchetedPassCost_TriggersUnschedulableWarning_NotJustStaticEstimate()
+    {
+        var declaredMacro = MacroOfLength(2 * 1000);   // DECLARES 2 seconds
+        var active = new Assignment(Alt(1), declaredMacro, CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+
+        var rig = Build(assignments, runForMs: 90 * Min, keepAliveIntervalMs: 12 * Min);
+        rig.Player.RealPlayCostMs = 25 * Min;   // REALLY costs 25 minutes
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Warning) warnings.Add(p); };
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.Single(warnings);
+        Assert.Same(keep, warnings[0].Current);
+        Assert.Contains(keep.Alt.DisplayName, warnings[0].Reason, StringComparison.Ordinal);
+        Assert.Contains("20", warnings[0].Reason);   // states the platform floor
+
+        // Warn-or-not never gates behavior: the keep-alive still gets serviced.
+        Assert.NotEmpty(rig.Taps);
     }
 
     /// <summary>

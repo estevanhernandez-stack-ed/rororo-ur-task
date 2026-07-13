@@ -191,26 +191,49 @@ internal sealed class AssignmentRunner
         // cries wolf even though the realized ~16-min gap is comfortably safe; a
         // 25-min per-game override with zero Active alts reads as "not shorter than
         // 0" and silently misses a kick that is guaranteed to happen.
-        var longestActivePassMs = scheduled
-            .Where(a => !a.IsKeepAlive)
-            .Select(StaticPassCostMs)
-            .DefaultIfEmpty(0L)
-            .Max();
         var warnThresholdMs = (long)TimeSpan.FromMinutes(KeepAliveIntervals.WarnThresholdMinutes).TotalMilliseconds;
 
-        foreach (var alt in scheduled.Where(a => a.IsKeepAlive))
-        {
-            var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
-            if (projectedGapMs < warnThresholdMs) continue;
+        // IMPORTANT 1 fix: fired once up front from the STATIC estimate here, and
+        // re-fired (see CheckUnschedulableWarnings, called after every Active pass
+        // below) as ObservedPassCostMs ratchets upward. The static estimate alone
+        // under-counts real Win32 costs (AttachAndFocus, MacroPlayer's preflight
+        // resize) exactly the way NextActivePassCostMs's own lookahead does — a
+        // macro that DECLARES 2 minutes but really takes 25 reads as safe here
+        // (max(2min, interval) never crosses the warn threshold) and would
+        // otherwise never warn at all, even once the ratchet learns the real
+        // 25-minute cost and the realized keep-alive gap sails past Roblox's
+        // 20-minute kick floor. alreadyWarnedUnschedulable makes this fire-once-
+        // ever per alt: the ratchet only ever climbs, so once an alt has crossed
+        // the threshold it stays crossed — no need to track a re-arming edge the
+        // way EmitFocusFailureWarning does for a streak that can recover.
+        var alreadyWarnedUnschedulable = new HashSet<ScheduledAlt>();
 
-            var gapMins = projectedGapMs / 60_000.0;
-            EmitProgress(new AssignmentProgress(
-                0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
-                $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
-                $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
-                $"idle floor (games may shorten this, none may extend it). " +
-                $"Shorten the macro, split it, or set this alt to Active."));
+        void CheckUnschedulableWarnings()
+        {
+            var longestActivePassMs = scheduled
+                .Where(a => !a.IsKeepAlive)
+                .Select(a => Math.Max(StaticPassCostMs(a), a.ObservedPassCostMs))
+                .DefaultIfEmpty(0L)
+                .Max();
+
+            foreach (var alt in scheduled.Where(a => a.IsKeepAlive))
+            {
+                if (alreadyWarnedUnschedulable.Contains(alt)) continue;
+                var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
+                if (projectedGapMs < warnThresholdMs) continue;
+
+                alreadyWarnedUnschedulable.Add(alt);
+                var gapMins = projectedGapMs / 60_000.0;
+                EmitProgress(new AssignmentProgress(
+                    0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
+                    $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
+                    $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
+                    $"idle floor (games may shorten this, none may extend it). " +
+                    $"Shorten the macro, split it, or set this alt to Active."));
+            }
         }
+
+        CheckUnschedulableWarnings();
 
         // Original list position of each alt — this is what IndexInCycle/TotalInCycle
         // report. The scheduler services one alt at a time (not a fixed sweep through the
@@ -256,6 +279,10 @@ internal sealed class AssignmentRunner
             await RunActiveAsync(alt, AdvancePass(alt), indexOf[alt], assignments.Count, token).ConfigureAwait(false);
             activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
             gapFittedSinceActivePass.Clear();   // real progress happened; every alt earns another look
+            // IMPORTANT 1 fix: a completed pass is exactly when ObservedPassCostMs
+            // may have just ratcheted up (see RunActiveAsync's finally) — re-check
+            // every keep-alive against the now-current longest observed cost.
+            CheckUnschedulableWarnings();
         }
 
         try
@@ -314,10 +341,26 @@ internal sealed class AssignmentRunner
                         break;
                 }
             }
-            EmitProgress(new AssignmentProgress(cycle, -1, assignments.Count, null, AssignmentPhase.Stopped));
         }
         finally
         {
+            // CRITICAL 2 fix: Stopped must fire on EVERY exit from the loop above,
+            // including an exception escaping the loop body (e.g.
+            // MacroPlayer.PlayAsync's Task.Delay throwing ArgumentOutOfRangeException
+            // off a pathological on-disk MacroEvent.TimestampMs) — not just the
+            // graceful cancellation-observed exit. Stopped used to be emitted as the
+            // last line INSIDE the try, so an exception jumped straight past it to
+            // this finally, skipping it entirely. Stopped is the ONLY thing that
+            // releases the ur-afk claim file (see PluginRuntime's Progress
+            // subscription) — skipping it left the claim's 20s heartbeat rewriting a
+            // fresh heartbeatUtc for the rest of the app's life while nothing was
+            // actually servicing those alts: ur-afk reads a live in-TTL claim and
+            // stays off them, so every alt in the run gets silently kicked. It also
+            // wedged the UI (RecorderViewModel.IsRunnerActive derives from the last
+            // progress Phase, so it never dropped off "running") and made Abort()
+            // return false once _activeCts below went null, with no way to recover
+            // short of restarting the app.
+            EmitProgress(new AssignmentProgress(cycle, -1, assignments.Count, null, AssignmentPhase.Stopped));
             _activeCts?.Dispose();
             _activeCts = null;
         }
@@ -497,6 +540,22 @@ internal sealed class AssignmentRunner
     /// the caller-side half of the self-correcting <see cref="NextActivePassCostMs"/>
     /// upper bound that <see cref="CadenceScheduler.Decide"/>'s hard-deadline guarantee
     /// depends on.
+    ///
+    /// CRITICAL 1 fix: all three ways this method can end an attempt without a
+    /// completed pass — Focus failing, the foreground-verify failing, and
+    /// PlayAsync coming back Refused/Aborted — now take the SAME bounded 30s
+    /// backoff and count against the SAME <see cref="ScheduledAlt.ConsecutiveFocusFailures"/>
+    /// streak <see cref="ServiceKeepAliveAsync"/> already uses. <c>Decide</c> has no
+    /// <c>DueAtMs</c> gate for Active — nothing else stops the outer loop from
+    /// re-entering <c>Decide</c> immediately and re-picking this exact alt — so an
+    /// unguarded exit here is a foreground steal roughly once a second, forever:
+    /// the same hijack loop this whole feature exists to kill. This is a live field
+    /// path, not hypothetical: <see cref="MacroPlayer.PlayAsync"/>'s client-space
+    /// preflight (<c>EnsureClientSize</c>) returns <c>Refused</c> synchronously, with
+    /// no waits, whenever a macro was recorded on a bigger monitor than it's
+    /// replaying on. The streak resets only on a genuinely successful pass
+    /// (<see cref="PlaybackOutcome.Completed"/>) — a transient blip must not linger
+    /// into a stale warning later.
     /// </summary>
     private async Task RunActiveAsync(ScheduledAlt alt, int cycle, int index, int total, CancellationToken ct)
     {
@@ -508,8 +567,14 @@ internal sealed class AssignmentRunner
             EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
             if (!_deps.Focus(asn.Alt.Pid).ok)
             {
-                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
-                // Bounded backoff — mirrors ServiceKeepAliveAsync's FocusRetryBackoffMs.
+                // Bounded retry — same shape as ServiceKeepAliveAsync's focus-fail
+                // exit: count it against the shared streak and reuse the same
+                // once-per-crossing Warning idiom (IMPORTANT 2), so a dead/crashed
+                // Active alt gets the same "hasn't been focusable" surfacing a
+                // KeepAlive alt already gets, instead of vanishing into a silent
+                // Skipped forever.
+                alt.ConsecutiveFocusFailures++;
+                EmitFocusFailureWarning(alt, cycle, index, total, asn);
                 // Without an await here, an Active alt whose Roblox client crashed
                 // (stale pid) spins this method synchronously forever: Focus keeps
                 // failing, this returns immediately with zero elapsed time, the outer
@@ -529,7 +594,15 @@ internal sealed class AssignmentRunner
             var fg = _foreground.ResolveForegroundAccount();
             if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
             {
-                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
+                // CRITICAL 1 fix: this used to be a bare return with NO backoff — the
+                // "MOST COMMON way a real service attempt fails" per
+                // ServiceKeepAliveAsync's own doc, left completely uncovered on the
+                // Active side. Same counted streak + bounded backoff as the
+                // focus-fail branch just above.
+                alt.ConsecutiveFocusFailures++;
+                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                try { await _deps.Sleep(FocusRetryBackoffMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
                 return;
             }
 
@@ -552,6 +625,33 @@ internal sealed class AssignmentRunner
                             EmitProgress(new AssignmentProgress(
                                 cycle, index, total, asn, AssignmentPhase.Refused, playResult.Reason));
                         }
+                        // CRITICAL 1 fix: a Refused/Aborted PlayAsync result used to
+                        // fall straight through with NO backoff — e.g.
+                        // MacroPlayer.EnsureClientSize returning Refused
+                        // SYNCHRONOUSLY (recorded on a bigger monitor than this one
+                        // is replaying on) reproduces the exact same ~1s
+                        // foreground-steal spin as the other two exits above. Same
+                        // counted streak + bounded backoff; its own once-per-crossing
+                        // warning uses distinct wording (this alt WAS focusable —
+                        // it's the macro itself that keeps getting refused/aborted),
+                        // so it isn't routed through EmitFocusFailureWarning's
+                        // "hasn't been focusable" text.
+                        alt.ConsecutiveFocusFailures++;
+                        if (alt.ConsecutiveFocusFailures == 3)
+                        {
+                            EmitProgress(new AssignmentProgress(
+                                cycle, index, total, asn, AssignmentPhase.Warning,
+                                $"{asn.Alt.DisplayName}'s macro has been refused/aborted 3 times in a row " +
+                                $"({playResult.Reason}). Still retrying every 30s."));
+                        }
+                        try { await _deps.Sleep(FocusRetryBackoffMs, ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
+                    }
+                    else
+                    {
+                        // A genuinely successful pass — clear the streak so a
+                        // transient blip doesn't linger into a stale warning later.
+                        alt.ConsecutiveFocusFailures = 0;
                     }
                 }
                 catch (OperationCanceledException) { }

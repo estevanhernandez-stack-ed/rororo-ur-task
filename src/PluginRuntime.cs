@@ -58,7 +58,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
     // an alt (Active -> KeepAlive) non-destructive: the macro in _assignments is
     // never touched, so flipping the override back to Active resumes farming with
     // nothing re-picked.
-    private readonly Dictionary<int, CadenceRole> _roleOverrides = new();
+    //
+    // ConcurrentDictionary, not plain Dictionary: SetRoleOverride is written from
+    // the UI thread (ComboBox/preset commands) and GetRoleOverride is read from the
+    // hotkey thread (OnHotkey building the PLAY assignment list) — an unsynchronized
+    // Dictionary racing a concurrent read/write is undefined behavior. (The same
+    // shape of race pre-dates this branch on _assignments below; that one is
+    // untouched here — this fixes only the NEW race this branch introduced.)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, CadenceRole> _roleOverrides = new();
 
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
@@ -75,7 +82,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Accounts.AccountAdded += (_, info) =>
             Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
         Accounts.AccountRemoved += (_, info) =>
+        {
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+            // Minor fix: Windows recycles PIDs, so a fresh alt launched later can
+            // reuse a dead alt's pid — an un-pruned override would silently hand
+            // the new alt a role choice that was never actually made for it.
+            _roleOverrides.TryRemove(info.Pid, out CadenceRole _);
+        };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground, _metrics);
@@ -313,6 +326,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public void ResetAssignments()
     {
         _assignments.Clear();
+        // Minor fix: a role override left behind here is exactly as stale as one
+        // left behind by a departed alt (see AccountRemoved above) — CLEAR wipes
+        // every macro pairing back to a blank slate, so a role choice made against
+        // one of those now-gone pairings shouldn't silently resurrect itself the
+        // next time this pid gets a fresh macro assigned.
+        _roleOverrides.Clear();
         Log("all assignments cleared.");
         RaiseUI(() => AssignmentsReset?.Invoke());
     }

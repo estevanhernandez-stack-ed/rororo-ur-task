@@ -348,4 +348,45 @@ public class MacroPlayerClientSpaceTests : IDisposable
         Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
         Assert.Empty(metrics.SetCalls); // legacy path is metrics-blind
     }
+
+    /// <summary>
+    /// CRITICAL 2 (MacroPlayer half): <see cref="MacroEvent.TimestampMs"/> is a bare
+    /// <c>long</c> off user-editable on-disk JSON with no upstream bound. A
+    /// screen-space macro never touches <see cref="IWindowMetrics"/> at all, so this
+    /// exercises the playback loop's own <c>wait</c>-to-<c>int</c> cast directly. A
+    /// timestamp above <c>int.MaxValue</c> ms (~24.8 days) used to truncate to a
+    /// NEGATIVE int on an unclamped <c>(int)wait</c> cast, and <c>Task.Delay</c>
+    /// throws <c>ArgumentOutOfRangeException</c> for anything less than -1 — an
+    /// exception that escaped <c>PlayAsync</c> uncaught (its own catch only handles
+    /// <c>OperationCanceledException</c>), which in turn escaped
+    /// <c>AssignmentRunner.RunAsync</c> entirely (see
+    /// <c>CadenceRunnerTests.ExceptionEscapingLoopBody_StillEmitsStoppedAndClearsIsRunning</c>).
+    /// The clamp caps the wait at <c>int.MaxValue</c> ms instead — proven here by
+    /// cancelling almost immediately and observing a clean cancellation-driven
+    /// Abort, not an unhandled exception thrown before the delay is ever entered.
+    ///
+    /// Verified by hand: reverting the clamp (back to a bare <c>(int)wait</c> cast)
+    /// turns this RED — <c>PlayAsync</c> throws <c>ArgumentOutOfRangeException</c>
+    /// instead of returning a result at all.
+    /// </summary>
+    [Fact]
+    public async Task ScreenMacro_PathologicallyLargeTimestamp_ClampsInsteadOfThrowing()
+    {
+        var hugeTimestampEvent = new MacroEvent(
+            TimestampMs: (long)int.MaxValue + 5_000_000L, Kind: MacroEventKind.KeyDown,
+            VirtualKeyCode: 0x20, X: 0, Y: 0, MouseButton: 0, WheelDelta: 0);
+        var screenMacro = new Macro(
+            SchemaVersion: Macro.CurrentSchemaVersion, Id: Guid.NewGuid().ToString(), Name: "huge-ts",
+            RecordMode: "PerWindow", RecordedAgainstUserId: null, RecordedAgainstDisplayName: null,
+            InterAltDelayMs: null, RecordedAtUnixMs: 1, Events: new[] { hugeTimestampEvent },
+            CoordSpace: Macro.CoordSpaceScreen);
+
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, new FakeMetrics());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var result = await player.PlayAsync(screenMacro, targetUserId: 42, cts.Token);
+
+        Assert.Equal(PlaybackOutcome.Aborted, result.Outcome);
+        Assert.Equal("Playback cancelled.", result.Reason);
+    }
 }

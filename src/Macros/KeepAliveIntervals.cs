@@ -59,7 +59,7 @@ internal static class KeepAliveIntervals
 
     public static TimeSpan For(long? placeId, string? placeName, UserPreferences prefs)
     {
-        // An explicit user override always wins — our table is [community] confidence.
+        // An explicit user override always wins — our table is community confidence.
         if (placeId is long id && prefs.KeepAliveOverridesByPlaceId.TryGetValue(id, out var mins))
             return TimeSpan.FromMinutes(mins);
 

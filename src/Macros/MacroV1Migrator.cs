@@ -37,6 +37,7 @@ public static class MacroV1Migrator
             {
                 SchemaVersion = Macro.CurrentSchemaVersion,
                 CoordSpace = m.CoordSpace ?? Macro.CoordSpaceScreen,
+                Events = SanitizeTimestamps(m.Events),
             };
         }
 
@@ -65,7 +66,35 @@ public static class MacroV1Migrator
             RecordedAgainstDisplayName: recordedAgainstDisplayName,
             InterAltDelayMs: null,
             RecordedAtUnixMs: recordedAtUnixMs,
-            Events: events,
+            Events: SanitizeTimestamps(events),
             CoordSpace: Macro.CoordSpaceScreen);
+    }
+
+    /// <summary>
+    /// CRITICAL 2 (defense in depth): <see cref="MacroEvent.TimestampMs"/> is a bare
+    /// <c>long</c> read straight off user-editable (or corrupted) on-disk JSON, with
+    /// no schema-level bound. MacroPlayer's playback loop computes
+    /// <c>evt.TimestampMs - clock.ElapsedMilliseconds</c> and casts the result to
+    /// <c>int</c> for <c>Task.Delay</c> — a value above <c>int.MaxValue</c> ms
+    /// (~24.8 days) truncates to a NEGATIVE int on that cast, and <c>Task.Delay</c>
+    /// throws <c>ArgumentOutOfRangeException</c> for anything less than -1. That
+    /// exception used to escape <c>AssignmentRunner.RunActiveAsync</c> uncaught,
+    /// which escaped <c>RunAsync</c> entirely and left the ur-afk claim file
+    /// heartbeating forever with nothing servicing the alts it claimed to own.
+    /// Clamping here — the one place every macro file passes through on its way
+    /// into memory, for every schema version — means a hand-edited or corrupted
+    /// macro can never reach ANY playback path (round-robin, sequence, AllWindows)
+    /// with an out-of-range timestamp, on top of (not instead of) MacroPlayer's own
+    /// clamp on the cast itself.
+    /// </summary>
+    private static IReadOnlyList<MacroEvent> SanitizeTimestamps(IReadOnlyList<MacroEvent> events)
+    {
+        var sanitized = new List<MacroEvent>(events.Count);
+        foreach (var e in events)
+        {
+            var clamped = Math.Clamp(e.TimestampMs, 0L, (long)int.MaxValue);
+            sanitized.Add(clamped == e.TimestampMs ? e : e with { TimestampMs = clamped });
+        }
+        return sanitized;
     }
 }

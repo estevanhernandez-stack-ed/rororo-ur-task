@@ -263,7 +263,23 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
         _runtime.AssignmentsReset += () => RaiseUI(() =>
         {
-            foreach (var r in Assignments) r.AssignedMacro = null;
+            // IMPORTANT 3 fix: this used to set AssignedMacro directly, bypassing
+            // SeedRowRole -> Assignment.ResolveRole entirely — a FOURTH role-mutation
+            // site the original three-site audit missed. A row that was Active-by-
+            // derivation (macro assigned, no explicit override) kept showing ACTIVE
+            // next to "Keep-alive (Space)" after CLEAR, with the role ComboBox
+            // disabled on that stale value — while PLAY, which always re-resolves
+            // through ResolveRole at TriggerPlayAssignments time, correctly treated
+            // it as KeepAlive. Behavior was safe; the UI lied about what PLAY would
+            // actually do. SeedRowRole(r, null) re-derives the displayed Role the
+            // same way RefreshAssignmentRow does for a single macro-clear, and
+            // (via _isRederivingRole) never publishes a new runtime override, so an
+            // explicit prior user choice still isn't clobbered by CLEAR.
+            foreach (var r in Assignments)
+            {
+                r.AssignedMacro = null;
+                SeedRowRole(r, null);
+            }
             RecomputePairings();
         });
         _runtime.AssignmentProgressed += p => RaiseUI(() =>

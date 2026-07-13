@@ -49,4 +49,21 @@ public class KeepAliveIntervalsTests
         // Even though the name says backstop (17), the explicit override wins.
         Assert.Equal(TimeSpan.FromMinutes(5), KeepAliveIntervals.For(999L, "Fisch", prefs));
     }
+
+    /// <summary>
+    /// Missing Task-2 coverage: a non-null placeId with NO matching entry in
+    /// prefs must fall through to the name table, not silently default to
+    /// UnknownGameMinutes just because a placeId was present. The placeId branch
+    /// is only a short-circuit for an explicit user override — it isn't a
+    /// substitute for the name-based classification the rest of this class does.
+    /// </summary>
+    [Fact]
+    public void PlaceIdWithNoMatchingOverride_FallsThroughToNameTable()
+    {
+        var prefs = new UserPreferences();   // empty KeepAliveOverridesByPlaceId
+        // placeId 12345 has no override on record; placeName says backstop (17) —
+        // the result must come from the name table, not from the placeId branch
+        // defaulting to UnknownGameMinutes (12) just because placeId was non-null.
+        Assert.Equal(TimeSpan.FromMinutes(17), KeepAliveIntervals.For(12345L, "Fisch", prefs));
+    }
 }

@@ -94,7 +94,18 @@ internal sealed class MacroPlayer : IMacroPlayer
                 var wait = evt.TimestampMs - clock.ElapsedMilliseconds;
                 if (wait > 0)
                 {
-                    await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
+                    // CRITICAL 2 fix: TimestampMs is a bare long, deserialized off
+                    // user-editable on-disk JSON with no upstream bound (see
+                    // MacroV1Migrator's load-time clamp — defense in depth, not the
+                    // only guard). A `wait` bigger than int.MaxValue used to
+                    // truncate to a NEGATIVE int on the unchecked cast below, and
+                    // Task.Delay throws ArgumentOutOfRangeException for anything
+                    // less than -1 — an exception AssignmentRunner.RunActiveAsync
+                    // never caught, which escaped RunAsync entirely and left the
+                    // ur-afk claim file heartbeating forever with nothing servicing
+                    // the alts it claimed. Clamp instead of trust.
+                    var delayMs = wait > int.MaxValue ? int.MaxValue : (int)wait;
+                    await Task.Delay(delayMs, _activeCts.Token).ConfigureAwait(false);
                 }
 
                 // Continuous foreground check. If the user alt-tabs to a non-target
@@ -158,7 +169,12 @@ internal sealed class MacroPlayer : IMacroPlayer
             {
                 var evt = macro.Events[i];
                 var wait = evt.TimestampMs - clock.ElapsedMilliseconds;
-                if (wait > 0) await Task.Delay((int)wait, _activeCts.Token).ConfigureAwait(false);
+                // Same truncating-cast guard as PlayAsync above — see its comment.
+                if (wait > 0)
+                {
+                    var delayMs = wait > int.MaxValue ? int.MaxValue : (int)wait;
+                    await Task.Delay(delayMs, _activeCts.Token).ConfigureAwait(false);
+                }
                 SendMacroEvent(evt);
                 TrackHeldState(evt, heldKeys, heldButtons);
             }

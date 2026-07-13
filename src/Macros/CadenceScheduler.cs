@@ -107,7 +107,12 @@ internal static class CadenceScheduler
     /// The single next action: <see cref="CadenceDecision.ServiceKeepAlive"/> for the most
     /// overdue urgent keep-alive, else <see cref="CadenceDecision.RunActive"/> for the first
     /// Active in list order, else <see cref="CadenceDecision.SleepUntil"/> until the earliest
-    /// keep-alive deadline (or a short default poll if there are no keep-alives at all).
+    /// keep-alive deadline. When <paramref name="alts"/> contains no keep-alives AT ALL, that
+    /// falls back to a short <c>nowMs + 1s</c> poll — but note any Active present is picked
+    /// first, so in practice that fallback is only ever reached when <paramref name="alts"/>
+    /// is completely empty (see the inline comment on it below for why that's effectively
+    /// dead code from <see cref="AssignmentRunner"/>'s own caller, not a live "no keep-alives"
+    /// case).
     /// </returns>
     public static CadenceDecision Decide(
         IReadOnlyList<ScheduledAlt> alts, long nowMs, long nextActivePassCostMs)
@@ -165,6 +170,17 @@ internal static class CadenceScheduler
         // that meaning — if a future change ever wants long.MaxValue as a legitimate
         // DueAtMs (e.g. to encode a paused alt that's never due), this fallback needs to
         // change too, or a paused alt would be indistinguishable from "no keep-alives".
+        //
+        // Honesty check on the `nowMs + 1_000` arm: by the time execution reaches here,
+        // `nextActive` was already checked and found null, so alts contains no Active
+        // either — earliestDue == long.MaxValue at this point therefore means alts
+        // contains NEITHER a keep-alive NOR an Active, i.e. alts is empty. Decide's only
+        // production caller, AssignmentRunner.RunAsync, returns immediately on an empty
+        // assignment list (before Decide is ever called) and otherwise resolves every
+        // alt to Active or KeepAlive — so this arm is unreachable from that caller. It
+        // stays as a defensive default for Decide's OWN contract as a pure, general
+        // function (e.g. a test — or a future caller — invoking it directly with an
+        // empty list), not because RunAsync can ever actually reach it.
         return new CadenceDecision.SleepUntil(earliestDue == long.MaxValue ? nowMs + 1_000 : earliestDue);
     }
 
