@@ -18,6 +18,18 @@ internal sealed class ScheduledAlt
     /// </summary>
     public int ConsecutiveFocusFailures { get; set; }
 
+    /// <summary>
+    /// High-water mark, in ms, of the longest Active pass actually observed for this
+    /// alt (focus + settle + verify + PlayAsync, timed end to end by the caller).
+    /// <see cref="Decide"/>'s urgency lookahead needs a conservative UPPER BOUND on the
+    /// next pass's cost, and a static estimate derived from Macro.Duration alone
+    /// under-counts real Win32 costs (AttachAndFocus, MacroPlayer's preflight resize)
+    /// that never show up in the macro data at all. Self-correcting: the caller times
+    /// every pass and ratchets this up, never down, so the estimate only ever becomes
+    /// more conservative, never less.
+    /// </summary>
+    public long ObservedPassCostMs { get; set; }
+
     public bool IsKeepAlive => Assignment.Role == CadenceRole.KeepAlive;
 }
 

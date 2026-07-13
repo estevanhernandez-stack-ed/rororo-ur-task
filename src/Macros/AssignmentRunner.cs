@@ -19,15 +19,27 @@ internal sealed record CadenceDeps(
     Action SendKeepAlive,
     Func<AccountRegistry.AccountInfo, long> KeepAliveIntervalMs)
 {
-    public static CadenceDeps Real => new(
-        Focus: Win32Focus.AttachAndFocus,
-        ClockMs: () => Environment.TickCount64,           // MONOTONIC — never wall-clock
-        Sleep: (ms, ct) => ms <= 0 ? Task.CompletedTask : Task.Delay((int)ms, ct),
-        CaptureForeground: Win32Focus.CaptureForeground,
-        RestoreForeground: h => Win32Focus.RestoreForeground(h),
-        SendKeepAlive: () => AssignmentRunner.SendSpaceKeepAlive(),
-        KeepAliveIntervalMs: alt => (long)KeepAliveIntervals
-            .For(alt.PlaceId, alt.PlaceName, UI.UserPreferences.Load()).TotalMilliseconds);
+    public static CadenceDeps Real
+    {
+        get
+        {
+            // Loaded ONCE per CadenceDeps.Real access (i.e. once per AssignmentRunner
+            // construction), not once per keep-alive alt. The old inline
+            // `UI.UserPreferences.Load()` sat inside the per-alt lambda below, so a
+            // squad of N keep-alive alts meant N disk reads every time RunAsync built
+            // its schedule.
+            var prefs = UI.UserPreferences.Load();
+            return new(
+                Focus: Win32Focus.AttachAndFocus,
+                ClockMs: () => Environment.TickCount64,           // MONOTONIC — never wall-clock
+                Sleep: (ms, ct) => ms <= 0 ? Task.CompletedTask : Task.Delay((int)ms, ct),
+                CaptureForeground: Win32Focus.CaptureForeground,
+                RestoreForeground: h => Win32Focus.RestoreForeground(h),
+                SendKeepAlive: () => AssignmentRunner.SendSpaceKeepAlive(),
+                KeepAliveIntervalMs: alt => (long)KeepAliveIntervals
+                    .For(alt.PlaceId, alt.PlaceName, prefs).TotalMilliseconds);
+        }
+    }
 }
 
 /// <summary>
@@ -42,6 +54,14 @@ internal sealed class AssignmentRunner
     private const int KeepAliveDelayMs = 200;       // after Space, small wait before moving on
     private const int FocusRetryBackoffMs = 30_000; // spec: bounded 30s retry on a stuck focus
 
+    // The runner is the last line of defense against a hijack loop: a user-editable
+    // interval override of 0 (or negative) reads as "always due" and reproduces the
+    // original ~1.2s spin; a pathologically huge one overflows Task.Delay's int cast
+    // negative and throws ArgumentOutOfRangeException. Clamp to a sane positive range
+    // regardless of what KeepAliveIntervalMs hands back.
+    private const long MinKeepAliveIntervalMs = 60_000;      // 1 minute floor
+    private const long MaxKeepAliveIntervalMs = 60 * 60_000; // 60 minute ceiling — comfortably under int.MaxValue ms
+
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
     private readonly CadenceDeps _deps;
@@ -51,7 +71,21 @@ internal sealed class AssignmentRunner
         : this(player, foreground, CadenceDeps.Real) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus)
-        : this(player, foreground, CadenceDeps.Real with { Focus = focus }) { }
+        : this(player, foreground, CadenceDeps.Real with
+        {
+            Focus = focus,
+            // This compat ctor exists for call sites/tests that only want to fake
+            // Focus. Left alone it silently inherits the REST of CadenceDeps.Real too
+            // — a real Win32Focus.CaptureForeground/RestoreForeground pair (which
+            // zeroes and restores the SYSTEM-WIDE SPI_SETFOREGROUNDLOCKTIMEOUT) and a
+            // real UserPreferences disk read — exactly the side effects the CadenceDeps
+            // seam exists to keep out of the unit suite. No-op them here; a test that
+            // needs to assert on capture/restore or interval math should use the
+            // CadenceDeps ctor directly instead.
+            CaptureForeground = () => IntPtr.Zero,
+            RestoreForeground = _ => { },
+            KeepAliveIntervalMs = _ => (long)TimeSpan.FromMinutes(KeepAliveIntervals.UnknownGameMinutes).TotalMilliseconds,
+        }) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps)
     {
@@ -93,7 +127,9 @@ internal sealed class AssignmentRunner
         var scheduled = assignments.Select(a => new ScheduledAlt
         {
             Assignment = a,
-            IntervalMs = a.Role == CadenceRole.KeepAlive ? _deps.KeepAliveIntervalMs(a.Alt) : 0,
+            IntervalMs = a.Role == CadenceRole.KeepAlive
+                ? Math.Clamp(_deps.KeepAliveIntervalMs(a.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
+                : 0,
             DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
                                          // tap once up front, THEN settle into its interval.
         }).ToList();
@@ -122,14 +158,35 @@ internal sealed class AssignmentRunner
         }
 
         var activeCursor = 0;
+        var activeCount = scheduled.Count(a => !a.IsKeepAlive);   // fixed for the run — the
+                                                                   // role mix doesn't change mid-loop
+
+        // Forward-progress guard (the CRITICAL fix): Decide is a stateless lookahead —
+        // re-entered immediately after a service with ~zero elapsed time — and nothing
+        // in it stops it from handing back the SAME not-yet-due alt forever if
+        // servicing it didn't clear the condition that made it look urgent (e.g. a
+        // foreground-verify check that keeps failing, or a focus that keeps failing).
+        // Re-entering it right back is exactly the desktop-hijack spin loop this
+        // feature exists to kill. This set tracks which keep-alive alts have already
+        // been gap-fitted (gotten a look) since the last time real progress happened —
+        // an Active pass. An alt only earns a second look after that progress, or
+        // after it becomes GENUINELY overdue (never starve a real deadline).
+        var gapFittedSinceActivePass = new HashSet<ScheduledAlt>();
+
+        async Task RunNextActiveAsync(ScheduledAlt alt, CancellationToken token)
+        {
+            await RunActiveAsync(alt, AdvancePass(alt), indexOf[alt], assignments.Count, token).ConfigureAwait(false);
+            activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
+            gapFittedSinceActivePass.Clear();   // real progress happened; every alt earns another look
+        }
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 var now = _deps.ClockMs();
-                var decision = CadenceScheduler.Decide(
-                    Rotated(scheduled, activeCursor), now, NextActivePassCostMs(scheduled, activeCursor));
+                var rotated = Rotated(scheduled, activeCursor);
+                var decision = CadenceScheduler.Decide(rotated, now, NextActivePassCostMs(scheduled, activeCursor));
 
                 switch (decision)
                 {
@@ -140,16 +197,42 @@ internal sealed class AssignmentRunner
                         break;
 
                     case CadenceDecision.ServiceKeepAlive svc:
+                    {
+                        var genuinelyOverdue = svc.Alt.DueAtMs <= now;
+                        // Add() also records this attempt for next time; its return
+                        // tells us whether it was ALREADY there from a prior look.
+                        var alreadyGapFitted = !gapFittedSinceActivePass.Add(svc.Alt);
+
+                        if (!genuinelyOverdue && alreadyGapFitted)
+                        {
+                            // Decide handed back an alt we already gap-fitted, and it's
+                            // still not actually due — servicing it again right now
+                            // would be the spin loop. Force real progress instead.
+                            var firstActive = rotated.FirstOrDefault(a => !a.IsKeepAlive);
+                            if (firstActive is not null)
+                            {
+                                await RunNextActiveAsync(firstActive, ct).ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                // No Active to fall back on — just wait out this alt's
+                                // own backoff. Restores the intended 30s retry cadence
+                                // instead of a synchronous, non-yielding re-attempt.
+                                try { await _deps.Sleep(Math.Max(0, svc.Alt.DueAtMs - now), ct).ConfigureAwait(false); }
+                                catch (OperationCanceledException) { }
+                            }
+                            break;
+                        }
+
+                        // Genuinely overdue (never starved), or this is its first look
+                        // since the last Active pass — service it for real.
                         await ServiceKeepAliveAsync(
                             svc.Alt, AdvancePass(svc.Alt), indexOf[svc.Alt], assignments.Count, ct).ConfigureAwait(false);
-                        // Re-read the clock: the service itself consumed real time.
-                        svc.Alt.DueAtMs = _deps.ClockMs() + svc.Alt.IntervalMs;
                         break;
+                    }
 
                     case CadenceDecision.RunActive run:
-                        await RunActiveAsync(
-                            run.Alt, AdvancePass(run.Alt), indexOf[run.Alt], assignments.Count, ct).ConfigureAwait(false);
-                        activeCursor++;   // advance the round-robin among the actives
+                        await RunNextActiveAsync(run.Alt, ct).ConfigureAwait(false);
                         break;
                 }
             }
@@ -179,8 +262,13 @@ internal sealed class AssignmentRunner
 
     /// <summary>
     /// What one more Active pass will cost, so Decide knows whether a keep-alive can
-    /// wait for it. Macro.Duration is already known (last-event timestamp) — this is
-    /// what turns cadence from a guess into a computed timeline.
+    /// wait for it. Macro.Duration is already known (last-event timestamp), but that
+    /// alone is only an ESTIMATE — it doesn't model AttachAndFocus or MacroPlayer's
+    /// preflight (EnsureClientSize does synchronous Win32 window resizing whose cost
+    /// is bounded only by the target's message pump). <see cref="Decide"/>'s contract
+    /// demands a conservative UPPER BOUND, so this self-corrects: <see cref="RunActiveAsync"/>
+    /// times every pass end to end and ratchets <see cref="ScheduledAlt.ObservedPassCostMs"/>
+    /// up, and we take whichever of the static estimate or that high-water mark is larger.
     /// </summary>
     private static long NextActivePassCostMs(IReadOnlyList<ScheduledAlt> alts, int cursor)
     {
@@ -189,13 +277,21 @@ internal sealed class AssignmentRunner
         var next = actives[cursor % actives.Count];
         var macro = next.Assignment.Macro;
         var playMs = macro is null ? 0 : (long)macro.Duration.TotalMilliseconds;
-        return playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
+        var staticEstimate = playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
+        return Math.Max(staticEstimate, next.ObservedPassCostMs);
     }
 
     /// <summary>
     /// Service one overdue-or-soon-due keep-alive: capture the user's current
     /// foreground, focus the alt, verify the flip, tap Space, then hand the
     /// desktop back. A keep-alive is a ~1s blip, not a hijack.
+    ///
+    /// Owns <see cref="ScheduledAlt.DueAtMs"/> and <see cref="ScheduledAlt.ConsecutiveFocusFailures"/>
+    /// end to end on EVERY exit path — the caller no longer touches either after this
+    /// returns. (It used to unconditionally stamp DueAtMs = now + IntervalMs after every
+    /// call, which silently clobbered the shorter 30s retry backoff this method sets on
+    /// a focus/verify failure — that stomp is what let a stuck verify look "due again
+    /// soon" instead of "due again in ~30s," feeding the desktop-hijack spin loop.)
     /// </summary>
     private async Task ServiceKeepAliveAsync(ScheduledAlt alt, int cycle, int index, int total, CancellationToken ct)
     {
@@ -203,96 +299,135 @@ internal sealed class AssignmentRunner
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
         var prior = _deps.CaptureForeground();     // whatever the USER was doing
-
-        if (!_deps.Focus(asn.Alt.Pid).ok)
+        try
         {
-            // Bounded retry — do NOT hammer a window that won't focus. After three
-            // straight misses the window is almost certainly gone (alt closed/crashed),
-            // so say so loudly instead of silently retrying it forever.
-            alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-            alt.ConsecutiveFocusFailures++;
-            EmitProgress(new AssignmentProgress(
-                cycle, index, total, asn,
-                alt.ConsecutiveFocusFailures >= 3 ? AssignmentPhase.Warning : AssignmentPhase.Skipped,
-                alt.ConsecutiveFocusFailures >= 3
-                    ? $"{asn.Alt.DisplayName} hasn't been focusable for {alt.ConsecutiveFocusFailures} tries — its window may be gone. Still retrying every 30s."
-                    : null));
-            return;
+            if (!_deps.Focus(asn.Alt.Pid).ok)
+            {
+                // Bounded retry — do NOT hammer a window that won't focus. After three
+                // straight misses the window is almost certainly gone (alt closed/crashed),
+                // so say so loudly instead of silently retrying it forever.
+                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                alt.ConsecutiveFocusFailures++;
+                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                return;   // nothing was stolen — Focus never actually flipped anything
+            }
+
+            try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+
+            // Safety invariant (unchanged from v0.6): never synthesize input unless the
+            // foreground really is the alt we aimed at. AttachAndFocus reports ok=true
+            // whenever the process merely HAS a main window — it does not confirm the
+            // foreground actually flipped — so this is the check that actually catches
+            // that gap, and it is the MOST COMMON way a real service attempt fails.
+            var fg = _foreground.ResolveForegroundAccount();
+            if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
+            {
+                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                alt.ConsecutiveFocusFailures++;
+                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                return;
+            }
+
+            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
+            _deps.SendKeepAlive();
+            alt.ConsecutiveFocusFailures = 0;                  // a GENUINELY successful service clears the streak
+            alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;    // settle back into the normal interval
+            try { await _deps.Sleep(KeepAliveDelayMs, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* still restore below, via finally */ }
         }
-        alt.ConsecutiveFocusFailures = 0;   // a good focus clears the streak
-        try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return; }
-
-        // Safety invariant (unchanged from v0.6): never synthesize input unless the
-        // foreground really is the alt we aimed at.
-        var fg = _foreground.ResolveForegroundAccount();
-        if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
+        finally
         {
-            alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
+            // Hand the desktop back on EVERY exit path, including a cancellation
+            // thrown mid-settle — press Stop/Esc/Abort during that window used to
+            // return without restoring, leaving the alt holding the desktop. Best
+            // effort and safe to call even when nothing was stolen: RestoreForeground
+            // no-ops on IntPtr.Zero (the compat ctor's capture) and re-focusing the
+            // already-foreground window is harmless.
             _deps.RestoreForeground(prior);
-            return;
         }
+    }
 
-        EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
-        _deps.SendKeepAlive();
-        try { await _deps.Sleep(KeepAliveDelayMs, ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) { /* still restore below */ }
-
-        // Hand the desktop back. A keep-alive is a ~1s blip, not a hijack. When an
-        // Active alt was farming, this also returns focus to it so farming resumes.
-        _deps.RestoreForeground(prior);
+    /// <summary>
+    /// Shared Skipped/Warning emission for a failed focus OR a failed foreground-verify
+    /// — both mean "this attempt didn't land," and both count toward the same
+    /// ConsecutiveFocusFailures streak so "hasn't been focusable for N tries" actually
+    /// fires for whichever failure mode is happening.
+    /// </summary>
+    private void EmitFocusFailureWarning(ScheduledAlt alt, int cycle, int index, int total, Assignment asn)
+    {
+        EmitProgress(new AssignmentProgress(
+            cycle, index, total, asn,
+            alt.ConsecutiveFocusFailures >= 3 ? AssignmentPhase.Warning : AssignmentPhase.Skipped,
+            alt.ConsecutiveFocusFailures >= 3
+                ? $"{asn.Alt.DisplayName} hasn't been focusable for {alt.ConsecutiveFocusFailures} tries — its window may be gone. Still retrying every 30s."
+                : null));
     }
 
     /// <summary>
     /// Run one Active pass: focus, settle, verify foreground, play. Today's
     /// behavior, unchanged — and deliberately no restore-foreground afterward, so
     /// an Active alt holds focus between its own back-to-back passes (farming).
+    ///
+    /// Timed end to end (see <see cref="ScheduledAlt.ObservedPassCostMs"/>): this is
+    /// the caller-side half of the self-correcting <see cref="NextActivePassCostMs"/>
+    /// upper bound that <see cref="CadenceScheduler.Decide"/>'s hard-deadline guarantee
+    /// depends on.
     /// </summary>
     private async Task RunActiveAsync(ScheduledAlt alt, int cycle, int index, int total, CancellationToken ct)
     {
         var asn = alt.Assignment;
-
-        // Phase: Focusing
-        EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
-        if (!_deps.Focus(asn.Alt.Pid).ok)
+        var startMs = _deps.ClockMs();
+        try
         {
-            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
-            return;
-        }
-        try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return; }
-
-        // Verify foreground actually flipped
-        var fg = _foreground.ResolveForegroundAccount();
-        if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
-        {
-            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
-            return;
-        }
-
-        // Phase: Playing
-        EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
-        if (asn.Macro is not null)
-        {
-            try
+            // Phase: Focusing
+            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
+            if (!_deps.Focus(asn.Alt.Pid).ok)
             {
-                var playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
-                // Preflight refusals (e.g. client-space resize failed) and
-                // mid-playback aborts (e.g. foreground shifted) return before the
-                // player's Started/Ended events fire — without this, they vanish
-                // silently on the cadence path. Skip emit on a user-initiated
-                // cancellation, not a genuine refusal/abort.
-                if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted)
+                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
+                return;
+            }
+            try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+
+            // Verify foreground actually flipped
+            var fg = _foreground.ResolveForegroundAccount();
+            if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
+            {
+                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
+                return;
+            }
+
+            // Phase: Playing
+            EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
+            if (asn.Macro is not null)
+            {
+                try
                 {
-                    if (!ct.IsCancellationRequested)
+                    var playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                    // Preflight refusals (e.g. client-space resize failed) and
+                    // mid-playback aborts (e.g. foreground shifted) return before the
+                    // player's Started/Ended events fire — without this, they vanish
+                    // silently on the cadence path. Skip emit on a user-initiated
+                    // cancellation, not a genuine refusal/abort.
+                    if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted)
                     {
-                        EmitProgress(new AssignmentProgress(
-                            cycle, index, total, asn, AssignmentPhase.Refused, playResult.Reason));
+                        if (!ct.IsCancellationRequested)
+                        {
+                            EmitProgress(new AssignmentProgress(
+                                cycle, index, total, asn, AssignmentPhase.Refused, playResult.Reason));
+                        }
                     }
                 }
+                catch (OperationCanceledException) { }
             }
-            catch (OperationCanceledException) { }
+        }
+        finally
+        {
+            // Ratchet up, never down — a self-correcting UPPER BOUND only holds if it
+            // never forgets the worst pass it has actually seen.
+            var elapsed = _deps.ClockMs() - startMs;
+            if (elapsed > alt.ObservedPassCostMs) alt.ObservedPassCostMs = elapsed;
         }
     }
 
