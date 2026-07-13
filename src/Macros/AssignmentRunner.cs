@@ -148,14 +148,34 @@ internal sealed class AssignmentRunner
         // additional shared/racy state to know which alts this run covers.
         EmitProgress(new AssignmentProgress(1, -1, assignments.Count, null, AssignmentPhase.Started, AllAssignments: assignments));
 
-        var scheduled = assignments.Select(a => new ScheduledAlt
+        // Runtime safety net (CRITICAL 2's belt-and-braces half): coerce every
+        // assignment through Assignment.ResolveRole before scheduling, the same way
+        // IntervalMs below is clamped to a sane range regardless of what the caller
+        // handed in. A null-macro Active assignment must never reach the scheduler —
+        // ScheduledAlt.IsKeepAlive would read false, Decide has no deadline gate for
+        // Active, and RunActiveAsync would focus/settle(1s)/verify/find-nothing-to-play
+        // on every single loop iteration forever: a continuous ~1s foreground steal
+        // with zero farming value AND zero keep-alive protection. This is the LAST
+        // line of defense — it holds even if a future call site (or a bug upstream in
+        // the UI's override plumbing) ever hands this runner that exact invariant
+        // violation. Only replaces the record (a `with` always allocates a new
+        // instance, even when the value is unchanged) when coercion actually flips
+        // something — the overwhelmingly common case hands the original Assignment
+        // straight through unmodified, preserving reference identity for callers
+        // (e.g. AssignmentProgress.Current) that key off it.
+        var scheduled = assignments.Select(a =>
         {
-            Assignment = a,
-            IntervalMs = a.Role == CadenceRole.KeepAlive
-                ? Math.Clamp(_deps.KeepAliveIntervalMs(a.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
-                : 0,
-            DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
-                                         // tap once up front, THEN settle into its interval.
+            var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
+            var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
+            return new ScheduledAlt
+            {
+                Assignment = coerced,
+                IntervalMs = coerced.Role == CadenceRole.KeepAlive
+                    ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
+                    : 0,
+                DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
+                                             // tap once up front, THEN settle into its interval.
+            };
         }).ToList();
 
         // Unschedulable check. Because Decide is re-consulted between EVERY Active
@@ -661,6 +681,20 @@ public sealed record Assignment(
     /// </summary>
     public static Assignment WithDerivedRole(AccountRegistry.AccountInfo alt, Macro? macro)
         => new(alt, macro, macro is null ? CadenceRole.KeepAlive : CadenceRole.Active);
+
+    /// <summary>
+    /// The single source of truth for "what role does this alt actually get",
+    /// covering both the UI's explicit-override path and the legacy derived rule in
+    /// one pure, testable function. Encoding: an explicit <paramref name="userOverride"/>
+    /// wins outright — EXCEPT a null <paramref name="macro"/> can never resolve to
+    /// Active (that is the exact foreground-hijack loop the cadence scheduler exists
+    /// to kill: <see cref="CadenceScheduler.Decide"/> has no deadline gate for
+    /// Active, so RunActiveAsync would focus/settle/verify/find-nothing-to-play on
+    /// every single loop iteration, forever). Absent an override, the role derives
+    /// from macro presence, same as <see cref="WithDerivedRole"/>.
+    /// </summary>
+    public static CadenceRole ResolveRole(Macro? macro, CadenceRole? userOverride)
+        => macro is null ? CadenceRole.KeepAlive : userOverride ?? CadenceRole.Active;
 }
 
 // Refused covers both PlaybackOutcome.Refused (preflight declined, e.g. client-space

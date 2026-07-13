@@ -300,6 +300,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     public void SetRoleOverride(int altPid, CadenceRole role) => _roleOverrides[altPid] = role;
 
+    /// <summary>
+    /// Read-side counterpart to <see cref="SetRoleOverride"/> — null means "no
+    /// explicit choice on record for this alt yet, derive from macro presence."
+    /// Lets the VM tell an override-in-force apart from a display value it seeded
+    /// itself, so re-deriving a row's Role after a macro assign/clear never
+    /// clobbers a genuine user choice (see RecorderViewModel.SeedRowRole).
+    /// </summary>
+    public CadenceRole? GetRoleOverride(int altPid)
+        => _roleOverrides.TryGetValue(altPid, out var r) ? r : null;
+
     public void ResetAssignments()
     {
         _assignments.Clear();
@@ -640,12 +650,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 // unassigned = null macro (keep-alive Space). Role: an explicit
                 // Task-8 UI override wins outright; absent one, fall back to the
                 // legacy derived rule (macro present -> Active, none -> KeepAlive).
+                // Assignment.ResolveRole is the single source of truth for this —
+                // CRITICAL 2: it also coerces a null-macro override back to
+                // KeepAlive, so a stray "Active with no macro" override (which the
+                // UI is supposed to prevent, but this is the belt to that brace)
+                // can never actually reach the runner as Active.
                 var assignments = alts.Select(a =>
                 {
                     var macro = _assignments.TryGetValue(a.Pid, out var m) ? m : null;
-                    var role = _roleOverrides.TryGetValue(a.Pid, out var r)
-                        ? r
-                        : Assignment.WithDerivedRole(a, macro).Role;
+                    var role = Assignment.ResolveRole(macro, GetRoleOverride(a.Pid));
                     return new Assignment(a, macro, role);
                 }).ToList();
 

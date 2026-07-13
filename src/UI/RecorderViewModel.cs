@@ -73,12 +73,20 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // (and reseed the next-due countdown) via OnAssignmentRowPropertyChanged.
         SetAllActiveCommand = new RelayCommand(() =>
         {
-            foreach (var row in Assignments) row.Role = CadenceRole.Active;
+            // Critical 2 belt-and-braces: skip rows with no macro. PluginRuntime
+            // would coerce them back to KeepAlive at PLAY-time regardless (via
+            // Assignment.ResolveRole), so setting Role here would only leave the row
+            // DISPLAYING "ACTIVE" next to a "Keep-alive (Space)" macro chip — a lie
+            // about what PLAY will actually do.
+            foreach (var row in Assignments.Where(r => r.HasMacro)) row.Role = CadenceRole.Active;
         });
 
         FocusOneCommand = new RelayCommand<AssignmentRow>(focused =>
         {
-            if (focused is null) return;
+            // Critical 2: never promote a macro-less row to Active, even though the
+            // FOCUS button is also disabled for such rows in XAML (belt-and-braces —
+            // this guard holds even if the command is ever invoked another way).
+            if (focused is null || !focused.HasMacro) return;
             foreach (var row in Assignments)
                 row.Role = row == focused ? CadenceRole.Active : CadenceRole.KeepAlive;
         });
@@ -897,13 +905,15 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         var row = new AssignmentRow(alt) { AssignedMacro = existing };
         row.PropertyChanged += OnAssignmentRowPropertyChanged;
         Assignments.Add(row);
-        // Seed the row's displayed Role to match the legacy derived rule (macro
-        // present -> Active, none -> KeepAlive) so what the row SHOWS on first
-        // paint agrees with what PLAY ASSIGNMENTS will actually do before the
-        // user ever touches the toggle — AssignmentRow's own field defaults to
-        // Active regardless of macro, which would otherwise read "ACTIVE" next
-        // to a "Keep-alive (Space)" macro chip for a fresh, unassigned alt.
-        row.Role = existing is null ? CadenceRole.KeepAlive : CadenceRole.Active;
+        // Seed the row's displayed Role so what it SHOWS on first paint agrees with
+        // what PLAY ASSIGNMENTS will actually do — CRITICAL 1 fix: this must NOT
+        // publish a runtime override. The old code set row.Role directly (after
+        // subscribing PropertyChanged above), which synchronously fired
+        // SyncRoleToRuntime and froze this alt on a KeepAlive override before the
+        // user ever assigned a macro — so assigning one later and pressing PLAY
+        // never farmed it. SeedRowRole routes through the same
+        // _isRederivingRole-guarded path RefreshAssignmentRow uses below.
+        SeedRowRole(row, existing);
     }
 
     private void RemoveAssignmentRow(int pid)
@@ -930,19 +940,61 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     private void RefreshAssignmentRow(int pid, Macro? macro)
     {
         var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
-        if (row is not null) row.AssignedMacro = macro;
+        if (row is null) return;
+        row.AssignedMacro = macro;
+        // CRITICAL 1 fix: re-derive the displayed Role whenever the macro pairing
+        // changes. SeedRowRole reads Assignment.ResolveRole with whatever override
+        // (if any) is on record — an explicit user choice still wins outright, but a
+        // fresh alt with no override flips to Active the instant it gets a macro
+        // (so PLAY actually farms it), and flips back to KeepAlive the instant the
+        // macro is cleared (Critical 2's display-side mirror).
+        SeedRowRole(row, macro);
     }
 
     // ---------- Task 8: role -> runtime + next-due countdown plumbing ----------
+
+    /// <summary>
+    /// True while VM-internal code (<see cref="SeedRowRole"/>) is pushing a
+    /// DERIVED role onto a row's <see cref="AssignmentRow.Role"/> — as opposed to a
+    /// genuine user gesture (ComboBox pick, FOCUS, the presets). Both paths set the
+    /// same property and fire the same PropertyChanged event, so this is the only
+    /// way <see cref="SyncRoleToRuntime"/> can tell them apart. CRITICAL 1 fix: an
+    /// override must mean "the user explicitly chose this," nothing else — without
+    /// this guard, every derived seed/re-derive (row creation, macro assigned or
+    /// cleared) would itself publish an override and permanently freeze the row.
+    /// </summary>
+    private bool _isRederivingRole;
 
     /// <summary>Push a row's Role into PluginRuntime (so PLAY ASSIGNMENTS actually
     /// honors it) and keep the next-due countdown in sync — seeded when the row
     /// becomes KeepAlive, dropped the moment it stops being one.</summary>
     private void SyncRoleToRuntime(AssignmentRow row)
     {
-        _runtime.SetRoleOverride(row.Alt.Pid, row.Role);
+        // Only a genuine user gesture publishes a runtime override — see
+        // _isRederivingRole's doc for why this guard exists and what breaks without
+        // it. The countdown bookkeeping below still runs unconditionally: whether
+        // this is a derived change or a genuine one, the row's actual role in
+        // reality just changed, and the proof-of-life display must track it.
+        if (!_isRederivingRole) _runtime.SetRoleOverride(row.Alt.Pid, row.Role);
         if (row.Role == CadenceRole.KeepAlive) SeedKeepAliveDue(row);
         else _keepAliveDueAtMs.Remove(row);
+    }
+
+    /// <summary>
+    /// Set a row's DISPLAYED Role from <see cref="Assignment.ResolveRole"/> —
+    /// exactly the same pure function PluginRuntime consults at PLAY-time — so the
+    /// row can never show something PLAY wouldn't actually do. Used at row
+    /// creation and whenever a row's macro pairing changes; never publishes a NEW
+    /// runtime override (an existing one, if any, is read via
+    /// <see cref="PluginRuntime.GetRoleOverride"/> and still wins outright — this
+    /// only reflects it, it doesn't create one).
+    /// </summary>
+    private void SeedRowRole(AssignmentRow row, Macro? macro)
+    {
+        var role = Assignment.ResolveRole(macro, _runtime.GetRoleOverride(row.Alt.Pid));
+        _isRederivingRole = true;
+        try { row.Role = role; }
+        finally { _isRederivingRole = false; }
     }
 
     /// <summary>(Re)start a row's countdown at a fresh full interval — called both

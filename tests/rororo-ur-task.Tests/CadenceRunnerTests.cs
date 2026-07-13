@@ -158,6 +158,37 @@ public class CadenceRunnerTests
             "hit the busy-spin tripwire instead of completing normally — Minor-1's safety net fired");
     }
 
+    /// <summary>
+    /// CRITICAL 2 regression (runtime belt-and-braces): a null-macro Active
+    /// assignment must never reach the scheduler as Active. This deliberately
+    /// violates the invariant the UI is supposed to enforce (Assignment.ResolveRole
+    /// coerces a null macro to KeepAlive) — the runner is the LAST line of defense,
+    /// same principle as the IntervalMs clamp just above. Without RunAsync's
+    /// coercion, ScheduledAlt.IsKeepAlive reads false for this alt, Decide has no
+    /// deadline gate for Active, and RunActiveAsync focuses + settles (1s) + verifies
+    /// + finds nothing to play, then the outer loop re-enters Decide immediately —
+    /// a continuous ~1s foreground steal for the whole run, zero farming, and zero
+    /// keep-alive protection either.
+    ///
+    /// Verified by hand: reverting the coercion in RunAsync (scheduling `a` directly
+    /// instead of `a with { Role = Assignment.ResolveRole(...) }`) turns this RED —
+    /// the alt is focused roughly once per second for the whole simulated hour
+    /// (thousands of focuses) and never once taps Space.
+    /// </summary>
+    [Fact]
+    public async Task NullMacroActiveAssignment_IsCoercedToKeepAlive_NoContinuousForegroundSteal()
+    {
+        var alt = new Assignment(Alt(1), null, CadenceRole.Active);   // invariant violation, on purpose
+        var rig = Build(new[] { alt }, runForMs: 60 * Min);
+
+        await rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+
+        Assert.Empty(rig.Player.Plays);          // no macro — nothing was ever there to play
+        Assert.InRange(rig.Taps.Count, 4, 6);     // behaves exactly like a plain KeepAlive alt
+        Assert.True(rig.Focused.Count < 20,
+            $"macro-less 'Active' alt was focused {rig.Focused.Count}x in a simulated hour — the hijack loop is back");
+    }
+
     /// Every foreground steal is paired with a restore, so a keep-alive is a ~1s blip
     /// rather than a hijack.
     [Fact]

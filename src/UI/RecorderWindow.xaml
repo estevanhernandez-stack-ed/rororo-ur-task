@@ -867,10 +867,16 @@
                                                             <!-- Cadence-role toggle. ComboBox (not a raw click surface) marks
                                                                  its own MouseLeftButtonDown Handled internally, same reasoning
                                                                  as the routine checkbox above — never fires the row's
-                                                                 OnAssignmentRowClicked macro-assign toggle. -->
+                                                                 OnAssignmentRowClicked macro-assign toggle.
+                                                                 CRITICAL 2 UI gate: disabled with no macro assigned — a
+                                                                 macro-less alt has nothing for Active to farm, so Active
+                                                                 must not even be selectable here (ThemedComboBox's own
+                                                                 IsEnabled=False trigger — opacity 0.35 — handles the look,
+                                                                 same idiom as every other disabled control in this window). -->
                                                             <ComboBox Style="{StaticResource ThemedComboBox}"
                                                                       SelectedValuePath="Tag"
                                                                       SelectedValue="{Binding Role, Mode=TwoWay}"
+                                                                      IsEnabled="{Binding HasMacro}"
                                                                       FontSize="8"
                                                                       Padding="6,3"
                                                                       Width="82"
@@ -883,11 +889,16 @@
                                                                  needs to know WHICH alt to focus. FocusOneCommand lives on the
                                                                  window's DataContext (RecorderViewModel), not this row, hence
                                                                  the AncestorType lookup — same pattern CurrentRunnerAltPid uses
-                                                                 above for the "now playing" highlight. -->
+                                                                 above for the "now playing" highlight.
+                                                                 CRITICAL 2 UI gate: same reasoning as the ComboBox above —
+                                                                 FOCUS would make this alt Active, so it's disabled with no
+                                                                 macro to farm (RecorderViewModel.FocusOneCommand also
+                                                                 no-ops defensively if ever invoked another way). -->
                                                             <Button Content="FOCUS"
                                                                     Style="{StaticResource SecondaryButton}"
                                                                     Command="{Binding DataContext.FocusOneCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding}"
+                                                                    IsEnabled="{Binding HasMacro}"
                                                                     ToolTip="Make this alt Active; background every other alt to Keep-alive"
                                                                     FontSize="8"
                                                                     Padding="6,3"
