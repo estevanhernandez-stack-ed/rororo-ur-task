@@ -137,6 +137,17 @@ internal sealed class AssignmentRunner
         }
         var ct = cts.Token;
 
+        // Emitted exactly once, only for the call that actually won the
+        // single-flight guard above — a losing call returns before this line, so it
+        // emits nothing. This is the symmetric counterpart to the Stopped phase
+        // emitted in the finally below: callers (PluginRuntime) that need to know
+        // "the loop is REALLY about to start servicing these alts" — e.g. to publish
+        // the ur-afk claim file — must hang off this signal rather than the caller's
+        // own optimism about whether its RunAsync call will win. Carries the full
+        // assignment set via AllAssignments so a subscriber doesn't need any
+        // additional shared/racy state to know which alts this run covers.
+        EmitProgress(new AssignmentProgress(1, -1, assignments.Count, null, AssignmentPhase.Started, AllAssignments: assignments));
+
         var scheduled = assignments.Select(a => new ScheduledAlt
         {
             Assignment = a,
@@ -664,12 +675,18 @@ public sealed record Assignment(
 //   - a keep-alive alt whose interval is shorter than the worst-case Active pass it
 //     could be waiting behind — genuinely unschedulable, not just occasionally late —
 //     emitted once up front at the top of RunAsync, before anything gets kicked.
-public enum AssignmentPhase { Focusing, Playing, Skipped, Refused, Stopped, Warning }
+// Started fires exactly once, only for the RunAsync call that actually wins the
+// single-flight CompareExchange guard (see RunAsync) — the symmetric counterpart to
+// Stopped. A losing concurrent call emits nothing, so anything hanging off Started
+// (e.g. PluginRuntime's ur-afk claim publish) never fires for a call that never
+// actually started servicing anyone.
+public enum AssignmentPhase { Focusing, Playing, Skipped, Refused, Stopped, Warning, Started }
 
 public sealed record AssignmentProgress(
     int Cycle,
-    int IndexInCycle,       // -1 = no current alt (Stopped state)
+    int IndexInCycle,       // -1 = no current alt (Stopped/Started state)
     int TotalInCycle,
     Assignment? Current,
     AssignmentPhase Phase,
-    string? Reason = null); // set on Phase == Refused; carries PlaybackResult.Reason
+    string? Reason = null,             // set on Phase == Refused; carries PlaybackResult.Reason
+    IReadOnlyList<Assignment>? AllAssignments = null); // set on Phase == Started; the exact set this run is about to service

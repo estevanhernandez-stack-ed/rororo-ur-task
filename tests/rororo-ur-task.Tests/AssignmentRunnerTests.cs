@@ -184,6 +184,60 @@ public class AssignmentRunnerTests
     }
 
     /// <summary>
+    /// Regression for the review's CRITICAL 2: PluginRuntime used to publish the ur-afk
+    /// claim unconditionally, BEFORE the runner had actually won its single-flight
+    /// CompareExchange guard — so a losing concurrent RunAsync call (e.g. a recipe's
+    /// fire-and-forget Abort() racing a prior run that hadn't unwound yet) could still
+    /// get a claim published for alts nobody was servicing. The fix moves claim
+    /// publication onto a new AssignmentPhase.Started signal that RunAsync emits exactly
+    /// once, only for the call that actually wins the guard — mirroring how Stopped
+    /// already works. This test proves the mechanism the fix depends on: a losing
+    /// concurrent call must emit NO Started progress at all, so nothing downstream (like
+    /// PluginRuntime's claim publisher) ever fires for it. Reuses the same
+    /// BlockingFakePlayer pin-mid-flight rig as
+    /// RunAsync_ConcurrentEntry_SecondCallRefusesWithoutStartingSecondLoop.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ConcurrentEntry_SecondCallEmitsNoStarted()
+    {
+        var macro = NewMacro("started-guard-test");
+        var alt1 = Alt(1001, 47821334, "Goldnail8");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var player = new BlockingFakePlayer(entered, release);
+        var fg = new FakeForeground { Resolver = () => alt1 };
+
+        var runner = new AssignmentRunner(player, fg, _ => (true, null));
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
+
+        var startedEvents = new List<AssignmentProgress>();
+        runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Started) startedEvents.Add(p); };
+
+        // ── FIRST call: wins the race, pinned mid-flight inside PlayAsync. ──
+        using var firstCts = new CancellationTokenSource();
+        var firstTask = runner.RunAsync(assignments, firstCts.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(runner.IsRunning, "Expected the round-robin loop to be mid-flight.");
+
+        // ── SECOND call: must be refused atomically, without emitting Started — a
+        // downstream claim publisher hanging off Started (see PluginRuntime) must
+        // therefore never see this call at all. ──
+        using var secondCts = new CancellationTokenSource();
+        var secondTask = runner.RunAsync(assignments, secondCts.Token);
+        await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Exactly one Started — the winner's, carrying its assignment set.
+        var started = Assert.Single(startedEvents);
+        Assert.Same(assignments, started.AllAssignments);
+
+        // ── Unwind. ──
+        release.TrySetResult();
+        firstCts.Cancel();
+        try { await firstTask; } catch (OperationCanceledException) { /* acceptable unwind path */ }
+    }
+
+    /// <summary>
     /// 2-alt scenario: alt1 has a macro, alt2 is unassigned (keep-alive).
     /// Cancel after the first full pass (both alts visited). Assert:
     ///   - PlayAsync called once for alt1 with the correct macro

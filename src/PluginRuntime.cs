@@ -126,6 +126,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // Warning reached no user surface at all (only Refused was logged here).
             else if (p.Phase == AssignmentPhase.Warning && !string.IsNullOrWhiteSpace(p.Reason))
                 Log(p.Reason);
+            // Started fires exactly once, only for the RunAsync call that actually
+            // won the runner's single-flight CompareExchange guard — a losing
+            // concurrent call (e.g. a still-unwinding prior run racing a recipe's
+            // preemption) emits nothing. Publish the claim HERE, off the runner's
+            // own confirmation that it is really about to service these alts, not
+            // at the caller's call site before the race is even decided — that
+            // ordering used to let a losing call's claim outlive the run it was
+            // never attached to (see TryStartClaim's doc for the full story).
+            else if (p.Phase == AssignmentPhase.Started && p.AllAssignments is not null)
+                TryStartClaim(p.AllAssignments);
             // Stopped fires exactly once, right before AssignmentRunner.RunAsync's own
             // finally clears _activeCts — same moment for every termination path
             // (toggle-stop, Esc/Ctrl+Shift+A abort, host-lost, recipe preemption all
@@ -350,13 +360,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
             // The recipe's terminal Loop/KeepAlive step is the OTHER place
             // _runner.RunAsync gets kicked off (the plain Ctrl+Shift+P path above is
-            // the first) — claim right before it, same as that path, so a recipe's
-            // farm/keep-alive tail is covered too.
-            runLoop: (assignments, ct) =>
-            {
-                TryStartClaim(assignments);
-                return _runner.RunAsync(assignments, ct);
-            },
+            // the first). Same as that path, do NOT claim here — the Abort() just
+            // above is fire-and-forget (not awaited), so a prior run may still be
+            // unwinding when this RunAsync call is made, and it can legitimately
+            // lose the single-flight race against that stale run. Claiming
+            // unconditionally here would publish coverage for alts this call never
+            // actually started servicing. The _runner.Progress subscription's
+            // Started handler claims instead, and only fires for the call that
+            // really wins.
+            runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
             resolveMacro: id => macros.TryGetValue(id, out var m) ? m : null);
         runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
 
@@ -444,10 +456,21 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     /// <summary>
     /// Publish the accounts <see cref="_runner"/> is about to actively manage — see
-    /// <see cref="ClaimFile"/>. Called right before EVERY <c>_runner.RunAsync</c>
-    /// kickoff (the plain Ctrl+Shift+P path in <see cref="OnHotkey"/> and the recipe
-    /// terminal-loop path in <see cref="RunRecipe"/>), so the claim always reflects
-    /// exactly the alt set that call is about to service.
+    /// <see cref="ClaimFile"/>. Called from the <c>_runner.Progress</c> subscription's
+    /// <see cref="AssignmentPhase.Started"/> handler (constructor) — that phase fires
+    /// exactly once, only for the <c>_runner.RunAsync</c> call that actually won the
+    /// single-flight <c>CompareExchange</c> guard, whether that call came from the
+    /// plain Ctrl+Shift+P path in <see cref="OnHotkey"/> or the recipe terminal-loop
+    /// path in <see cref="RunRecipe"/>.
+    ///
+    /// Deliberately NOT called at either call site directly, before RunAsync is
+    /// kicked off: a losing concurrent call (e.g. a recipe's fire-and-forget
+    /// <c>_runner.Abort()</c> racing a prior run that hasn't unwound yet — see
+    /// RunRecipe's comment) would otherwise publish a claim for alts nobody actually
+    /// started servicing, exactly the lying-claim failure mode this file's SAFETY
+    /// DIRECTION exists to avoid. Hanging the claim off the runner's own confirmed
+    /// start makes it symmetric with <see cref="TryStopClaim"/>, which already hangs
+    /// off the runner's confirmed <see cref="AssignmentPhase.Stopped"/>.
     ///
     /// Publishing a claim is bookkeeping; keeping alts alive is the product. A failed
     /// write must never stop the cadence loop, so any I/O failure here is caught and
@@ -605,10 +628,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
 
                 _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
-                // Publish which accounts we're about to actively manage BEFORE the loop
-                // starts servicing them, so ur-afk sees the claim no later than the
-                // first keep-alive/farm tap could otherwise race it.
-                TryStartClaim(assignments);
+                // Claim publication happens off _runner's own Started progress event
+                // (see the Progress subscription in the constructor) — NOT here —
+                // so it only fires once RunAsync has actually won its single-flight
+                // guard, not on the optimistic assumption that this call will win.
                 _ = Task.Run(async () =>
                 {
                     try
