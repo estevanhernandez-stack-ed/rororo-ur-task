@@ -28,6 +28,23 @@ internal static class KeepAliveIntervals
     private const int PrimaryKeeperMinutes = 11;
     private const int BackstopMinutes = 17;
 
+    /// <summary>
+    /// Roblox disconnects an idle player after this many minutes. This is a
+    /// PLATFORM FLOOR, not a game-specific number: individual games may
+    /// SHORTEN it (that's what PrimaryKeeperGames/BackstopGames above react
+    /// to), but NONE may extend it. Any alt whose projected keep-alive gap
+    /// reaches this — from its own fire interval, from sitting behind a long
+    /// Active pass, or both — gets kicked, regardless of which game it's in.
+    /// </summary>
+    public const int PlatformIdleKickFloorMinutes = 20;
+
+    /// <summary>
+    /// Warn once the projected keep-alive gap reaches this many minutes — a
+    /// couple of minutes of runway BEFORE the kick floor, so the warning is
+    /// useful (something can still be done about it) rather than a postmortem.
+    /// </summary>
+    public const int WarnThresholdMinutes = PlatformIdleKickFloorMinutes - 2;
+
     // Games that ship NO anti-AFK — Ur Task is the only thing keeping them alive.
     private static readonly string[] PrimaryKeeperGames =
     [

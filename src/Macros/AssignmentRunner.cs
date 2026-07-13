@@ -147,24 +147,37 @@ internal sealed class AssignmentRunner
                                          // tap once up front, THEN settle into its interval.
         }).ToList();
 
-        // Unschedulable check. The longest active pass sets the worst-case wait any
-        // keep-alive can face. If an alt's interval is shorter than that, we cannot
-        // guarantee it — say so now rather than letting it get kicked silently.
+        // Unschedulable check. Because Decide is re-consulted between EVERY Active
+        // pass (not once per round-robin lap), the realized worst-case gap between
+        // keep-alive taps converges to ≈ the longest Active PASS LENGTH — not
+        // interval + pass, and it does not accumulate. With no Active alts at all,
+        // the gap is simply the interval itself. So the projected worst-case gap for
+        // a keep-alive alt is Math.Max(longestActivePassMs, alt.IntervalMs) — warn
+        // when THAT approaches the platform's kick floor, independent of how the
+        // interval and the pass length compare to each other. Comparing the interval
+        // to the pass length directly (the pre-fix trigger) is wrong in both
+        // directions: a 16-min pass against a 12-min interval reads as "shorter" and
+        // cries wolf even though the realized ~16-min gap is comfortably safe; a
+        // 25-min per-game override with zero Active alts reads as "not shorter than
+        // 0" and silently misses a kick that is guaranteed to happen.
         var longestActivePassMs = scheduled
             .Where(a => !a.IsKeepAlive)
-            .Select(a => (a.Assignment.Macro is null ? 0L : (long)a.Assignment.Macro.Duration.TotalMilliseconds)
-                         + DefaultPerAltDelayMs + (a.Assignment.Macro?.InterAltDelayMs ?? 500))
+            .Select(StaticPassCostMs)
             .DefaultIfEmpty(0L)
             .Max();
+        var warnThresholdMs = (long)TimeSpan.FromMinutes(KeepAliveIntervals.WarnThresholdMinutes).TotalMilliseconds;
 
-        foreach (var alt in scheduled.Where(a => a.IsKeepAlive && a.IntervalMs < longestActivePassMs))
+        foreach (var alt in scheduled.Where(a => a.IsKeepAlive))
         {
-            var mins = alt.IntervalMs / 60_000.0;
-            var passMins = longestActivePassMs / 60_000.0;
+            var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
+            if (projectedGapMs < warnThresholdMs) continue;
+
+            var gapMins = projectedGapMs / 60_000.0;
             EmitProgress(new AssignmentProgress(
                 0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
-                $"{alt.Assignment.Alt.DisplayName} may get kicked — its keep-alive is every " +
-                $"{mins:F0} min but your active macro's pass is {passMins:F0} min. " +
+                $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
+                $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
+                $"idle floor (games may shorten this, none may extend it). " +
                 $"Shorten the macro, split it, or set this alt to Active."));
         }
 
@@ -319,10 +332,21 @@ internal sealed class AssignmentRunner
         var actives = alts.Where(a => !a.IsKeepAlive).ToList();
         if (actives.Count == 0) return 0;
         var next = actives[cursor % actives.Count];
-        var macro = next.Assignment.Macro;
-        var playMs = macro is null ? 0 : (long)macro.Duration.TotalMilliseconds;
-        var staticEstimate = playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
-        return Math.Max(staticEstimate, next.ObservedPassCostMs);
+        return Math.Max(StaticPassCostMs(next), next.ObservedPassCostMs);
+    }
+
+    /// <summary>
+    /// The static, Macro.Duration-derived estimate of one Active pass's cost —
+    /// shared by <see cref="NextActivePassCostMs"/> (which additionally folds in
+    /// the per-alt observed high-water mark) and the up-front unschedulable-alt
+    /// warning in <see cref="RunAsync"/> (which runs before any pass has been
+    /// observed, so the static estimate is all it has).
+    /// </summary>
+    private static long StaticPassCostMs(ScheduledAlt alt)
+    {
+        var macro = alt.Assignment.Macro;
+        var playMs = macro is null ? 0L : (long)macro.Duration.TotalMilliseconds;
+        return playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
     }
 
     /// <summary>
@@ -407,15 +431,30 @@ internal sealed class AssignmentRunner
     /// — both mean "this attempt didn't land," and both count toward the same
     /// ConsecutiveFocusFailures streak so "hasn't been focusable for N tries" actually
     /// fires for whichever failure mode is happening.
+    ///
+    /// Fires the Warning exactly ONCE per failure streak — the instant the counter
+    /// CROSSES the 3-failure threshold, not on every retry once it's at-or-above 3.
+    /// Task 6 wired Warning to the activity log AND the themed toast (see
+    /// RecorderViewModel.AssignmentProgressed); a crashed/closed alt retries every
+    /// 30s forever, and the old `>= 3` condition re-emitted Warning on every one of
+    /// those retries with the incrementing try-count baked into the text, which
+    /// defeats ShowError's exact-text dedup — a fresh toast and log line every 30s,
+    /// forever. Resetting ConsecutiveFocusFailures to 0 on a successful focus (see
+    /// ServiceKeepAliveAsync) already re-arms this, so a genuinely flapping alt still
+    /// warns again after it recovers and re-fails. Retries beyond the first crossing
+    /// still emit Skipped (silent, no Reason) so the activity log/UI still reflects
+    /// that an attempt happened — they just don't re-toast.
     /// </summary>
     private void EmitFocusFailureWarning(ScheduledAlt alt, int cycle, int index, int total, Assignment asn)
     {
-        EmitProgress(new AssignmentProgress(
-            cycle, index, total, asn,
-            alt.ConsecutiveFocusFailures >= 3 ? AssignmentPhase.Warning : AssignmentPhase.Skipped,
-            alt.ConsecutiveFocusFailures >= 3
-                ? $"{asn.Alt.DisplayName} hasn't been focusable for {alt.ConsecutiveFocusFailures} tries — its window may be gone. Still retrying every 30s."
-                : null));
+        if (alt.ConsecutiveFocusFailures == 3)
+        {
+            EmitProgress(new AssignmentProgress(
+                cycle, index, total, asn, AssignmentPhase.Warning,
+                $"{asn.Alt.DisplayName} hasn't been focusable for 3 tries — its window may be gone. Still retrying every 30s."));
+            return;
+        }
+        EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
     }
 
     /// <summary>

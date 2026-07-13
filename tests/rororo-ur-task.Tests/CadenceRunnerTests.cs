@@ -480,6 +480,10 @@ public class CadenceRunnerTests
         var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
         var assignments = new[] { active, keep };
         var rig = Build(assignments, runForMs: 90 * Min);
+        // REAL cost mirrors the declared duration — without this PlayAsync completes
+        // near-instantly in simulated time and the rig never actually reproduces the
+        // long-blocking-pass dynamic this test's doc-comment narrates.
+        rig.Player.RealPlayCostMs = 15 * Min;
 
         await rig.Runner.RunAsync(assignments, rig.Cts.Token);
 
@@ -523,20 +527,70 @@ public class CadenceRunnerTests
             $"Active focus attempted {rig.Focused.Count}x in a simulated hour — the spin loop is back");
     }
 
-    /// An alt whose keep-alive interval is SHORTER than one active pass cannot be
-    /// kept alive — even firing it the instant a pass ends, the next pass blows its
-    /// deadline. We know Macro.Duration and the intervals up front, so say so BEFORE
-    /// the alt gets kicked, not after.
+    /// <summary>
+    /// FALSE-POSITIVE GUARD. Because CadenceScheduler.Decide is re-consulted between
+    /// EVERY Active pass (not once per round-robin lap), the realized worst-case gap
+    /// between keep-alive taps converges to ≈ the longest Active PASS LENGTH — not
+    /// interval + pass, and it does not accumulate. A 16-minute Active pass against a
+    /// 12-minute keep-alive interval therefore realizes a ~16-minute gap, which is
+    /// comfortably under Roblox's 20-minute idle kick floor (~4 minutes of margin) —
+    /// exactly the "gap stretches but stays safe" case the scheduler deliberately
+    /// allows. The pre-fix trigger (`alt.IntervalMs < longestActivePassMs`) fired
+    /// here anyway (12 &lt; 16) — on essentially any moderately long farming macro —
+    /// which trains users to ignore the one warning that actually matters.
+    ///
+    /// Verified by hand: reverting the fix (comparing IntervalMs to
+    /// longestActivePassMs directly instead of the projected-gap-vs-floor formula)
+    /// turns the `Assert.Empty(warnings)` below RED — the old trigger emits exactly
+    /// one warning for this scenario.
+    /// </summary>
     [Fact]
-    public async Task KeepAliveIntervalShorterThanActivePass_WarnsAtStart_ButStillRuns()
+    public async Task SafeButStretchedGap_DoesNotWarn_FalsePositiveGuard()
     {
         // Active alt with a 16-minute macro; keep-alive alt on a 12-minute interval
-        // (Build's default). 16 min of declared macro length comfortably exceeds the
-        // 12-minute interval, so this alt is unschedulable by construction.
+        // (Build's default).
         var active = new Assignment(Alt(1), MacroOfLength(16 * Min), CadenceRole.Active);
         var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
         var assignments = new[] { active, keep };
-        var rig = Build(assignments, runForMs: 30 * Min);
+        var rig = Build(assignments, runForMs: 60 * Min);
+        // REAL cost mirrors the declared duration — without this PlayAsync completes
+        // near-instantly in simulated time and the rig never actually reproduces the
+        // long-blocking-pass dynamic this test's premise depends on.
+        rig.Player.RealPlayCostMs = 16 * Min;
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) =>
+        {
+            if (p.Phase == AssignmentPhase.Warning) warnings.Add(p);
+        };
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.Empty(warnings);   // safe-but-stretched: no cry-wolf warning
+
+        // Warn-or-not never gates behavior: the run still serviced things normally.
+        Assert.NotEmpty(rig.Player.Plays);   // the Active alt still farmed
+        Assert.True(rig.TapTimes.Count >= 2, "need at least 2 taps to measure a gap");
+        var maxGapMs = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).Max();
+        Assert.True(maxGapMs < 20 * Min,
+            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — past Roblox's 20-minute idle kick floor");
+    }
+
+    /// <summary>
+    /// TRUE-POSITIVE case: an Active pass long enough that the projected keep-alive
+    /// gap genuinely nears — here, outright exceeds — Roblox's 20-minute idle kick
+    /// floor. The keep-alive alt stays on Build's default 12-minute interval, so the
+    /// pass length alone (not the interval) drives the projected gap, isolating this
+    /// from the false-negative case below.
+    /// </summary>
+    [Fact]
+    public async Task LongActivePass_ProjectedGapNearsKickFloor_Warns()
+    {
+        var active = new Assignment(Alt(1), MacroOfLength(22 * Min), CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+        var rig = Build(assignments, runForMs: 60 * Min);
+        rig.Player.RealPlayCostMs = 22 * Min;
 
         var warnings = new List<AssignmentProgress>();
         rig.Runner.Progress += (_, p) =>
@@ -547,12 +601,72 @@ public class CadenceRunnerTests
         await rig.Runner.RunAsync(assignments, rig.Cts.Token);
 
         Assert.Single(warnings);
-        Assert.Contains("kicked", warnings[0].Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.Same(keep, warnings[0].Current);   // names the alt that can't be kept alive
+        Assert.Same(keep, warnings[0].Current);                              // names the alt
+        Assert.Contains(keep.Alt.DisplayName, warnings[0].Reason, StringComparison.Ordinal);
+        Assert.Contains("20", warnings[0].Reason);                           // states the platform floor
+        Assert.Contains("Active", warnings[0].Reason, StringComparison.Ordinal); // gives a remedy
+    }
 
-        // Warn, don't block: the run still serviced things — it did not abort or
-        // refuse to proceed just because one alt can't be guaranteed.
-        Assert.NotEmpty(rig.Player.Plays);   // the Active alt still farmed
-        Assert.NotEmpty(rig.Taps);           // the keep-alive alt still got serviced
+    /// <summary>
+    /// FALSE-NEGATIVE GUARD. A per-game keep-alive override of 25 minutes with ZERO
+    /// Active alts. There is no Active pass to blame — the interval itself already
+    /// exceeds Roblox's 20-minute idle kick floor, so this alt WILL get kicked on its
+    /// own. The pre-fix trigger (`alt.IntervalMs < longestActivePassMs`) can never
+    /// catch this: with no Actives, longestActivePassMs is 0, so `25min &lt; 0` is
+    /// never true — the simplest unschedulable case went completely unreported.
+    ///
+    /// Verified by hand: reverting the fix turns the `Assert.Single(warnings)` below
+    /// RED — the old trigger emits none for this scenario.
+    /// </summary>
+    [Fact]
+    public async Task OverLongIntervalWithNoActives_Warns_FalseNegativeGuard()
+    {
+        var keep = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
+        var assignments = new[] { keep };
+        var rig = Build(assignments, runForMs: 60 * Min, keepAliveIntervalMs: 25 * Min);
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) =>
+        {
+            if (p.Phase == AssignmentPhase.Warning) warnings.Add(p);
+        };
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.Single(warnings);
+        Assert.Same(keep, warnings[0].Current);
+
+        // Warn, don't block: the run still serviced it despite the warning.
+        Assert.NotEmpty(rig.Taps);
+    }
+
+    /// <summary>
+    /// Task 6 wired AssignmentPhase.Warning to the activity log AND the themed toast
+    /// (RecorderViewModel.AssignmentProgressed). A permanently-unfocusable alt (window
+    /// closed/crashed) retries every 30s forever via ServiceKeepAliveAsync's bounded
+    /// backoff — before this fix, EmitFocusFailureWarning re-emitted Warning on EVERY
+    /// one of those retries once ConsecutiveFocusFailures reached 3, with the
+    /// incrementing try-count baked into the text, which defeats ShowError's
+    /// exact-text dedup: a fresh toast and log line every 30 seconds, forever, for the
+    /// rest of the run. Fixed to fire exactly once, when the streak first CROSSES 3.
+    /// </summary>
+    [Fact]
+    public async Task PermanentlyUnfocusableKeepAlive_WarnsExactlyOnce_NotOnEveryRetry()
+    {
+        var alt = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
+        var rig = Build(new[] { alt }, runForMs: 90 * Min, focusOverride: _ => (false, "window not found"));
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) =>
+        {
+            if (p.Phase == AssignmentPhase.Warning) warnings.Add(p);
+        };
+
+        await rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+
+        Assert.Single(warnings);
+        Assert.Contains("hasn't been focusable", warnings[0].Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(rig.Focused.Count > 4,
+            "test premise requires several retries past the 3-failure threshold to actually exercise the spam guard");
     }
 }
