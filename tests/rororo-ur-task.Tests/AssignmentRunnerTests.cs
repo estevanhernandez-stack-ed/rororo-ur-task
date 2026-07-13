@@ -150,7 +150,7 @@ public class AssignmentRunnerTests
         var fg = new FakeForeground { Resolver = () => alt1 };
 
         var runner = new AssignmentRunner(player, fg, _ => (true, null));
-        var assignments = new List<Assignment> { new(alt1, macro) };
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
 
         // ── FIRST call: start but don't await yet — it loops forever until
         // cancelled, and is currently pinned mid-flight inside PlayAsync (the
@@ -217,8 +217,8 @@ public class AssignmentRunnerTests
 
         var assignments = new List<Assignment>
         {
-            new(alt1, macro),  // explicit macro
-            new(alt2, null),   // keep-alive (Space)
+            Assignment.WithDerivedRole(alt1, macro),  // explicit macro
+            Assignment.WithDerivedRole(alt2, null),   // keep-alive (Space)
         };
 
         var phases = new List<(int index, AssignmentPhase phase)>();
@@ -289,8 +289,8 @@ public class AssignmentRunnerTests
 
         var assignments = new List<Assignment>
         {
-            new(alt1, macro),
-            new(alt2, macro),
+            Assignment.WithDerivedRole(alt1, macro),
+            Assignment.WithDerivedRole(alt2, macro),
         };
 
         var phases = new List<(int index, AssignmentPhase phase)>();
@@ -334,7 +334,7 @@ public class AssignmentRunnerTests
         var fg = new FakeForeground { Resolver = () => alt1 };
         var runner = new AssignmentRunner(player, fg, _ => (true, null));
 
-        var assignments = new List<Assignment> { new(alt1, macro) };
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
 
         var progressed = new List<AssignmentProgress>();
         var cts = new CancellationTokenSource();

@@ -538,7 +538,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 // Build assignment list — every running alt gets a slot,
                 // unassigned = null macro (keep-alive Space).
                 var assignments = alts.Select(a =>
-                    new Assignment(a, _assignments.TryGetValue(a.Pid, out var m) ? m : null)).ToList();
+                    Assignment.WithDerivedRole(a, _assignments.TryGetValue(a.Pid, out var m) ? m : null)).ToList();
 
                 var explicitCount = assignments.Count(a => a.Macro is not null);
                 var keepAliveCount = assignments.Count(a => a.Macro is null);

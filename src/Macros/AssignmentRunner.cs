@@ -221,7 +221,27 @@ internal sealed class AssignmentRunner
     private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 }
 
-public sealed record Assignment(AccountRegistry.AccountInfo Alt, Macro? Macro);
+/// <summary>
+/// How often an alt gets serviced. Active = run its macro back-to-back (farming).
+/// KeepAlive = fire a single Space only when its idle deadline approaches, so the
+/// scheduler can sleep instead of stealing foreground every ~1.25s.
+/// </summary>
+public enum CadenceRole { Active, KeepAlive }
+
+public sealed record Assignment(
+    AccountRegistry.AccountInfo Alt,
+    Macro? Macro,
+    CadenceRole Role)   // NO default value — see WithDerivedRole.
+{
+    /// <summary>
+    /// The legacy/derived rule: a macro means you meant to farm; no macro means you
+    /// meant to stay alive. Deliberately a factory rather than a C# default value —
+    /// a `= CadenceRole.Active` default would silently make no-macro assignments
+    /// Active and spin them back-to-back, recreating the bug the scheduler fixes.
+    /// </summary>
+    public static Assignment WithDerivedRole(AccountRegistry.AccountInfo alt, Macro? macro)
+        => new(alt, macro, macro is null ? CadenceRole.KeepAlive : CadenceRole.Active);
+}
 
 // Refused covers both PlaybackOutcome.Refused (preflight declined, e.g. client-space
 // resize failed) and PlaybackOutcome.Aborted (mid-playback foreground shift) from the
