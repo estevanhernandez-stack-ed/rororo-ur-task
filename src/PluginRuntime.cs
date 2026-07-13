@@ -30,6 +30,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly MacroPlayer _player;
     private readonly SequencePlayer _sequence;
     private readonly AssignmentRunner _runner;
+    private readonly ClaimFile _claim = new();
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
@@ -125,6 +126,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // Warning reached no user surface at all (only Refused was logged here).
             else if (p.Phase == AssignmentPhase.Warning && !string.IsNullOrWhiteSpace(p.Reason))
                 Log(p.Reason);
+            // Stopped fires exactly once, right before AssignmentRunner.RunAsync's own
+            // finally clears _activeCts — same moment for every termination path
+            // (toggle-stop, Esc/Ctrl+Shift+A abort, host-lost, recipe preemption all
+            // route through _runner.Abort() cancelling the loop's token). Release the
+            // claim here instead of duplicating a Stop() call at every abort call site.
+            else if (p.Phase == AssignmentPhase.Stopped)
+                TryStopClaim();
         };
 
         _ = new AutoStopCoordinator(_player, Accounts);
@@ -340,7 +348,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
-            runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
+            // The recipe's terminal Loop/KeepAlive step is the OTHER place
+            // _runner.RunAsync gets kicked off (the plain Ctrl+Shift+P path above is
+            // the first) — claim right before it, same as that path, so a recipe's
+            // farm/keep-alive tail is covered too.
+            runLoop: (assignments, ct) =>
+            {
+                TryStartClaim(assignments);
+                return _runner.RunAsync(assignments, ct);
+            },
             resolveMacro: id => macros.TryGetValue(id, out var m) ? m : null);
         runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
 
@@ -424,6 +440,38 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
+    // ---------- Heartbeat claim (Task 7) ----------
+
+    /// <summary>
+    /// Publish the accounts <see cref="_runner"/> is about to actively manage — see
+    /// <see cref="ClaimFile"/>. Called right before EVERY <c>_runner.RunAsync</c>
+    /// kickoff (the plain Ctrl+Shift+P path in <see cref="OnHotkey"/> and the recipe
+    /// terminal-loop path in <see cref="RunRecipe"/>), so the claim always reflects
+    /// exactly the alt set that call is about to service.
+    ///
+    /// Publishing a claim is bookkeeping; keeping alts alive is the product. A failed
+    /// write must never stop the cadence loop, so any I/O failure here is caught and
+    /// logged rather than allowed to propagate into the caller (which would otherwise
+    /// abort the loop before it even starts).
+    /// </summary>
+    private void TryStartClaim(IReadOnlyList<Assignment> assignments)
+    {
+        try { _claim.Start(assignments.Select(a => a.Alt.RobloxUserId)); }
+        catch (Exception ex) { Log($"Claim publish failed (non-fatal — ur-afk may double-cover these alts briefly): {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Release the claim — see the <c>AssignmentPhase.Stopped</c> handler on
+    /// <see cref="_runner"/>'s Progress subscription, which is the single place this
+    /// is called from. Fails SAFE even if this throws: the heartbeat's TTL (see
+    /// <see cref="ClaimFile"/>) still expires on its own, so a failed delete here
+    /// never leaves ur-afk permanently locked out.
+    /// </summary>
+    private void TryStopClaim()
+    {
+        try { _claim.Stop(); } catch (Exception ex) { Log($"Claim release failed (non-fatal — TTL expiry covers it): {ex.Message}"); }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -466,6 +514,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         try { _activeRecipeRunner?.Abort(); } catch { }
+        // Belt-and-suspenders: a graceful app exit may race the runner's own
+        // Stopped event (background task hasn't ticked yet) — dispose the claim
+        // directly too so a clean quit doesn't wait out the TTL for no reason.
+        try { _claim.Dispose(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -553,6 +605,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
 
                 _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
+                // Publish which accounts we're about to actively manage BEFORE the loop
+                // starts servicing them, so ur-afk sees the claim no later than the
+                // first keep-alive/farm tap could otherwise race it.
+                TryStartClaim(assignments);
                 _ = Task.Run(async () =>
                 {
                     try
