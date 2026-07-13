@@ -87,7 +87,9 @@ internal static class CadenceScheduler
     /// A conservative upper bound, in milliseconds, on how long one more Active macro pass
     /// would take. Used as the gap-fit lookahead: a keep-alive is urgent if it would miss its
     /// deadline should one more Active pass run before it. Pass 0 when no Active alt is queued.
-    /// Must be <c>&gt;= 0</c>.
+    /// Should be <c>&gt;= 0</c>; because it's derived from user-editable on-disk macro data,
+    /// a negative value is not trusted — <see cref="Decide"/> defensively clamps it to 0
+    /// before use.
     /// </param>
     /// <returns>
     /// The single next action: <see cref="CadenceDecision.ServiceKeepAlive"/> for the most
@@ -102,15 +104,24 @@ internal static class CadenceScheduler
         ScheduledAlt? nextActive = null;
         long earliestDue = long.MaxValue;
 
-        // Saturating, not raw `+`: nextActivePassCostMs is derived from Macro.Duration,
-        // which comes from the last event's timestamp in a user-editable on-disk JSON
-        // macro file. A pathological duration (e.g. long.MaxValue) would otherwise
-        // overflow nowMs + nextActivePassCostMs to negative, making `DueAtMs <= <negative>`
-        // false for every alt — nothing would ever look urgent, RunActive would win forever,
-        // and every keep-alive would get silently kicked. Clamping to long.MaxValue instead
-        // keeps the urgency check unconditionally true for any real DueAtMs, which is the
-        // safe failure mode here.
-        long urgencyHorizonMs = SaturatingAdd(nowMs, nextActivePassCostMs);
+        // nextActivePassCostMs is derived from Macro.Duration, which comes from the last
+        // event's timestamp in a user-editable on-disk JSON macro file — a bare long with
+        // no load-time validation. It can be pathological in either direction:
+        //   - Too large (e.g. long.MaxValue): a raw `+` would overflow nowMs +
+        //     nextActivePassCostMs to negative, making `DueAtMs <= <negative>` false for
+        //     every alt — nothing would ever look urgent, RunActive would win forever, and
+        //     every keep-alive would get silently kicked. SaturatingAdd clamps this to
+        //     long.MaxValue, keeping the urgency check unconditionally true for any real
+        //     DueAtMs — the safe failure mode.
+        //   - Negative: SaturatingAdd only guards the positive-overflow direction (its own
+        //     contract assumes non-negative inputs) — fed a negative b it takes the `a + b`
+        //     branch and returns a horizon EARLIER than nowMs. Any keep-alive with DueAtMs
+        //     between that horizon and nowMs is already overdue but reads as "not urgent",
+        //     which is the exact same silent-kick failure from the other direction. Clamp
+        //     to 0 first so a negative cost degrades to "no active pass in the way" — same
+        //     as the caller explicitly passing 0 — and SaturatingAdd's non-negative-input
+        //     assumption actually holds at its only call site.
+        long urgencyHorizonMs = SaturatingAdd(nowMs, Math.Max(0, nextActivePassCostMs));
 
         foreach (var alt in alts)
         {

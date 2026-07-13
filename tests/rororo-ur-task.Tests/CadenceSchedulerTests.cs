@@ -104,7 +104,11 @@ public class CadenceSchedulerTests
     [Fact]
     public void AllActive_AlwaysRunsAnActive_NeverSleeps()
     {
-        var alts = new[] { Active(1), Active(2) };
+        // Deliberately NOT in pid order: pid 2 first, pid 1 second. If Decide ever
+        // regressed to picking by lowest pid instead of list order, this fixture is
+        // what catches it — with an ascending fixture, "first in list" and "lowest
+        // pid" agree and a regression would pass green.
+        var alts = new[] { Active(2), Active(1) };
 
         var d = CadenceScheduler.Decide(alts, nowMs: 0, nextActivePassCostMs: 5 * Min);
 
@@ -119,7 +123,10 @@ public class CadenceSchedulerTests
     [Fact]
     public void NoAltsAtAll_Sleeps()
     {
-        const long nowMs = 0;
+        // Non-zero nowMs: at nowMs = 0, a hardcoded `return SleepUntil(1000)` that
+        // ignores nowMs entirely would also pass. A non-zero now pins the
+        // relative-to-now semantics, not just the sign of the comparison.
+        const long nowMs = 5 * Min;
         var d = CadenceScheduler.Decide(Array.Empty<ScheduledAlt>(), nowMs, nextActivePassCostMs: 0);
         var sleep = Assert.IsType<CadenceDecision.SleepUntil>(d);
         Assert.True(sleep.WakeAtMs > nowMs, "WakeAtMs must be strictly greater than nowMs or the loop hot-spins.");
@@ -137,6 +144,28 @@ public class CadenceSchedulerTests
         var alts = new ScheduledAlt[] { Active(1), KeepAlive(2, dueAtMs: 5 * Min) };
 
         var d = CadenceScheduler.Decide(alts, nowMs: 5 * Min, nextActivePassCostMs: long.MaxValue);
+
+        var svc = Assert.IsType<CadenceDecision.ServiceKeepAlive>(d);
+        Assert.Equal(2, svc.Alt.Assignment.Alt.Pid);
+    }
+
+    /// Finding 1 (negative cost): the mirror image of the overflow case above.
+    /// SaturatingAdd only guards positive overflow — an un-clamped negative
+    /// nextActivePassCostMs moves the urgency horizon EARLIER than nowMs, so a keep-alive
+    /// that's already due reads as "not urgent" while an Active alt is present. RunActive
+    /// then wins on every call — forever, for a large negative — silently kicking the
+    /// keep-alive offline exactly the way the overflow case does. The cost must be
+    /// clamped to non-negative before the add so a due keep-alive still gets serviced.
+    /// An Active alt MUST be in the fixture: without one, RunActive can never win, so the
+    /// test would pass for the wrong reason.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(long.MinValue)]
+    public void NegativeNextActivePassCost_DoesNotStarve_DueKeepAliveStillServiced(long badCostMs)
+    {
+        var alts = new ScheduledAlt[] { Active(1), KeepAlive(2, dueAtMs: 5 * Min) };
+
+        var d = CadenceScheduler.Decide(alts, nowMs: 5 * Min, nextActivePassCostMs: badCostMs);
 
         var svc = Assert.IsType<CadenceDecision.ServiceKeepAlive>(d);
         Assert.Equal(2, svc.Alt.Assignment.Alt.Pid);
