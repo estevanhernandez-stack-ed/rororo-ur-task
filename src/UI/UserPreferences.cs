@@ -20,6 +20,14 @@ internal sealed class UserPreferences
     public bool KeyboardOnlyRecording { get; set; } = true; // default: true (mouse coords are absolute-screen; safer keyboard-only)
     public bool AcceptPluginRunRequests { get; set; } = true; // default: true (sibling plugins like Ur-OCR can fire macros)
 
+    /// <summary>
+    /// Per-game keep-alive fire interval overrides, in MINUTES, keyed by Roblox
+    /// PlaceId. Beats the shipped table in <see cref="Macros.KeepAliveIntervals"/>.
+    /// Empty by default — populated only by the user or from observed presence data,
+    /// never by guessing PlaceIds.
+    /// </summary>
+    public Dictionary<long, int> KeepAliveOverridesByPlaceId { get; set; } = new();
+
     public static UserPreferences Load()
     {
         try
