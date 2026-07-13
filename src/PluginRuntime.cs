@@ -117,6 +117,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
             RaiseUI(() => AssignmentProgressed?.Invoke(p));
             if (p.Phase == AssignmentPhase.Refused)
                 Log($"Assignment playback refused for {p.Current?.Alt.DisplayName ?? "(unknown alt)"}: {p.Reason}");
+            // Warning covers both the unschedulable-alt notice (emitted once up front
+            // in AssignmentRunner.RunAsync) and the 3+-consecutive-focus-failure
+            // notice (emitted mid-run from ServiceKeepAliveAsync) — both already carry
+            // the alt's display name inside Reason itself, so log it as-is rather than
+            // re-wrapping with "for {alt}: " like the Refused case above. Previously
+            // Warning reached no user surface at all (only Refused was logged here).
+            else if (p.Phase == AssignmentPhase.Warning && !string.IsNullOrWhiteSpace(p.Reason))
+                Log(p.Reason);
         };
 
         _ = new AutoStopCoordinator(_player, Accounts);

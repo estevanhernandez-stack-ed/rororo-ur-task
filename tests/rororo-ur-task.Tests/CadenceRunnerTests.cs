@@ -522,4 +522,37 @@ public class CadenceRunnerTests
         Assert.True(rig.Focused.Count < 500,
             $"Active focus attempted {rig.Focused.Count}x in a simulated hour — the spin loop is back");
     }
+
+    /// An alt whose keep-alive interval is SHORTER than one active pass cannot be
+    /// kept alive — even firing it the instant a pass ends, the next pass blows its
+    /// deadline. We know Macro.Duration and the intervals up front, so say so BEFORE
+    /// the alt gets kicked, not after.
+    [Fact]
+    public async Task KeepAliveIntervalShorterThanActivePass_WarnsAtStart_ButStillRuns()
+    {
+        // Active alt with a 16-minute macro; keep-alive alt on a 12-minute interval
+        // (Build's default). 16 min of declared macro length comfortably exceeds the
+        // 12-minute interval, so this alt is unschedulable by construction.
+        var active = new Assignment(Alt(1), MacroOfLength(16 * Min), CadenceRole.Active);
+        var keep = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var assignments = new[] { active, keep };
+        var rig = Build(assignments, runForMs: 30 * Min);
+
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) =>
+        {
+            if (p.Phase == AssignmentPhase.Warning) warnings.Add(p);
+        };
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        Assert.Single(warnings);
+        Assert.Contains("kicked", warnings[0].Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Same(keep, warnings[0].Current);   // names the alt that can't be kept alive
+
+        // Warn, don't block: the run still serviced things — it did not abort or
+        // refuse to proceed just because one alt can't be guaranteed.
+        Assert.NotEmpty(rig.Player.Plays);   // the Active alt still farmed
+        Assert.NotEmpty(rig.Taps);           // the keep-alive alt still got serviced
+    }
 }

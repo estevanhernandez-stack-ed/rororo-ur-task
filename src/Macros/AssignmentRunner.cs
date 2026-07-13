@@ -147,6 +147,27 @@ internal sealed class AssignmentRunner
                                          // tap once up front, THEN settle into its interval.
         }).ToList();
 
+        // Unschedulable check. The longest active pass sets the worst-case wait any
+        // keep-alive can face. If an alt's interval is shorter than that, we cannot
+        // guarantee it — say so now rather than letting it get kicked silently.
+        var longestActivePassMs = scheduled
+            .Where(a => !a.IsKeepAlive)
+            .Select(a => (a.Assignment.Macro is null ? 0L : (long)a.Assignment.Macro.Duration.TotalMilliseconds)
+                         + DefaultPerAltDelayMs + (a.Assignment.Macro?.InterAltDelayMs ?? 500))
+            .DefaultIfEmpty(0L)
+            .Max();
+
+        foreach (var alt in scheduled.Where(a => a.IsKeepAlive && a.IntervalMs < longestActivePassMs))
+        {
+            var mins = alt.IntervalMs / 60_000.0;
+            var passMins = longestActivePassMs / 60_000.0;
+            EmitProgress(new AssignmentProgress(
+                0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
+                $"{alt.Assignment.Alt.DisplayName} may get kicked — its keep-alive is every " +
+                $"{mins:F0} min but your active macro's pass is {passMins:F0} min. " +
+                $"Shorten the macro, split it, or set this alt to Active."));
+        }
+
         // Original list position of each alt — this is what IndexInCycle/TotalInCycle
         // report. The scheduler services one alt at a time (not a fixed sweep through the
         // list), so "cycle" below tracks logical PASSES: it advances the first time an
@@ -596,9 +617,14 @@ public sealed record Assignment(
 // resize failed) and PlaybackOutcome.Aborted (mid-playback foreground shift) from the
 // player — from the round-robin's perspective both mean "this alt's macro didn't play
 // to completion," surfaced with Reason so it isn't silently swallowed.
-// Warning covers a keep-alive alt that's missed 3+ consecutive focus attempts —
-// its window is almost certainly gone (alt closed/crashed) — surfaced louder than
-// a routine Skipped so it doesn't get lost in the noise of transient focus blips.
+// Warning covers two distinct "this needs a human's attention" cases, both surfaced
+// louder than a routine Skipped so they don't get lost in the noise:
+//   - a keep-alive alt that's missed 3+ consecutive focus attempts (its window is
+//     almost certainly gone — alt closed/crashed), emitted mid-run from
+//     ServiceKeepAliveAsync; and
+//   - a keep-alive alt whose interval is shorter than the worst-case Active pass it
+//     could be waiting behind — genuinely unschedulable, not just occasionally late —
+//     emitted once up front at the top of RunAsync, before anything gets kicked.
 public enum AssignmentPhase { Focusing, Playing, Skipped, Refused, Stopped, Warning }
 
 public sealed record AssignmentProgress(

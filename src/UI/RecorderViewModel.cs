@@ -232,7 +232,13 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             // (and similar preflight) refusals surface here for the terminal
             // Loop/KeepAlive step. Already inside RaiseUI, so ShowError runs on
             // the UI thread.
-            if (p.Phase == AssignmentPhase.Refused && !string.IsNullOrWhiteSpace(p.Reason))
+            // Warning rides the same toast path: the unschedulable-alt notice
+            // (emitted once up front when a keep-alive's interval can't outrun the
+            // worst-case Active pass) and the 3+-consecutive-focus-failure notice
+            // both deserve the same visibility as a refusal — reuse ShowError's
+            // themed toast rather than inventing a second notification path.
+            if ((p.Phase == AssignmentPhase.Refused || p.Phase == AssignmentPhase.Warning)
+                && !string.IsNullOrWhiteSpace(p.Reason))
                 ShowError(p.Reason);
         });
 
