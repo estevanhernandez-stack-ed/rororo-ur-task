@@ -88,6 +88,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // reuse a dead alt's pid — an un-pruned override would silently hand
             // the new alt a role choice that was never actually made for it.
             _roleOverrides.TryRemove(info.Pid, out CadenceRole _);
+            // Same recycled-pid hazard applies to the macro pairing itself: a
+            // stale _assignments[pid] entry would hand a brand-new alt a
+            // stranger's macro — and with no role override surviving it either
+            // (just pruned above), ResolveRole derives Active from the inherited
+            // macro's mere presence, so the new alt starts FARMING someone else's
+            // routine outright, rather than the safer KeepAlive an explicitly
+            // backgrounded PID would have inherited pre-pruning. Drop both pieces
+            // of stale state together.
+            _assignments.Remove(info.Pid);
         };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();

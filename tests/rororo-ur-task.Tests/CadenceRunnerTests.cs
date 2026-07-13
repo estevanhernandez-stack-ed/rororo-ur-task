@@ -241,11 +241,31 @@ public class CadenceRunnerTests
     /// (<see cref="PassCostAtOrAboveInterval_ActivesStillFarm_AndKeepAliveGapStaysUnderTheKickFloor"/>,
     /// <see cref="SafeButStretchedGap_DoesNotWarn_FalsePositiveGuard"/>) already carry
     /// the RealPlayCostMs treatment; this gives it the same, plus a gap assertion
-    /// instead of a bare NotEmpty. Verified by hand: commenting out the
-    /// RealPlayCostMs line below turns this back into the pre-fix tautology — every
-    /// assertion, including the new gap one, still passes GREEN (the pass completes
-    /// instantly, so the keep-alive just fires on its own ~12-minute cadence
-    /// regardless of any gap-fit behavior at all).
+    /// instead of a bare NotEmpty.
+    ///
+    /// Verification-review fix: even with RealPlayCostMs wired up, `maxGapMs &lt; 20 *
+    /// Min` was STILL a tautology against the specific lookahead this test's own
+    /// docstring calls out ("the lookahead sees a keep-alive coming due inside the
+    /// next pass and services it FIRST") — with the gap-fit lookahead removed
+    /// entirely (<see cref="NextActivePassCostMs"/> forced to return 0), two 5-minute
+    /// Active passes run back-to-back before the keep-alive is serviced (it's only
+    /// "genuinely overdue," never "urgent," so it waits for its actual 12-minute
+    /// DueAtMs — which a 2-pass/10-minute run hasn't reached yet — pushing the
+    /// service into a 3rd pass), realizing a gap of ~15.1 minutes: still comfortably
+    /// under the old 20-minute bound, so the assertion stayed GREEN either way and
+    /// could never catch a lookahead regression. Correct (lookahead-enabled)
+    /// behavior converges to a ~10-minute gap instead (2 passes' worth, since the
+    /// lookahead pulls the keep-alive forward before the 3rd pass can start) — tight
+    /// enough that 13 minutes cleanly separates "lookahead present" from "lookahead
+    /// gone" without being so tight that a couple hundred ms of simulated-clock
+    /// slop could flip it.
+    ///
+    /// Verified by hand: forcing <see cref="NextActivePassCostMs"/> to return 0
+    /// (simulating the lookahead being removed) turns `maxGapMs &lt; 13 * Min` RED —
+    /// the realized gap climbs to ~15.1 minutes, past the tightened bound, while the
+    /// stock 20-minute bound stayed GREEN throughout (confirming it really was a
+    /// tautology). With the lookahead intact, the realized gap is ~10 minutes,
+    /// comfortably under 13.
     /// </summary>
     [Fact]
     public async Task LongActivePass_StillLetsTheKeepAliveFire()
@@ -264,8 +284,14 @@ public class CadenceRunnerTests
 
         Assert.True(rig.TapTimes.Count >= 2, "need at least 2 taps to measure a gap");
         var maxGapMs = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).Max();
-        Assert.True(maxGapMs < 20 * Min,
-            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — past Roblox's 20-minute idle kick floor");
+        // Tightened from `< 20 * Min`: that bound was a tautology against a removed
+        // lookahead (see the doc comment above) — the realized gap without the
+        // lookahead is ~15.1 min, still under 20. 13 min sits between the
+        // lookahead-present (~10 min) and lookahead-absent (~15.1 min) realized
+        // gaps, so this genuinely goes RED if the lookahead regresses.
+        Assert.True(maxGapMs < 13 * Min,
+            $"max keep-alive gap was {maxGapMs / (double)Min:F1} min — the gap-fit lookahead may be broken " +
+            $"(expected ~10 min with it working; ~15.1 min without it)");
     }
 
     /// CRITICAL regression, trigger 1 (the one that shipped): AttachAndFocus reports
@@ -629,10 +655,14 @@ public class CadenceRunnerTests
         Assert.True(rig.Focused.Count < 500,
             $"Active focus attempted {rig.Focused.Count}x in a simulated hour despite the foreground never verifying — the spin loop is back");
 
-        // IMPORTANT 2: the Active path must surface the same "hasn't been
-        // focusable" warning a KeepAlive alt already gets, not vanish silently.
+        // IMPORTANT 2: the Active path must surface the same "hasn't reliably
+        // reached the foreground" warning a KeepAlive alt already gets, not
+        // vanish silently. (Wording deliberately doesn't say "not focusable" —
+        // Focus() itself succeeds every time in this scenario; it's the
+        // foreground-verify that never confirms. See EmitFocusFailureWarning's
+        // doc for why the text stays generic across that failure-mode mix.)
         Assert.Contains(warnings, w => w.Reason is not null
-            && w.Reason.Contains("hasn't been focusable", StringComparison.OrdinalIgnoreCase));
+            && w.Reason.Contains("hasn't reliably reached the foreground", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -672,8 +702,9 @@ public class CadenceRunnerTests
         Assert.True(rig.Focused.Count < 500,
             $"Active focus attempted {rig.Focused.Count}x in a simulated hour despite PlayAsync refusing every time — the spin loop is back");
 
-        // IMPORTANT 2: repeated refusals get their own 3-strikes warning too — this
-        // alt WAS focusable, so it must not reuse the "hasn't been focusable" text.
+        // IMPORTANT 2: repeated refusals get their own once-per-crossing warning
+        // too — this alt WAS focusable, so it must not reuse EmitFocusFailureWarning's
+        // "hasn't reliably reached the foreground" text.
         Assert.Contains(warnings, w => w.Reason is not null
             && w.Reason.Contains(alt.Alt.DisplayName, StringComparison.Ordinal)
             && w.Reason.Contains("refused", StringComparison.OrdinalIgnoreCase));
@@ -900,7 +931,7 @@ public class CadenceRunnerTests
         await rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
 
         Assert.Single(warnings);
-        Assert.Contains("hasn't been focusable", warnings[0].Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hasn't reliably reached the foreground", warnings[0].Reason, StringComparison.OrdinalIgnoreCase);
         Assert.True(rig.Focused.Count > 4,
             "test premise requires several retries past the 3-failure threshold to actually exercise the spam guard");
     }

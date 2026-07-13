@@ -273,8 +273,14 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             // it as KeepAlive. Behavior was safe; the UI lied about what PLAY would
             // actually do. SeedRowRole(r, null) re-derives the displayed Role the
             // same way RefreshAssignmentRow does for a single macro-clear, and
-            // (via _isRederivingRole) never publishes a new runtime override, so an
-            // explicit prior user choice still isn't clobbered by CLEAR.
+            // (via _isRederivingRole) never publishes a new runtime override on ITS
+            // OWN — but CLEAR itself now also wipes every override outright:
+            // PluginRuntime.ResetAssignments() calls _roleOverrides.Clear() as part
+            // of this same commit, so a genuine prior user choice (Active override
+            // on a since-cleared macro) IS blanked by CLEAR too. That's deliberate,
+            // not a bug — CLEAR means "blank slate," and PLAY's ResolveRole already
+            // treats a cleared assignment as KeepAlive, so the UI showing the same
+            // thing here keeps this row's display honest about what PLAY will do.
             foreach (var r in Assignments)
             {
                 r.AssignedMacro = null;

@@ -137,156 +137,174 @@ internal sealed class AssignmentRunner
         }
         var ct = cts.Token;
 
-        // Emitted exactly once, only for the call that actually won the
-        // single-flight guard above — a losing call returns before this line, so it
-        // emits nothing. This is the symmetric counterpart to the Stopped phase
-        // emitted in the finally below: callers (PluginRuntime) that need to know
-        // "the loop is REALLY about to start servicing these alts" — e.g. to publish
-        // the ur-afk claim file — must hang off this signal rather than the caller's
-        // own optimism about whether its RunAsync call will win. Carries the full
-        // assignment set via AllAssignments so a subscriber doesn't need any
-        // additional shared/racy state to know which alts this run covers.
-        EmitProgress(new AssignmentProgress(1, -1, assignments.Count, null, AssignmentPhase.Started, AllAssignments: assignments));
+        // Declared here, ahead of the try below, purely for scope: the finally
+        // block's Stopped emit (a SIBLING of try, not nested inside it) needs to
+        // read the current cycle count on every exit path, including one where an
+        // exception unwound before the loop ever assigned a "real" value below.
+        int cycle = 1;
 
-        // Runtime safety net (CRITICAL 2's belt-and-braces half): coerce every
-        // assignment through Assignment.ResolveRole before scheduling, the same way
-        // IntervalMs below is clamped to a sane range regardless of what the caller
-        // handed in. A null-macro Active assignment must never reach the scheduler —
-        // ScheduledAlt.IsKeepAlive would read false, Decide has no deadline gate for
-        // Active, and RunActiveAsync would focus/settle(1s)/verify/find-nothing-to-play
-        // on every single loop iteration forever: a continuous ~1s foreground steal
-        // with zero farming value AND zero keep-alive protection. This is the LAST
-        // line of defense — it holds even if a future call site (or a bug upstream in
-        // the UI's override plumbing) ever hands this runner that exact invariant
-        // violation. Only replaces the record (a `with` always allocates a new
-        // instance, even when the value is unchanged) when coercion actually flips
-        // something — the overwhelmingly common case hands the original Assignment
-        // straight through unmodified, preserving reference identity for callers
-        // (e.g. AssignmentProgress.Current) that key off it.
-        var scheduled = assignments.Select(a =>
-        {
-            var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
-            var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
-            return new ScheduledAlt
-            {
-                Assignment = coerced,
-                IntervalMs = coerced.Role == CadenceRole.KeepAlive
-                    ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
-                    : 0,
-                DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
-                                             // tap once up front, THEN settle into its interval.
-            };
-        }).ToList();
-
-        // Unschedulable check. Because Decide is re-consulted between EVERY Active
-        // pass (not once per round-robin lap), the realized worst-case gap between
-        // keep-alive taps converges to ≈ the longest Active PASS LENGTH — not
-        // interval + pass, and it does not accumulate. With no Active alts at all,
-        // the gap is simply the interval itself. So the projected worst-case gap for
-        // a keep-alive alt is Math.Max(longestActivePassMs, alt.IntervalMs) — warn
-        // when THAT approaches the platform's kick floor, independent of how the
-        // interval and the pass length compare to each other. Comparing the interval
-        // to the pass length directly (the pre-fix trigger) is wrong in both
-        // directions: a 16-min pass against a 12-min interval reads as "shorter" and
-        // cries wolf even though the realized ~16-min gap is comfortably safe; a
-        // 25-min per-game override with zero Active alts reads as "not shorter than
-        // 0" and silently misses a kick that is guaranteed to happen.
-        var warnThresholdMs = (long)TimeSpan.FromMinutes(KeepAliveIntervals.WarnThresholdMinutes).TotalMilliseconds;
-
-        // IMPORTANT 1 fix: fired once up front from the STATIC estimate here, and
-        // re-fired (see CheckUnschedulableWarnings, called after every Active pass
-        // below) as ObservedPassCostMs ratchets upward. The static estimate alone
-        // under-counts real Win32 costs (AttachAndFocus, MacroPlayer's preflight
-        // resize) exactly the way NextActivePassCostMs's own lookahead does — a
-        // macro that DECLARES 2 minutes but really takes 25 reads as safe here
-        // (max(2min, interval) never crosses the warn threshold) and would
-        // otherwise never warn at all, even once the ratchet learns the real
-        // 25-minute cost and the realized keep-alive gap sails past Roblox's
-        // 20-minute kick floor. alreadyWarnedUnschedulable makes this fire-once-
-        // ever per alt: the ratchet only ever climbs, so once an alt has crossed
-        // the threshold it stays crossed — no need to track a re-arming edge the
-        // way EmitFocusFailureWarning does for a streak that can recover.
-        var alreadyWarnedUnschedulable = new HashSet<ScheduledAlt>();
-
-        void CheckUnschedulableWarnings()
-        {
-            var longestActivePassMs = scheduled
-                .Where(a => !a.IsKeepAlive)
-                .Select(a => Math.Max(StaticPassCostMs(a), a.ObservedPassCostMs))
-                .DefaultIfEmpty(0L)
-                .Max();
-
-            foreach (var alt in scheduled.Where(a => a.IsKeepAlive))
-            {
-                if (alreadyWarnedUnschedulable.Contains(alt)) continue;
-                var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
-                if (projectedGapMs < warnThresholdMs) continue;
-
-                alreadyWarnedUnschedulable.Add(alt);
-                var gapMins = projectedGapMs / 60_000.0;
-                EmitProgress(new AssignmentProgress(
-                    0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
-                    $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
-                    $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
-                    $"idle floor (games may shorten this, none may extend it). " +
-                    $"Shorten the macro, split it, or set this alt to Active."));
-            }
-        }
-
-        CheckUnschedulableWarnings();
-
-        // Original list position of each alt — this is what IndexInCycle/TotalInCycle
-        // report. The scheduler services one alt at a time (not a fixed sweep through the
-        // list), so "cycle" below tracks logical PASSES: it advances the first time an
-        // alt is serviced a second time since the last pass boundary, mirroring what the
-        // old strict round-robin meant by "cycle" — one full lap — without requiring every
-        // alt to actually be revisited in list order (a keep-alive miles from due just
-        // rides along without incrementing anything).
-        var indexOf = new Dictionary<ScheduledAlt, int>(scheduled.Count);
-        for (int i = 0; i < scheduled.Count; i++) indexOf[scheduled[i]] = i;
-        var servicedThisPass = new HashSet<ScheduledAlt>();
-        var cycle = 1;
-
-        int AdvancePass(ScheduledAlt alt)
-        {
-            if (!servicedThisPass.Add(alt))
-            {
-                cycle++;
-                servicedThisPass.Clear();
-                servicedThisPass.Add(alt);
-            }
-            return cycle;
-        }
-
-        var activeCursor = 0;
-        var activeCount = scheduled.Count(a => !a.IsKeepAlive);   // fixed for the run — the
-                                                                   // role mix doesn't change mid-loop
-
-        // Forward-progress guard (the CRITICAL fix): Decide is a stateless lookahead —
-        // re-entered immediately after a service with ~zero elapsed time — and nothing
-        // in it stops it from handing back the SAME not-yet-due alt forever if
-        // servicing it didn't clear the condition that made it look urgent (e.g. a
-        // foreground-verify check that keeps failing, or a focus that keeps failing).
-        // Re-entering it right back is exactly the desktop-hijack spin loop this
-        // feature exists to kill. This set tracks which keep-alive alts have already
-        // been gap-fitted (gotten a look) since the last time real progress happened —
-        // an Active pass. An alt only earns a second look after that progress, or
-        // after it becomes GENUINELY overdue (never starve a real deadline).
-        var gapFittedSinceActivePass = new HashSet<ScheduledAlt>();
-
-        async Task RunNextActiveAsync(ScheduledAlt alt, CancellationToken token)
-        {
-            await RunActiveAsync(alt, AdvancePass(alt), indexOf[alt], assignments.Count, token).ConfigureAwait(false);
-            activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
-            gapFittedSinceActivePass.Clear();   // real progress happened; every alt earns another look
-            // IMPORTANT 1 fix: a completed pass is exactly when ObservedPassCostMs
-            // may have just ratcheted up (see RunActiveAsync's finally) — re-check
-            // every keep-alive against the now-current longest observed cost.
-            CheckUnschedulableWarnings();
-        }
-
+        // Moved up from just before the while loop below: the single-flight
+        // win above, the Started emit (which publishes the ur-afk claim), and
+        // all the scheduling setup between here and the loop now live INSIDE
+        // this try, so the finally at the bottom — which emits Stopped and
+        // releases _activeCts — covers this window too. A throw anywhere in
+        // setup used to leave the claim published with Stopped never firing
+        // (its 20s heartbeat republishing forever) and _activeCts permanently
+        // non-null (IsRunning stuck true, every future RunAsync losing the
+        // single-flight guard) — PLAY would silently do nothing until the app
+        // restarted, while ur-afk stayed off alts nobody was servicing. The
+        // losing single-flight caller above still returns BEFORE this try — it
+        // never ran, so it must never emit Stopped or release the winner's claim.
         try
         {
+            // Emitted exactly once, only for the call that actually won the
+            // single-flight guard above — a losing call returns before this line, so it
+            // emits nothing. This is the symmetric counterpart to the Stopped phase
+            // emitted in the finally below: callers (PluginRuntime) that need to know
+            // "the loop is REALLY about to start servicing these alts" — e.g. to publish
+            // the ur-afk claim file — must hang off this signal rather than the caller's
+            // own optimism about whether its RunAsync call will win. Carries the full
+            // assignment set via AllAssignments so a subscriber doesn't need any
+            // additional shared/racy state to know which alts this run covers.
+            EmitProgress(new AssignmentProgress(1, -1, assignments.Count, null, AssignmentPhase.Started, AllAssignments: assignments));
+
+            // Runtime safety net (CRITICAL 2's belt-and-braces half): coerce every
+            // assignment through Assignment.ResolveRole before scheduling, the same way
+            // IntervalMs below is clamped to a sane range regardless of what the caller
+            // handed in. A null-macro Active assignment must never reach the scheduler —
+            // ScheduledAlt.IsKeepAlive would read false, Decide has no deadline gate for
+            // Active, and RunActiveAsync would focus/settle(1s)/verify/find-nothing-to-play
+            // on every single loop iteration forever: a continuous ~1s foreground steal
+            // with zero farming value AND zero keep-alive protection. This is the LAST
+            // line of defense — it holds even if a future call site (or a bug upstream in
+            // the UI's override plumbing) ever hands this runner that exact invariant
+            // violation. Only replaces the record (a `with` always allocates a new
+            // instance, even when the value is unchanged) when coercion actually flips
+            // something — the overwhelmingly common case hands the original Assignment
+            // straight through unmodified, preserving reference identity for callers
+            // (e.g. AssignmentProgress.Current) that key off it.
+            var scheduled = assignments.Select(a =>
+            {
+                var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
+                var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
+                return new ScheduledAlt
+                {
+                    Assignment = coerced,
+                    IntervalMs = coerced.Role == CadenceRole.KeepAlive
+                        ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
+                        : 0,
+                    DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
+                                                 // tap once up front, THEN settle into its interval.
+                };
+            }).ToList();
+
+            // Unschedulable check. Because Decide is re-consulted between EVERY Active
+            // pass (not once per round-robin lap), the realized worst-case gap between
+            // keep-alive taps converges to ≈ the longest Active PASS LENGTH — not
+            // interval + pass, and it does not accumulate. With no Active alts at all,
+            // the gap is simply the interval itself. So the projected worst-case gap for
+            // a keep-alive alt is Math.Max(longestActivePassMs, alt.IntervalMs) — warn
+            // when THAT approaches the platform's kick floor, independent of how the
+            // interval and the pass length compare to each other. Comparing the interval
+            // to the pass length directly (the pre-fix trigger) is wrong in both
+            // directions: a 16-min pass against a 12-min interval reads as "shorter" and
+            // cries wolf even though the realized ~16-min gap is comfortably safe; a
+            // 25-min per-game override with zero Active alts reads as "not shorter than
+            // 0" and silently misses a kick that is guaranteed to happen.
+            var warnThresholdMs = (long)TimeSpan.FromMinutes(KeepAliveIntervals.WarnThresholdMinutes).TotalMilliseconds;
+
+            // IMPORTANT 1 fix: fired once up front from the STATIC estimate here, and
+            // re-fired (see CheckUnschedulableWarnings, called after every Active pass
+            // below) as ObservedPassCostMs ratchets upward. The static estimate alone
+            // under-counts real Win32 costs (AttachAndFocus, MacroPlayer's preflight
+            // resize) exactly the way NextActivePassCostMs's own lookahead does — a
+            // macro that DECLARES 2 minutes but really takes 25 reads as safe here
+            // (max(2min, interval) never crosses the warn threshold) and would
+            // otherwise never warn at all, even once the ratchet learns the real
+            // 25-minute cost and the realized keep-alive gap sails past Roblox's
+            // 20-minute kick floor. alreadyWarnedUnschedulable makes this fire-once-
+            // ever per alt: the ratchet only ever climbs, so once an alt has crossed
+            // the threshold it stays crossed — no need to track a re-arming edge the
+            // way EmitFocusFailureWarning does for a streak that can recover.
+            var alreadyWarnedUnschedulable = new HashSet<ScheduledAlt>();
+
+            void CheckUnschedulableWarnings()
+            {
+                var longestActivePassMs = scheduled
+                    .Where(a => !a.IsKeepAlive)
+                    .Select(a => Math.Max(StaticPassCostMs(a), a.ObservedPassCostMs))
+                    .DefaultIfEmpty(0L)
+                    .Max();
+
+                foreach (var alt in scheduled.Where(a => a.IsKeepAlive))
+                {
+                    if (alreadyWarnedUnschedulable.Contains(alt)) continue;
+                    var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
+                    if (projectedGapMs < warnThresholdMs) continue;
+
+                    alreadyWarnedUnschedulable.Add(alt);
+                    var gapMins = projectedGapMs / 60_000.0;
+                    EmitProgress(new AssignmentProgress(
+                        0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
+                        $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
+                        $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
+                        $"idle floor (games may shorten this, none may extend it). " +
+                        $"Shorten the macro, split it, or set this alt to Active."));
+                }
+            }
+
+            CheckUnschedulableWarnings();
+
+            // Original list position of each alt — this is what IndexInCycle/TotalInCycle
+            // report. The scheduler services one alt at a time (not a fixed sweep through the
+            // list), so "cycle" below tracks logical PASSES: it advances the first time an
+            // alt is serviced a second time since the last pass boundary, mirroring what the
+            // old strict round-robin meant by "cycle" — one full lap — without requiring every
+            // alt to actually be revisited in list order (a keep-alive miles from due just
+            // rides along without incrementing anything).
+            var indexOf = new Dictionary<ScheduledAlt, int>(scheduled.Count);
+            for (int i = 0; i < scheduled.Count; i++) indexOf[scheduled[i]] = i;
+            var servicedThisPass = new HashSet<ScheduledAlt>();
+            cycle = 1;   // declared ahead of the try (see above) so finally can read it too
+
+            int AdvancePass(ScheduledAlt alt)
+            {
+                if (!servicedThisPass.Add(alt))
+                {
+                    cycle++;
+                    servicedThisPass.Clear();
+                    servicedThisPass.Add(alt);
+                }
+                return cycle;
+            }
+
+            var activeCursor = 0;
+            var activeCount = scheduled.Count(a => !a.IsKeepAlive);   // fixed for the run — the
+                                                                       // role mix doesn't change mid-loop
+
+            // Forward-progress guard (the CRITICAL fix): Decide is a stateless lookahead —
+            // re-entered immediately after a service with ~zero elapsed time — and nothing
+            // in it stops it from handing back the SAME not-yet-due alt forever if
+            // servicing it didn't clear the condition that made it look urgent (e.g. a
+            // foreground-verify check that keeps failing, or a focus that keeps failing).
+            // Re-entering it right back is exactly the desktop-hijack spin loop this
+            // feature exists to kill. This set tracks which keep-alive alts have already
+            // been gap-fitted (gotten a look) since the last time real progress happened —
+            // an Active pass. An alt only earns a second look after that progress, or
+            // after it becomes GENUINELY overdue (never starve a real deadline).
+            var gapFittedSinceActivePass = new HashSet<ScheduledAlt>();
+
+            async Task RunNextActiveAsync(ScheduledAlt alt, CancellationToken token)
+            {
+                await RunActiveAsync(alt, AdvancePass(alt), indexOf[alt], assignments.Count, token).ConfigureAwait(false);
+                activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
+                gapFittedSinceActivePass.Clear();   // real progress happened; every alt earns another look
+                // IMPORTANT 1 fix: a completed pass is exactly when ObservedPassCostMs
+                // may have just ratcheted up (see RunActiveAsync's finally) — re-check
+                // every keep-alive against the now-current longest observed cost.
+                CheckUnschedulableWarnings();
+            }
+
             while (!ct.IsCancellationRequested)
             {
                 var now = _deps.ClockMs();
@@ -503,8 +521,17 @@ internal sealed class AssignmentRunner
     /// <summary>
     /// Shared Skipped/Warning emission for a failed focus OR a failed foreground-verify
     /// — both mean "this attempt didn't land," and both count toward the same
-    /// ConsecutiveFocusFailures streak so "hasn't been focusable for N tries" actually
-    /// fires for whichever failure mode is happening.
+    /// ConsecutiveFocusFailures streak.
+    ///
+    /// On the Active side that streak is shared with a THIRD, unrelated failure mode
+    /// too — <see cref="RunActiveAsync"/>'s own Refused/Aborted branch increments the
+    /// same counter (with its own distinct warning text) — so by the time this method
+    /// sees the streak cross 3, those 3 consecutive attempts are not guaranteed to all
+    /// have been focus/verify failures: e.g. two Refused plays followed by one real
+    /// focus failure also reads as ConsecutiveFocusFailures == 3 here. The message
+    /// below is worded to stay true under that mix (it does NOT claim "3 tries have
+    /// all failed to focus"), rather than tracking a separate counter per failure mode
+    /// just to make the wording marginally more specific.
     ///
     /// Fires the Warning exactly ONCE per failure streak — the instant the counter
     /// CROSSES the 3-failure threshold, not on every retry once it's at-or-above 3.
@@ -525,7 +552,8 @@ internal sealed class AssignmentRunner
         {
             EmitProgress(new AssignmentProgress(
                 cycle, index, total, asn, AssignmentPhase.Warning,
-                $"{asn.Alt.DisplayName} hasn't been focusable for 3 tries — its window may be gone. Still retrying every 30s."));
+                $"{asn.Alt.DisplayName} hasn't reliably reached the foreground in 3 tries — its window " +
+                $"may be gone, or focus isn't sticking. Still retrying every 30s."));
             return;
         }
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
@@ -570,9 +598,9 @@ internal sealed class AssignmentRunner
                 // Bounded retry — same shape as ServiceKeepAliveAsync's focus-fail
                 // exit: count it against the shared streak and reuse the same
                 // once-per-crossing Warning idiom (IMPORTANT 2), so a dead/crashed
-                // Active alt gets the same "hasn't been focusable" surfacing a
-                // KeepAlive alt already gets, instead of vanishing into a silent
-                // Skipped forever.
+                // Active alt gets the same "hasn't reliably reached the foreground"
+                // surfacing a KeepAlive alt already gets, instead of vanishing into
+                // a silent Skipped forever.
                 alt.ConsecutiveFocusFailures++;
                 EmitFocusFailureWarning(alt, cycle, index, total, asn);
                 // Without an await here, an Active alt whose Roblox client crashed
@@ -618,7 +646,18 @@ internal sealed class AssignmentRunner
                     // player's Started/Ended events fire — without this, they vanish
                     // silently on the cadence path. Skip emit on a user-initiated
                     // cancellation, not a genuine refusal/abort.
-                    if (playResult.Outcome is PlaybackOutcome.Refused or PlaybackOutcome.Aborted)
+                    //
+                    // Closed-by-default: treat only PlaybackOutcome.Completed as a
+                    // successful pass, not "everything that isn't Refused/Aborted".
+                    // PlaybackOutcome.Skipped exists (MacroPlayer.cs has a public
+                    // factory for it) and IMacroPlayer.PlayAsync never returns it
+                    // today — so the old open-by-default `is Refused or Aborted`
+                    // check was only safe by accident. If any implementation ever
+                    // DOES return Skipped, that used to fall into the `else` branch
+                    // below, reset the streak, and take zero backoff after only the
+                    // 1s settle — the exact ~1-second foreground-hijack spin this
+                    // whole feature exists to eliminate.
+                    if (playResult.Outcome != PlaybackOutcome.Completed)
                     {
                         if (!ct.IsCancellationRequested)
                         {
@@ -633,16 +672,23 @@ internal sealed class AssignmentRunner
                         // foreground-steal spin as the other two exits above. Same
                         // counted streak + bounded backoff; its own once-per-crossing
                         // warning uses distinct wording (this alt WAS focusable —
-                        // it's the macro itself that keeps getting refused/aborted),
+                        // it's the macro itself getting refused/aborted right now —
                         // so it isn't routed through EmitFocusFailureWarning's
-                        // "hasn't been focusable" text.
+                        // "hasn't reliably reached the foreground" text). Worded as
+                        // "keeps failing to complete" rather than "N times in a row":
+                        // ConsecutiveFocusFailures is shared with the focus-fail and
+                        // verify-fail branches above, so a streak that crosses 3 here
+                        // is not guaranteed to have been 3 refusals back to back — a
+                        // focus or verify blip could have contributed to the count
+                        // too. Only the CURRENT attempt (the one that just crossed
+                        // the threshold) is genuinely known to be a refusal/abort.
                         alt.ConsecutiveFocusFailures++;
                         if (alt.ConsecutiveFocusFailures == 3)
                         {
                             EmitProgress(new AssignmentProgress(
                                 cycle, index, total, asn, AssignmentPhase.Warning,
-                                $"{asn.Alt.DisplayName}'s macro has been refused/aborted 3 times in a row " +
-                                $"({playResult.Reason}). Still retrying every 30s."));
+                                $"{asn.Alt.DisplayName}'s macro keeps failing to complete (latest: " +
+                                $"refused/aborted — {playResult.Reason}). Still retrying every 30s."));
                         }
                         try { await _deps.Sleep(FocusRetryBackoffMs, ct).ConfigureAwait(false); }
                         catch (OperationCanceledException) { }

@@ -37,7 +37,13 @@ public static class MacroV1Migrator
             {
                 SchemaVersion = Macro.CurrentSchemaVersion,
                 CoordSpace = m.CoordSpace ?? Macro.CoordSpaceScreen,
-                Events = SanitizeTimestamps(m.Events),
+                // System.Text.Json leaves the positional `Events` record param null
+                // for JSON with a missing or explicit `"events": null` property — the
+                // record's own `IReadOnlyList<MacroEvent>` type isn't null-checked at
+                // deserialize time. Without the `?? []`, SanitizeTimestamps' foreach
+                // NREs on that null instead of degrading to an empty (harmless,
+                // zero-event) macro.
+                Events = SanitizeTimestamps(m.Events ?? []),
             };
         }
 
