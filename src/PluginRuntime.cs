@@ -51,6 +51,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
     // ---------- Assignment state ----------
     private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
 
+    // Task 8: UI-driven cadence-role override, keyed by alt.Pid — independent of
+    // _assignments above (macro). Absent an entry, role-building falls back to
+    // Assignment.WithDerivedRole (macro present -> Active, none -> KeepAlive), the
+    // pre-Task-8 rule. Present, it wins outright — this is what makes backgrounding
+    // an alt (Active -> KeepAlive) non-destructive: the macro in _assignments is
+    // never touched, so flipping the override back to Active resumes farming with
+    // nothing re-picked.
+    private readonly Dictionary<int, CadenceRole> _roleOverrides = new();
+
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
     /// <summary>
@@ -281,6 +290,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
             : $"assignment: pid {altPid} → {macro.Name ?? "(unnamed)"}");
         RaiseUI(() => AssignmentChanged?.Invoke(altPid, macro));
     }
+
+    /// <summary>
+    /// UI-driven cadence-role override for one alt (Task 8's per-row Active/Keep-alive
+    /// toggle and the "All equal" / "One focused" presets). Deliberately does NOT touch
+    /// <see cref="_assignments"/> — Role and macro assignment are orthogonal axes, same
+    /// as <see cref="UI.AssignmentRow.IsCheckedForRoutine"/> is orthogonal to
+    /// AssignedMacro on the same row.
+    /// </summary>
+    public void SetRoleOverride(int altPid, CadenceRole role) => _roleOverrides[altPid] = role;
 
     public void ResetAssignments()
     {
@@ -619,13 +637,25 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 }
 
                 // Build assignment list — every running alt gets a slot,
-                // unassigned = null macro (keep-alive Space).
+                // unassigned = null macro (keep-alive Space). Role: an explicit
+                // Task-8 UI override wins outright; absent one, fall back to the
+                // legacy derived rule (macro present -> Active, none -> KeepAlive).
                 var assignments = alts.Select(a =>
-                    Assignment.WithDerivedRole(a, _assignments.TryGetValue(a.Pid, out var m) ? m : null)).ToList();
+                {
+                    var macro = _assignments.TryGetValue(a.Pid, out var m) ? m : null;
+                    var role = _roleOverrides.TryGetValue(a.Pid, out var r)
+                        ? r
+                        : Assignment.WithDerivedRole(a, macro).Role;
+                    return new Assignment(a, macro, role);
+                }).ToList();
 
-                var explicitCount = assignments.Count(a => a.Macro is not null);
-                var keepAliveCount = assignments.Count(a => a.Macro is null);
-                Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
+                // Counted by actual Role now, not by macro presence — a macro-assigned
+                // alt manually backgrounded (Task 8's per-row toggle) farms nothing
+                // this run, and the log line should say so rather than call it "active"
+                // just because it happens to have a macro attached.
+                var activeCount = assignments.Count(a => a.Role == CadenceRole.Active);
+                var keepAliveCount = assignments.Count(a => a.Role == CadenceRole.KeepAlive);
+                Log($"Playing assignments — {activeCount} active, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
 
                 _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
                 // Claim publication happens off _runner's own Started progress event

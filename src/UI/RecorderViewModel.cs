@@ -22,6 +22,15 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     private readonly PluginRuntime _runtime;
     private readonly UserPreferences _prefs = UserPreferences.Load();
 
+    // ---------- Task 8: next-due countdown (proof-of-life for a sleeping scheduler) ----------
+
+    // Monotonic (Environment.TickCount64) deadline per KeepAlive row — mirrors
+    // AssignmentRunner's own clock choice (never wall-clock; a DST shift or clock
+    // adjustment must not make the countdown lie). Only KeepAlive rows are tracked;
+    // an Active row is removed the moment it stops being KeepAlive.
+    private readonly Dictionary<AssignmentRow, long> _keepAliveDueAtMs = new();
+    private readonly DispatcherTimer _keepAliveCountdownTimer;
+
     public RecorderViewModel(PluginRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -56,6 +65,23 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         });
 
         ResetAssignmentsCommand = new RelayCommand(() => _runtime.ResetAssignments());
+
+        // Task 8 role presets. Both only ever touch AssignmentRow.Role — never
+        // AssignedMacro — so backgrounding an alt is non-destructive: its macro
+        // rides along untouched and flipping back to Active resumes farming
+        // without re-picking anything. Role changes propagate to PluginRuntime
+        // (and reseed the next-due countdown) via OnAssignmentRowPropertyChanged.
+        SetAllActiveCommand = new RelayCommand(() =>
+        {
+            foreach (var row in Assignments) row.Role = CadenceRole.Active;
+        });
+
+        FocusOneCommand = new RelayCommand<AssignmentRow>(focused =>
+        {
+            if (focused is null) return;
+            foreach (var row in Assignments)
+                row.Role = row == focused ? CadenceRole.Active : CadenceRole.KeepAlive;
+        });
 
         // Routine (recipe/loadout) run surface — targets exactly the alts checked
         // via AssignmentRow.IsCheckedForRoutine, independent of macro assignment.
@@ -141,6 +167,13 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // Hydrate keyboard-only toggle from prefs onto the runtime so the first
         // recording obeys the saved preference.
         _runtime.RecordKeyboardOnly = _prefs.KeyboardOnlyRecording;
+
+        // Task 8 next-due countdown: low-frequency tick only — this is a
+        // minutes-scale countdown (11-17 min fire intervals), not a stopwatch.
+        // A per-second timer would be wasted UI-thread churn for no visible gain.
+        _keepAliveCountdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _keepAliveCountdownTimer.Tick += (_, _) => RefreshKeepAliveCountdowns();
+        _keepAliveCountdownTimer.Start();
 
         _runtime.StateChanged += () =>
         {
@@ -240,6 +273,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             if ((p.Phase == AssignmentPhase.Refused || p.Phase == AssignmentPhase.Warning)
                 && !string.IsNullOrWhiteSpace(p.Reason))
                 ShowError(p.Reason);
+            // Task 8 proof-of-life: the Space actually landed for a keep-alive alt —
+            // reseed that row's countdown to a fresh full interval. Without this the
+            // countdown would only ever count down from the DispatcherTimer's own
+            // 30s-granularity view of elapsed time and never resync with what the
+            // scheduler actually did (e.g. a focus-retry backoff shortens the real
+            // next deadline).
+            if (p.Phase == AssignmentPhase.Playing && p.Current?.Role == CadenceRole.KeepAlive)
+            {
+                var row = Assignments.FirstOrDefault(r => r.Alt.Pid == p.Current.Alt.Pid);
+                if (row is not null) SeedKeepAliveDue(row);
+            }
         });
 
         // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
@@ -308,6 +352,8 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public ICommand MarkMacroActiveCommand { get; }
     public ICommand ToggleAltAssignmentCommand { get; }
     public ICommand ResetAssignmentsCommand { get; }
+    public ICommand SetAllActiveCommand { get; }
+    public ICommand FocusOneCommand { get; }
     public ICommand RunRoutineCommand { get; }
     public ICommand ToggleRoutineRunCommand { get; }
     public ICommand SelectAllRoutineAltsCommand { get; }
@@ -851,6 +897,13 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         var row = new AssignmentRow(alt) { AssignedMacro = existing };
         row.PropertyChanged += OnAssignmentRowPropertyChanged;
         Assignments.Add(row);
+        // Seed the row's displayed Role to match the legacy derived rule (macro
+        // present -> Active, none -> KeepAlive) so what the row SHOWS on first
+        // paint agrees with what PLAY ASSIGNMENTS will actually do before the
+        // user ever touches the toggle — AssignmentRow's own field defaults to
+        // Active regardless of macro, which would otherwise read "ACTIVE" next
+        // to a "Keep-alive (Space)" macro chip for a fresh, unassigned alt.
+        row.Role = existing is null ? CadenceRole.KeepAlive : CadenceRole.Active;
     }
 
     private void RemoveAssignmentRow(int pid)
@@ -859,21 +912,64 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         if (row is null) return;
         row.PropertyChanged -= OnAssignmentRowPropertyChanged;
         Assignments.Remove(row);
+        _keepAliveDueAtMs.Remove(row);
     }
 
     /// <summary>Routine-checkbox toggles change RunRoutineCommand's and
     /// ToggleRoutineRunCommand's CanExecute (both require ≥1 checked alt);
-    /// plain RelayCommand doesn't auto-requery.</summary>
+    /// plain RelayCommand doesn't auto-requery. Role toggles (Task 8) push the
+    /// new role down to PluginRuntime — see <see cref="SyncRoleToRuntime"/> below.</summary>
     private void OnAssignmentRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(AssignmentRow.IsCheckedForRoutine))
             RaiseRoutineCommandStates();
+        else if (e.PropertyName == nameof(AssignmentRow.Role) && sender is AssignmentRow row)
+            SyncRoleToRuntime(row);
     }
 
     private void RefreshAssignmentRow(int pid, Macro? macro)
     {
         var row = Assignments.FirstOrDefault(r => r.Alt.Pid == pid);
         if (row is not null) row.AssignedMacro = macro;
+    }
+
+    // ---------- Task 8: role -> runtime + next-due countdown plumbing ----------
+
+    /// <summary>Push a row's Role into PluginRuntime (so PLAY ASSIGNMENTS actually
+    /// honors it) and keep the next-due countdown in sync — seeded when the row
+    /// becomes KeepAlive, dropped the moment it stops being one.</summary>
+    private void SyncRoleToRuntime(AssignmentRow row)
+    {
+        _runtime.SetRoleOverride(row.Alt.Pid, row.Role);
+        if (row.Role == CadenceRole.KeepAlive) SeedKeepAliveDue(row);
+        else _keepAliveDueAtMs.Remove(row);
+    }
+
+    /// <summary>(Re)start a row's countdown at a fresh full interval — called both
+    /// when a row first becomes KeepAlive and whenever the scheduler actually taps
+    /// it (see the AssignmentProgressed handler above), so the displayed countdown
+    /// tracks reality rather than just decaying blindly from the moment of toggle.</summary>
+    private void SeedKeepAliveDue(AssignmentRow row)
+    {
+        var intervalMs = (long)KeepAliveIntervals.For(row.Alt.PlaceId, row.Alt.PlaceName, _prefs).TotalMilliseconds;
+        _keepAliveDueAtMs[row] = Environment.TickCount64 + intervalMs;
+        row.SetNextDue(TimeSpan.FromMilliseconds(intervalMs));
+    }
+
+    /// <summary>DispatcherTimer tick (30s — this is a minutes-scale countdown, not
+    /// a stopwatch): recompute every tracked row's remaining time from its stored
+    /// deadline. A row that stopped being KeepAlive (flipped back to Active) is
+    /// dropped here too, in case something mutated Role without going through
+    /// <see cref="SyncRoleToRuntime"/> (defensive; today nothing does).</summary>
+    private void RefreshKeepAliveCountdowns()
+    {
+        if (_keepAliveDueAtMs.Count == 0) return;
+        var now = Environment.TickCount64;
+        foreach (var row in _keepAliveDueAtMs.Keys.ToList())
+        {
+            if (row.Role != CadenceRole.KeepAlive) { _keepAliveDueAtMs.Remove(row); continue; }
+            row.SetNextDue(TimeSpan.FromMilliseconds(Math.Max(0, _keepAliveDueAtMs[row] - now)));
+        }
     }
 
     // ---------- Dispatcher helper ----------
