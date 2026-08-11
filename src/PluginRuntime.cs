@@ -181,6 +181,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Recipes = new RecipeStore();
         _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
+        // Forwarded rather than handled here: the runtime owns behaviour, not brushes.
+        _client.ThemeChanged += p => ThemeChanged?.Invoke(p);
 
         _hotkeys.HotkeyPressed += OnHotkey;
         _player.Started += (_, args) =>
@@ -228,6 +230,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
     public string HostVersion { get; private set; } = "(not connected)";
     public bool IsConnected { get; private set; }
     public Macro? LastMacro => _lastMacro;
+
+    /// <summary>
+    /// The RoRoRo host's active palette — once on connect, then on every theme switch. Forwarded
+    /// straight from the plugin client so <c>App</c> can hand it to <c>HostThemeService</c>
+    /// without the runtime knowing anything about brushes.
+    /// </summary>
+    public event Action<ROROROblox.PluginContract.ThemePalette>? ThemeChanged;
 
     public event Action? StateChanged;
     public event Action<string>? StatusLogged;
