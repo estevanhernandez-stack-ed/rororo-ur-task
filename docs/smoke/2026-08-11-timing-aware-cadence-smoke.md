@@ -40,6 +40,14 @@ That is a 30x difference. It is easy to feel and easy to be wrong about, so **do
 
 ## Phase 1 — the load-bearing one: is the desktop usable?
 
+> **The Setup above is not optional, and the first attempt at this smoke proved it.** Run with no
+> alts up and the counter reports `0 steals` — which reads exactly like a pass and means nothing,
+> because nothing was running that could steal focus. Five minutes, no result.
+>
+> The script now refuses to start unless RoRoRo and at least one live alt are running, and a run
+> with zero focus changes of ANY kind self-invalidates in its own output. But the reason it does
+> that is worth knowing: **a quiet machine and a blind instrument produce the same number.**
+
 Run the counter in its own PowerShell window and then **go and use the machine normally** — type in
 a document, scroll a browser, whatever you would actually be doing while alts tick over.
 

@@ -24,7 +24,9 @@ param(
     # empty result with no hint that the duration was the problem.
     [double]$Minutes = 5,
     [int]$SampleMs = 250,
-    [string]$Note = ""
+    [string]$Note = "",
+    # Run anyway with no alts up — for measuring an idle baseline on purpose.
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +52,27 @@ Write-Host ""
 Write-Host "Go and use the machine normally - type in a window, browse, whatever you would do" -ForegroundColor Yellow
 Write-Host "while alts are being kept alive. Ctrl+C stops early and still reports." -ForegroundColor Yellow
 Write-Host ""
+
+# Preconditions. A 5-minute run against a machine with no alts measures a quiet desktop and
+# reports a confident zero, which reads exactly like a pass. Check before spending the time.
+$alts = @(Get-Process RobloxPlayerBeta -ErrorAction SilentlyContinue | Where-Object { $_.PrivateMemorySize64 -gt 500MB })
+$host_ = @(Get-Process ROROROblox* -ErrorAction SilentlyContinue)
+if ($alts.Count -eq 0 -or $host_.Count -eq 0) {
+    Write-Host ""
+    $verdict = if ($Force) { "NOTHING TO MEASURE - running anyway (-Force)." } else { "NOTHING TO MEASURE - not starting." }
+    Write-Host $verdict -ForegroundColor Red
+    Write-Host ("  RoRoRo running : {0}" -f $(if ($host_.Count) { "yes" } else { "NO" })) -ForegroundColor Red
+    Write-Host ("  live alts      : {0}" -f $alts.Count) -ForegroundColor Red
+    Write-Host ""
+    Write-Host "This test measures how often the cadence scheduler steals focus. With no alts" -ForegroundColor Yellow
+    Write-Host "being kept alive there is nothing to steal it, and the run would report 0 -" -ForegroundColor Yellow
+    Write-Host "which looks exactly like a pass and means nothing." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Start RoRoRo, start Ur Task, launch at least 2 alts (one set Active), then re-run."
+    Write-Host "Override with -Force if you are deliberately measuring a baseline." -ForegroundColor DarkGray
+    Write-Host ""
+    if (-not $Force) { exit 1 }
+}
 
 # Prove the instrument works before asking anyone to trust its total. If this line is blank,
 # "(unknown)", or never changes while you alt-tab, the measurement is not reading your desktop and
@@ -112,6 +135,13 @@ finally {
     Write-Host ""
     Write-Host ("measured for        : {0:N1} min" -f $elapsed)
     Write-Host ("focus changes total : {0}" -f $events.Count)
+    if ($events.Count -eq 0) {
+        Write-Host ""
+        Write-Host "  ^ ZERO transitions of ANY kind, including your own window switches." -ForegroundColor Red
+        Write-Host "    That is not a quiet scheduler, it is a run that measured nothing." -ForegroundColor Red
+        Write-Host "    Either no alts were being kept alive, or you never changed windows." -ForegroundColor Red
+        Write-Host "    DO NOT record this as a pass." -ForegroundColor Red
+    }
     Write-Host ("steals by Roblox    : {0}" -f $toRoblox.Count)
     Write-Host ("  -> rate           : {0} per minute" -f $rate)
     if ($toRoblox.Count -gt 0) {
