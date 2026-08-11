@@ -39,16 +39,23 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="0,16,0,0">
+                <!-- CANCEL is both the Enter default and the Esc handler. DELETE destroys a
+                     recording the user made, and a confirmation whose default IS the destructive
+                     action gives no protection against the reflexive Enter every Windows user has
+                     for an unexpected dialog — which is the confirm's whole purpose. DELETE keeps
+                     its visual prominence and takes a deliberate click. Same shape as the host's
+                     Stop all confirm; guarded by ModalDefaultButtonSafetyTests. -->
                 <Button Content="CANCEL"
                         Style="{StaticResource SecondaryButton}"
                         Padding="16,6"
                         Margin="0,0,8,0"
+                        IsDefault="True"
+                        IsCancel="True"
                         Click="OnCancel" />
                 <Button Content="DELETE"
                         Style="{StaticResource PrimaryButton}"
                         Padding="20,6"
-                        Click="OnDelete"
-                        IsDefault="True" />
+                        Click="OnDelete" />
             </StackPanel>
         </Grid>
     </Border>

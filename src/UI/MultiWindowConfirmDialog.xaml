@@ -40,16 +40,22 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="0,16,0,0">
+                <!-- This dialog exists to make the user stop and look at how many windows a macro
+                     is about to drive. Defaulting to PLAY defeats the thing it was built for: Enter
+                     dismisses the warning by doing exactly what it warned about, into live game
+                     clients. Nothing is destroyed here, so it is a softer case than DELETE — but a
+                     confirmation that confirms itself is not a confirmation. -->
                 <Button Content="CANCEL"
                         Style="{StaticResource SecondaryButton}"
                         Padding="16,6"
                         Margin="0,0,8,0"
+                        IsDefault="True"
+                        IsCancel="True"
                         Click="OnCancel" />
                 <Button Content="PLAY"
                         Style="{StaticResource PrimaryButton}"
                         Padding="20,6"
-                        Click="OnPlay"
-                        IsDefault="True" />
+                        Click="OnPlay" />
             </StackPanel>
         </Grid>
     </Border>

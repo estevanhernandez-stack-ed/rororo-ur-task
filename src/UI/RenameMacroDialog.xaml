@@ -41,9 +41,17 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="0,16,0,0">
+                <!-- RENAME KEEPS IsDefault, deliberately. This is a text-entry dialog: you type a
+                     name and press Enter, and that is correct, expected behaviour — unlike the
+                     Delete and Multi-window confirms, where Enter was doing the thing being
+                     confirmed. The rule is "Enter must not perform the consequential action", not
+                     "Enter must never do anything".
+                     CANCEL only gains Esc, which it was missing — the dialog could not be
+                     dismissed from the keyboard at all. -->
                 <Button Content="CANCEL"
                         Padding="14,6"
                         Margin="0,0,8,0"
+                        IsCancel="True"
                         Click="OnCancel" />
                 <Button Content="RENAME"
                         Padding="20,6"
