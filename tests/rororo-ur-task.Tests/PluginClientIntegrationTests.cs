@@ -2,6 +2,7 @@ using System.IO;
 using Microsoft.Extensions.Logging.Abstractions;
 using Labs626.UrTask.PluginHost;
 using ROROROblox.App.Plugins;
+using ROROROblox.App.Plugins.Adapters;
 using ROROROblox.PluginContract;
 
 namespace Labs626.UrTask.Tests;
@@ -63,7 +64,10 @@ public class PluginClientIntegrationTests
             bus,
             new NoOpLauncher(),
             new PluginUITranslator(new NullUIHost()),
-            new NullActivitySnapshotProvider());
+            new NullActivitySnapshotProvider(),
+            new NoActivityMarker(),
+            new NoStopper(),
+            new FixedTheme());
 
         // Production-shape interceptor — accessor returns null, plugin id comes
         // from x-plugin-id header injected by HeaderInjectingCallInvoker.
@@ -152,6 +156,32 @@ public class PluginClientIntegrationTests
         public FixedHostState(string s) { MultiInstanceState = s; }
         public bool MultiInstanceEnabled => MultiInstanceState == "On";
         public string MultiInstanceState { get; }
+    }
+
+    // Added when this file was repaired against the host's current PluginHostService signature.
+    // It had drifted three parameters behind: the cross-repo ProjectReference means this suite
+    // silently stops compiling whenever RoRoRo's contract surface grows, and nothing in either
+    // repo's CI notices, because RoRoRo's CI does not build this project and this project's CI
+    // does not have RoRoRo checked out.
+    private sealed class NoActivityMarker : IAccountActivityMarker
+    {
+        public void Mark(string accountId) { }
+    }
+
+    private sealed class NoStopper : IPluginAccountStopper
+    {
+        public IReadOnlyList<string> TrackedAccountIds => Array.Empty<string>();
+        public bool StopAccount(string accountId) => false;
+    }
+
+    /// <summary>Fixed palette so the theme feed has something to serve (contract 0.8.0).</summary>
+    private sealed class FixedTheme : IThemePaletteSource
+    {
+        public ROROROblox.Core.Theming.ResolvedPalette? Latest { get; } = new(
+            Bg: "#101010", Cyan: "#D4D4D4", Magenta: "#6E6E6E", White: "#F5F5F5",
+            MutedText: "#989898", Divider: "#333333", RowBg: "#2A2A2A",
+            RowExpiredBg: "#3D3D3D", RowExpiredAccent: "#D4D4D4", Navy: "#101010",
+            InteractiveEdge: "#D4D4D4");
     }
 
     private sealed class EmptyAccounts : IRunningAccountsProvider

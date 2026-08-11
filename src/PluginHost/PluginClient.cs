@@ -27,6 +27,7 @@ internal sealed class PluginClient : IAsyncDisposable
     private readonly AccountRegistry _accounts;
     private GrpcChannel? _channel;
     private RoRoRoHost.RoRoRoHostClient? _client;
+    private Task? _themeConsumer;
     private Task? _launchedConsumer;
     private Task? _exitedConsumer;
     private CancellationTokenSource? _consumerCts;
@@ -41,6 +42,13 @@ internal sealed class PluginClient : IAsyncDisposable
     /// Guaranteed to fire at most once per PluginClient lifetime.
     /// </summary>
     public event Action? HostLost;
+
+    /// <summary>
+    /// The host's active palette: once on connect, then again on every theme switch. Resolved
+    /// colours only — there is no theme id to look up, which is the whole point of the feed
+    /// replacing the old read-RoRoRo's-settings-file approach.
+    /// </summary>
+    public event Action<ThemePalette>? ThemeChanged;
 
     public PluginClient(string pluginId, AccountRegistry accounts, string? pipeName = null)
     {
@@ -108,9 +116,26 @@ internal sealed class PluginClient : IAsyncDisposable
                 a.PlaceId, a.PlaceName);
         }
 
+        // Paint to the host's theme immediately. Same reason the running-accounts snapshot is
+        // fetched above: the stream only carries changes going forward, and most sessions never
+        // touch RoRoRo's theme picker, so a subscribe-only plugin would sit on its fallback
+        // colour indefinitely. Best-effort — a host too old to answer this is still a host worth
+        // talking to, so theming degrades and nothing else does.
+        try
+        {
+            var theme = await _client.GetThemeAsync(new Empty(), cancellationToken: ct)
+                .ConfigureAwait(false);
+            ThemeChanged?.Invoke(theme);
+        }
+        catch (RpcException)
+        {
+            // No feed on this host, or none applied yet. Keep the fallback palette.
+        }
+
         _consumerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _launchedConsumer = Task.Run(() => ConsumeLaunchedAsync(_consumerCts.Token));
         _exitedConsumer = Task.Run(() => ConsumeExitedAsync(_consumerCts.Token));
+        _themeConsumer = Task.Run(() => ConsumeThemeAsync(_consumerCts.Token));
     }
 
     /// <summary>
@@ -182,6 +207,35 @@ internal sealed class PluginClient : IAsyncDisposable
         catch (Exception)
         {
             SignalHostLost();
+        }
+    }
+
+    /// <summary>
+    /// Theme stream consumer.
+    /// <para>
+    /// <b>Deliberately does not call <see cref="SignalHostLost"/>.</b> The other two consumers do,
+    /// because losing account events means the plugin's model of the world is wrong. Losing the
+    /// theme feed means the window is the wrong colour, and tearing down a working macro recorder
+    /// over a colour would be a worse bug than the one this feed fixes. Failures here are
+    /// swallowed and the last palette stays on screen.
+    /// </para>
+    /// </summary>
+    private async Task ConsumeThemeAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var call = _client!.SubscribeThemeChanged(new SubscriptionRequest(),
+                cancellationToken: ct);
+            await foreach (var palette in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                ThemeChanged?.Invoke(palette);
+            }
+        }
+        catch (OperationCanceledException) { /* expected on shutdown */ }
+        catch (Exception)
+        {
+            // Host gone, stream refused, host too old to have the RPC at all. All the same
+            // answer: stop following, keep the colours we have, stay usable.
         }
     }
 

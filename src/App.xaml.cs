@@ -43,6 +43,10 @@ public partial class App : Application
 
         DiagLog.Write("startup: runtime");
         _runtime = new PluginRuntime();
+        // The host is the source of truth for colour from here on. Start() above painted the
+        // fallback so windows have brushes before they render; this takes over the moment the
+        // connection lands, and keeps up with every switch after.
+        _runtime.ThemeChanged += p => _theme?.Apply(p);
         DiagLog.Write("startup: view model");
         var vm = new RecorderViewModel(_runtime);
         DiagLog.Write("startup: window");
@@ -93,7 +97,6 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        try { _theme?.Dispose(); } catch { }
         try { _tray?.Dispose(); } catch { }
         try
         {
