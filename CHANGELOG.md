@@ -2,6 +2,37 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.6.0 — 2026-07-12
+
+> Reconstructed 2026-08-11 from the 36 commits between `v0.5.0` and `v0.6.0`. The release shipped
+> without a changelog entry; this records what went out rather than leaving a gap between 0.5.0 and
+> whatever comes next. Grouped from commit subjects, so it describes the changes accurately but is
+> terser than an entry written at release time.
+
+### Added
+
+- **Recipes and loadouts.** A saved-recipes library — create, edit, delete, and run a sequence
+  against a chosen alt. Recipes loop; loadouts run once and finish. Both get their own section
+  above assignments, type badges, and a run surface folded into the assignment grid so a routine
+  starts where the alts already are. Ctrl+Shift+L and the RUN button both toggle start/stop.
+- **Export a macro to AutoHotkey**, in both v1 and v2 syntax — your recording leaves in a format
+  that outlives the plugin.
+- **Resize the main window from any edge or corner**, not just the corner grip.
+- **Themed auto-dismissing toast** for playback errors.
+
+### Fixed
+
+- **Playback reaches the window size it recorded.** A run of fixes to window positioning: move a
+  low window up before resizing so the target size is reachable, maximize-then-settle for
+  full-screen recordings, reproduce a recorded client size including work-area overhang, and keep
+  the resized window inside the work area so clicks never land off-screen. Genuine size failures
+  now advise instead of silently mis-clicking.
+- **Assignments stay usable at small window sizes.**
+- **A recipe aborts on host loss or dispose**, and plain-loop and recipe modes exclude each other
+  in both directions.
+- **AssignmentRunner single-flight guard**, and the macro library loads once per recipe run rather
+  than per step.
+
 ## 0.5.0 — 2026-07-03
 
 ### Added
