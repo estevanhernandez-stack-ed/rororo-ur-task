@@ -46,6 +46,13 @@
 
 
   <ItemGroup>
+    <!-- The shipped manifest and the csproj declare the plugin's version independently, and they
+         drifted: manifest said 0.7.0 while the assembly reported 0.6.0.0. VersionConsistencyTests
+         compares them, which needs the manifest next to the test binary. -->
+    <None Include="..\..\manifest.json">
+      <Link>manifest.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="..\fixtures\macro-v1.json">
       <Link>fixtures\macro-v1.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
