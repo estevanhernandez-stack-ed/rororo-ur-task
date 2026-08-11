@@ -2,6 +2,55 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.7.0 — unreleased
+
+> **Not yet shipped.** Version bumped and notes drafted ahead of the tag so the release is a
+> tag-and-go once PR #30's live smoke passes. If PR #31 (take the theme from the host) merges
+> before the tag, its entry belongs in this section too.
+
+### Changed
+
+- **Keep-alives run on a schedule instead of a spin loop.** The old round-robin woke every alt in
+  turn on a fixed tick whether or not anything was due. A deadline scheduler now decides what
+  actually needs to fire and when, sleeps when nothing does, and fits keep-alives into the gaps
+  between real work. The visible effect: a keep-alive alt leaves your desktop usable, and an alt
+  set to Active steals focus about **once per 30 seconds rather than once per second**.
+- **Keep-alive intervals are game-aware**, with a per-game override when a game needs something
+  different from the default.
+
+### Added
+
+- **Roles, presets, and a next-due countdown** in the assignment grid, so you can see what the
+  scheduler intends to do next rather than inferring it from focus stealing.
+- **An up-front warning when an alt cannot be kept alive** at the cadence you asked for, instead of
+  quietly missing the deadline forever.
+- **A heartbeat claim file** so Ur AFK stays off alts this plugin is already managing — the two
+  plugins stop fighting over the same account.
+- **Foreground capture and restore.** A macro that needs focus takes it, then gives back the window
+  you were actually using.
+
+### Fixed
+
+- **Enter no longer deletes a macro.** All three dialogs had the affirmative button as the Enter
+  default and no Esc route at all: Enter deleted a recording, Enter dismissed the multi-window
+  warning by doing exactly what it warned about, and Esc did nothing anywhere. Delete and
+  multi-window playback now default to CANCEL; rename still submits on Enter, which is correct for
+  a text box. Esc closes all three.
+- **Claim-file races**, a **setup-window claim leak**, and **stale assignments** left behind by a
+  cancelled run.
+- **Focus-failure toast spam**, and the unschedulable warning now fires on a real projected gap
+  rather than an axis mismatch.
+- **A hot spin on Active alts**, plus forward-progress and restore-on-cancel guards, and a cost
+  estimate that corrects itself instead of drifting.
+
+### Internal
+
+- **The one test that checks against the real RoRoRo host had stopped compiling** and nothing
+  noticed, because CI never built it. Repaired, and a `host-integration` CI job now builds it on
+  every PR so it cannot rot again silently.
+- Pre-commit secret-scan and local-path guards, a CLAUDE.md, and the 0.6.0 changelog entry that
+  shipped missing.
+
 ## 0.6.0 — 2026-07-12
 
 > Reconstructed 2026-08-11 from the 36 commits between `v0.5.0` and `v0.6.0`. The release shipped
