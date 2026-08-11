@@ -125,11 +125,17 @@ internal sealed class PluginClient : IAsyncDisposable
         {
             var theme = await _client.GetThemeAsync(new Empty(), cancellationToken: ct)
                 .ConfigureAwait(false);
+            Diagnostics.DiagLog.Write($"Theme: host palette received on connect (bg {theme.Bg}, cyan {theme.Cyan}).");
             ThemeChanged?.Invoke(theme);
         }
-        catch (RpcException)
+        catch (RpcException ex)
         {
-            // No feed on this host, or none applied yet. Keep the fallback palette.
+            // No feed on this host, or none applied yet. Keep the fallback palette -- but SAY so.
+            // Silence here is what made the first end-to-end check eyes-only: connected-but-wrong-
+            // colour and never-asked look identical from outside, and they need different fixes.
+            Diagnostics.DiagLog.Write(
+                $"Theme: GetTheme failed ({ex.StatusCode}); staying on the fallback palette. "
+                + "A host older than 1.19 has no theme feed.");
         }
 
         _consumerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -228,14 +234,20 @@ internal sealed class PluginClient : IAsyncDisposable
                 cancellationToken: ct);
             await foreach (var palette in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                Diagnostics.DiagLog.Write($"Theme: host pushed a palette (bg {palette.Bg}, cyan {palette.Cyan}).");
                 ThemeChanged?.Invoke(palette);
             }
         }
         catch (OperationCanceledException) { /* expected on shutdown */ }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Host gone, stream refused, host too old to have the RPC at all. All the same
-            // answer: stop following, keep the colours we have, stay usable.
+            // answer: stop following, keep the colours we have, stay usable -- and log, because
+            // "no longer following the theme" is invisible until the user switches theme and
+            // nothing happens.
+            Diagnostics.DiagLog.Write(
+                $"Theme: stopped following the host ({ex.GetType().Name}). "
+                + "Colours stay as they are; the plugin keeps working.");
         }
     }
 

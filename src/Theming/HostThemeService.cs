@@ -70,7 +70,14 @@ internal sealed class HostThemeService
     private static void ApplyOnUiThread(HostThemePalette palette)
     {
         var resources = Application.Current?.Resources;
-        if (resources is null) return;
+        if (resources is null)
+        {
+            // The one path where a palette arrives and nothing repaints. Worth a line: without it,
+            // "the feed delivered" and "the brushes changed" are indistinguishable from the log,
+            // and they are separate failures with separate fixes.
+            Diagnostics.DiagLog.Write("Theme: palette arrived but there is no Application to paint.");
+            return;
+        }
 
         ApplySlot(resources, "BgBrush", palette.Bg);
         ApplySlot(resources, "CyanBrush", palette.Cyan);
@@ -85,6 +92,8 @@ internal sealed class HostThemeService
         {
             ApplySlot(resources, "RowHoverBrush", hover);
         }
+
+        Diagnostics.DiagLog.Write($"Theme: applied 8 brushes (bg {palette.Bg}, row {palette.RowBg}, hover {hover ?? "unchanged"}).");
     }
 
     private static void ApplySlot(ResourceDictionary resources, string key, string hex)
