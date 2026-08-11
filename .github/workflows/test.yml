@@ -1,11 +1,20 @@
 name: test
 
-# Runs the standalone unit tests on every PR and every push to main.
+# Two jobs, because one of them was not enough.
 #
-# `StandaloneTestsOnly=true` drops PluginClientIntegrationTests and its
-# project references to the sibling ROROROblox repo, which is never checked
-# out in CI. Those integration tests run locally (and in ROROROblox's own
-# full-solution test gate), not here. See rororo-ur-task.Tests.csproj.
+# `unit-tests` runs with StandaloneTestsOnly=true, which drops
+# PluginClientIntegrationTests and its project references to the sibling
+# ROROROblox repo. Fast, self-contained, gates every PR.
+#
+# `host-integration` checks the sibling repo out and builds WITHOUT that flag.
+# Added 2026-08-11 after PluginClientIntegrationTests was found not to compile
+# at all: the host had grown two constructor dependencies (IAccountActivityMarker,
+# IPluginAccountStopper) and nothing noticed, because no pipeline ever built the
+# file. The standalone suite stayed green at 268/268 the whole time.
+#
+# The plugin's ONLY check against the real host cannot live behind a flag that
+# CI never sets — a test the pipeline never compiles is a test that has quietly
+# stopped being true. Both repos are public, so this needs no secret.
 on:
   push:
     branches: [main]
@@ -33,4 +42,33 @@ jobs:
           -p:StandaloneTestsOnly=true
           -c Release
           --no-restore
+          --nologo
+
+  host-integration:
+    # Proves the plugin still speaks to the host it actually ships against.
+    # Kept separate from unit-tests so a host-side break is legible as exactly
+    # that, and never mistaken for the plugin's own logic failing.
+    runs-on: windows-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v6
+        with:
+          path: rororo-ur-task
+
+      - name: Checkout host (sibling layout the csproj expects)
+        uses: actions/checkout@v6
+        with:
+          repository: estevanhernandez-stack-ed/ROROROblox
+          path: ROROROblox
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test (with the real host)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -c Release
           --nologo
