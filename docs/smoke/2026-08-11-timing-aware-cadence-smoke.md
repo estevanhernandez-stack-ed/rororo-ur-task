@@ -21,6 +21,14 @@ That is a 30x difference. It is easy to feel and easy to be wrong about, so **do
 
 ## Setup
 
+> **Every command below runs from the PLUGIN repo, not the host repo.** They sit side by side and
+> the paths look alike, so this is easy to get wrong — and PowerShell's error ("the argument ...
+> does not exist") never mentions the working directory.
+>
+> ```
+> cd ..\rororo-ur-task      # from the host repo; they are siblings
+> ```
+
 - [ ] Quit any running RoRoRo **and** any running Ur Task first (both hold single-instance claims).
 - [ ] Build this branch: `dotnet build rororo-ur-task.csproj` — build the **`.csproj`**, never the
       `.sln`, which drags the whole host app in and fails while RoRoRo is running.
@@ -36,6 +44,7 @@ Run the counter in its own PowerShell window and then **go and use the machine n
 a document, scroll a browser, whatever you would actually be doing while alts tick over.
 
 ```
+cd ..\rororo-ur-task
 powershell -ExecutionPolicy Bypass -File build\measure-focus-steals.ps1 -Minutes 5 -Note "v0.7.0, N alts, 1 Active"
 ```
 
@@ -95,6 +104,7 @@ overstating.
 The comparison is stronger with a before. On `main` (v0.6.0), same alts, same duration:
 
 ```
+cd ..\rororo-ur-task
 powershell -ExecutionPolicy Bypass -File build\measure-focus-steals.ps1 -Minutes 5 -Note "v0.6.0 baseline"
 ```
 
