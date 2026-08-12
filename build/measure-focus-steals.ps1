@@ -126,7 +126,12 @@ finally {
     $elapsed = ((Get-Date) - $start).TotalMinutes
     if ($elapsed -le 0) { $elapsed = 0.01 }
 
-    $toRoblox = @($events | Where-Object { $_.To -like "RobloxPlayerBeta*" })
+    # A steal is focus taken FROM you. Roblox -> Roblox is the scheduler moving between your own
+    # alts, and you had nothing to lose in that moment — counting it inflates the headline figure
+    # (measured 2026-08-11: 9 reported where the honest answer was 5). Reported separately so the
+    # scheduler's internal churn stays visible without contaminating the user-facing number.
+    $toRoblox = @($events | Where-Object { $_.To -like "RobloxPlayerBeta*" -and $_.From -notlike "RobloxPlayerBeta*" })
+    $altToAlt = @($events | Where-Object { $_.To -like "RobloxPlayerBeta*" -and $_.From -like "RobloxPlayerBeta*" })
     $rate = [math]::Round($toRoblox.Count / $elapsed, 1)
     $secondsEach = if ($toRoblox.Count -gt 0) { [math]::Round(($elapsed * 60) / $toRoblox.Count, 1) } else { 0 }
 
@@ -142,7 +147,8 @@ finally {
         Write-Host "    Either no alts were being kept alive, or you never changed windows." -ForegroundColor Red
         Write-Host "    DO NOT record this as a pass." -ForegroundColor Red
     }
-    Write-Host ("steals by Roblox    : {0}" -f $toRoblox.Count)
+    Write-Host ("steals FROM you     : {0}" -f $toRoblox.Count)
+    Write-Host ("alt-to-alt switches : {0}  (scheduler moving between your alts, not taken from you)" -f $altToAlt.Count)
     Write-Host ("  -> rate           : {0} per minute" -f $rate)
     if ($toRoblox.Count -gt 0) {
         Write-Host ("  -> one every      : {0} seconds" -f $secondsEach)
