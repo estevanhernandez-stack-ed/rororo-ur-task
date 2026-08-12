@@ -1,16 +1,11 @@
-using System.IO;
-using System.Text.Json;
-
 namespace Labs626.UrTask.Theming;
 
 /// <summary>
-/// The slice of a RoRoRo theme that Ur Task consumes — the seven brush slots the
-/// plugin's XAML references plus the theme id. RowExpired*/Navy host slots are
-/// dropped (no Ur Task surface uses them); RowHoverBrush is derived at apply
-/// time by tinting RowBg toward White.
+/// The slice of a RoRoRo palette that Ur Task consumes — the seven brush slots the plugin's XAML
+/// references. RoRoRo's expired-row and navy slots are dropped (no Ur Task surface uses them), and
+/// RowHoverBrush is derived at apply time by tinting RowBg toward White.
 /// </summary>
 public sealed record HostThemePalette(
-    string Id,
     string Bg,
     string Cyan,
     string Magenta,
@@ -20,159 +15,49 @@ public sealed record HostThemePalette(
     string RowBg);
 
 /// <summary>
-/// Pure disk-shape reader for the host app's theming state. RoRoRo persists the
-/// active theme id in <c>%LOCALAPPDATA%\ROROROblox\settings.json</c> (camelCase)
-/// and user themes as snake_case JSON files in <c>...\ROROROblox\themes\</c>;
-/// built-in themes live in host code, so their palettes are mirrored here.
-/// Mirror-drift risk: if RoRoRo's built-ins change, these copies need a matching
-/// bump — the slot values come from ROROROblox.Core ThemeStore.BuildBuiltIns.
-/// Every failure path falls back to Brand: a malformed host file must never
-/// break the plugin.
+/// The fallback palette, and the colour maths that goes with it.
+/// <para>
+/// <b>This class used to read RoRoRo's storage directly</b> — the active theme id out of its
+/// <c>settings.json</c>, then the palette out of <c>themes\&lt;id&gt;.json</c>, with a hand-copied
+/// mirror of the built-in themes for the ids that were never written to disk at all. It worked for
+/// user themes, because those are files. It could never work for built-in themes, because those are
+/// records in RoRoRo's own code — so flatline, which shipped after the mirror was written, silently
+/// fell through to Brand. That was F-091.
+/// </para>
+/// <para>
+/// The host now sends its resolved palette over the plugin contract (<c>GetTheme</c> plus
+/// <c>SubscribeThemeChanged</c>, contract package 0.8.0), so none of that machinery survives. Gone
+/// with it: knowledge of RoRoRo's settings filename, its camelCase key, its themes folder layout,
+/// its per-file snake_case naming policy, and its reader's comment tolerance. Five internal storage
+/// details this plugin had no business knowing, any of which could have changed in a RoRoRo release
+/// and quietly turned the window the wrong colour.
+/// </para>
+/// <para>
+/// What is left is the fallback for when there is no host to ask, which is a normal and supported
+/// state: Ur Task runs standalone.
+/// </para>
 /// </summary>
 public static class HostThemeReader
 {
-    // Host settings.json is written with JsonNamingPolicy.CamelCase.
-    private const string ActiveThemeIdProperty = "activeThemeId";
-
-    // Host theme files are written with JsonNamingPolicy.SnakeCaseLower and
-    // tolerate comments + trailing commas (ThemeStore's reader options).
-    private static readonly JsonDocumentOptions ThemeFileOptions = new()
-    {
-        CommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
-
-    /// <summary>The host's default theme — also Ur Task's XAML fallback palette.</summary>
+    /// <summary>
+    /// RoRoRo's default theme, and Ur Task's palette when no host is answering — RoRoRo not
+    /// running, or a host too old to have the theme feed. Deliberately still hardcoded: this is a
+    /// starting colour for a window that has to render before any connection exists, not a mirror
+    /// of anything. It has one value and it never needs to track RoRoRo's built-ins again.
+    /// </summary>
     public static readonly HostThemePalette Brand = new(
-        Id: "brand",
         Bg: "#0F1F31", Cyan: "#17D4FA", Magenta: "#F22F89", White: "#FFFFFF",
         MutedText: "#9AA8B8", Divider: "#1F3149", RowBg: "#15263A");
 
-    private static readonly HostThemePalette Midnight = new(
-        Id: "midnight",
-        Bg: "#0A1320", Cyan: "#3FB8D9", Magenta: "#C0407E", White: "#E6EDF5",
-        MutedText: "#6F7E92", Divider: "#162232", RowBg: "#0F1B2B");
-
-    private static readonly HostThemePalette MagentaHeat = new(
-        Id: "magenta-heat",
-        Bg: "#1A0F1F", Cyan: "#F22F89", Magenta: "#F22F89", White: "#FFE9F4",
-        MutedText: "#B091A2", Divider: "#2D1832", RowBg: "#241432");
-
-    private static readonly HostThemePalette[] BuiltIns = { Brand, Midnight, MagentaHeat };
-
-    public static string DefaultHostFolder() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ROROROblox");
-
-    /// <summary>Extract the active theme id from host settings.json content; null when absent.</summary>
-    public static string? ReadActiveThemeId(string settingsJson)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(settingsJson);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty(ActiveThemeIdProperty, out var id)
-                && id.ValueKind == JsonValueKind.String)
-            {
-                var value = id.GetString();
-                return string.IsNullOrWhiteSpace(value) ? null : value;
-            }
-        }
-        catch (JsonException)
-        {
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Parse a host user-theme file (snake_case slots). Returns null when the
-    /// JSON is malformed or any Ur Task-consumed slot is missing — mirroring the
-    /// host's drop-don't-throw posture for user themes.
-    /// </summary>
-    public static HostThemePalette? ParseThemeFile(string id, string themeJson)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(themeJson, ThemeFileOptions);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-
-            string? Slot(string name) =>
-                root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-                    ? v.GetString()
-                    : null;
-
-            var bg = Slot("bg");
-            var cyan = Slot("cyan");
-            var magenta = Slot("magenta");
-            var white = Slot("white");
-            var mutedText = Slot("muted_text");
-            var divider = Slot("divider");
-            var rowBg = Slot("row_bg");
-
-            if (bg is null || cyan is null || magenta is null || white is null
-                || mutedText is null || divider is null || rowBg is null)
-            {
-                return null;
-            }
-
-            return new HostThemePalette(id, bg, cyan, magenta, white, mutedText, divider, rowBg);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Resolve the host's currently active palette from disk: read the saved id
-    /// from <paramref name="hostFolder"/>/settings.json, match a mirrored
-    /// built-in, else load <c>themes\&lt;id&gt;.json</c>. Brand on any miss.
-    /// </summary>
-    public static HostThemePalette ResolveActive(string hostFolder)
-    {
-        string? id = null;
-        try
-        {
-            var settingsPath = Path.Combine(hostFolder, "settings.json");
-            if (File.Exists(settingsPath))
-            {
-                id = ReadActiveThemeId(File.ReadAllText(settingsPath));
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return Brand;
-        }
-
-        if (id is null) return Brand;
-
-        foreach (var builtIn in BuiltIns)
-        {
-            if (string.Equals(builtIn.Id, id, StringComparison.OrdinalIgnoreCase))
-                return builtIn;
-        }
-
-        try
-        {
-            var themePath = Path.Combine(hostFolder, "themes", id + ".json");
-            if (File.Exists(themePath))
-            {
-                return ParseThemeFile(id, File.ReadAllText(themePath)) ?? Brand;
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-        }
-
-        return Brand;
-    }
-
     /// <summary>
     /// Blend <paramref name="baseHex"/> toward <paramref name="towardHex"/> by
-    /// <paramref name="t"/> (0..1). Used to derive RowHoverBrush from RowBg +
-    /// White so hover tinting stays theme-aware. Returns #RRGGBB; null when
-    /// either input isn't a parseable #RRGGBB hex.
+    /// <paramref name="t"/> (0..1). Used to derive RowHoverBrush from RowBg + White so hover
+    /// tinting stays theme-aware. Returns #RRGGBB; null when either input isn't a parseable
+    /// #RRGGBB hex.
+    /// <para>
+    /// Survives the feed because hover is <i>derived from</i> the palette rather than carried in
+    /// it — the host has no hover slot to send.
+    /// </para>
     /// </summary>
     public static string? BlendTowards(string baseHex, string towardHex, double t)
     {
