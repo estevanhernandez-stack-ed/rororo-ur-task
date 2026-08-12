@@ -2,11 +2,7 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## 0.7.0 — unreleased
-
-> **Not yet shipped.** Version bumped and notes drafted ahead of the tag so the release is a
-> tag-and-go once PR #30's live smoke passes. If PR #31 (take the theme from the host) merges
-> before the tag, its entry belongs in this section too.
+## 0.7.0 — 2026-08-11
 
 ### Changed
 
@@ -19,7 +15,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   different from the default.
 
 ### Added
-
+- **Ur Task takes its colours from RoRoRo directly.** The plugin used to keep its own copy of
+  the three built-in palettes, so a RoRoRo release that changed a built-in would leave Ur Task
+  rendering last year's colours until somebody noticed and updated it by hand. It now reads the
+  host's palette over the plugin contract and the copy is gone. Needs RoRoRo v1.19 or later for
+  the live feed; against older hosts it falls back to the brand look, as before.
+- **The theme log says what arrived and what got painted**, so a colour that looks wrong can be
+  traced to the feed or to the plugin instead of guessed at.
 - **Roles, presets, and a next-due countdown** in the assignment grid, so you can see what the
   scheduler intends to do next rather than inferring it from focus stealing.
 - **An up-front warning when an alt cannot be kept alive** at the cadence you asked for, instead of
@@ -44,6 +46,9 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   estimate that corrects itself instead of drifting.
 
 ### Internal
+- **The manifest version is tied to the assembly version**, with a test. Two files declaring the
+  same number is exactly how they drift.
+- Plugin contract moved 0.4.0 to 0.8.0 — that is what carries the theme feed.
 
 - **The one test that checks against the real RoRoRo host had stopped compiling** and nothing
   noticed, because CI never built it. Repaired, and a `host-integration` CI job now builds it on
