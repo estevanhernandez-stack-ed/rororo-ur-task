@@ -51,6 +51,34 @@ internal sealed class AssignmentRow : INotifyPropertyChanged
         ? $"Recorded in {_assigned!.RecordedGameName ?? "another game"}; {Alt.DisplayName} is in {(string.IsNullOrEmpty(Alt.PlaceName) ? "a different game" : Alt.PlaceName)}. Plays anyway — this is just a heads-up."
         : string.Empty;
 
+    // ---------- Cadence role toggle + next-due countdown (Task 8) ----------
+
+    private CadenceRole _role = CadenceRole.Active;
+
+    /// <summary>
+    /// UI-controlled cadence role for this row — independent of <see cref="AssignedMacro"/>.
+    /// Backgrounding (flip to KeepAlive) is non-destructive: the macro is untouched, merely
+    /// paused, so flipping back to Active resumes farming without re-picking anything.
+    /// </summary>
+    public CadenceRole Role
+    {
+        get => _role;
+        set { if (_role == value) return; _role = value; OnPropertyChanged(); OnPropertyChanged(nameof(NextDueText)); }
+    }
+
+    private TimeSpan? _nextDue;
+
+    /// <summary>Proof-of-life for a sleeping scheduler. Empty for Active rows.</summary>
+    public string NextDueText => Role == CadenceRole.KeepAlive && _nextDue is TimeSpan t
+        ? $"next: {Math.Max(0, (int)Math.Round(t.TotalMinutes))}m"
+        : string.Empty;
+
+    public void SetNextDue(TimeSpan? due)
+    {
+        _nextDue = due;
+        OnPropertyChanged(nameof(NextDueText));
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

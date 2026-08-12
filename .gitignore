@@ -44,3 +44,9 @@ secrets/
 
 # Superpowers brainstorming companion (local mockups)
 .superpowers/
+
+# Stray IDE-generated solution. Qodo/VS regenerate a .sln that pulls in the sibling ROROROblox
+# projects, so `dotnet build` against it drags the whole host app into the plugin's build — and
+# fails outright when a running RoRoRo holds its own DLLs. Build the .csproj directly. Same trap
+# the host repo documents for its own legacy .sln.
+rororo-ur-task.sln

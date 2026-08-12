@@ -63,7 +63,9 @@ public class PluginClientIntegrationTests
             bus,
             new NoOpLauncher(),
             new PluginUITranslator(new NullUIHost()),
-            new NullActivitySnapshotProvider());
+            new NullActivitySnapshotProvider(),
+            new NullActivityMarker(),
+            new NoOpAccountStopper());
 
         // Production-shape interceptor — accessor returns null, plugin id comes
         // from x-plugin-id header injected by HeaderInjectingCallInvoker.
@@ -162,6 +164,26 @@ public class PluginClientIntegrationTests
     // Host's PluginHostService grew a required IActivitySnapshotProvider (9th ctor arg)
     // with the contract-0.4.0 game-aware work; the integration test only needs a
     // no-op snapshot source to construct it.
+    /// <summary>
+    /// Added 2026-08-11. The host grew two constructor dependencies and this test did not follow,
+    /// so it stopped compiling — silently, because CI runs with <c>StandaloneTestsOnly=true</c> and
+    /// never builds this file. A test the pipeline never compiles is a test that quietly stops
+    /// being true, and this one is the plugin's only check against the real host.
+    /// </summary>
+    private sealed class NullActivityMarker : IAccountActivityMarker
+    {
+        public void Mark(string accountId) { }
+    }
+
+    private sealed class NoOpAccountStopper : IPluginAccountStopper
+    {
+        public IReadOnlyList<string> TrackedAccountIds => Array.Empty<string>();
+
+        // False is the honest answer for a host tracking nothing — the contract defines the return
+        // as "unparseable id, no tracked client, or the stop failed", and this stub has no clients.
+        public bool StopAccount(string accountId) => false;
+    }
+
     private sealed class NullActivitySnapshotProvider : IActivitySnapshotProvider
     {
         public IReadOnlyList<AccountActivitySnapshot> Snapshot() => Array.Empty<AccountActivitySnapshot>();

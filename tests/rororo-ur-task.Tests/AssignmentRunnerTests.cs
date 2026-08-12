@@ -150,7 +150,7 @@ public class AssignmentRunnerTests
         var fg = new FakeForeground { Resolver = () => alt1 };
 
         var runner = new AssignmentRunner(player, fg, _ => (true, null));
-        var assignments = new List<Assignment> { new(alt1, macro) };
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
 
         // ── FIRST call: start but don't await yet — it loops forever until
         // cancelled, and is currently pinned mid-flight inside PlayAsync (the
@@ -181,6 +181,60 @@ public class AssignmentRunnerTests
         try { await firstTask; } catch (OperationCanceledException) { /* acceptable unwind path */ }
 
         Assert.False(runner.IsRunning);
+    }
+
+    /// <summary>
+    /// Regression for the review's CRITICAL 2: PluginRuntime used to publish the ur-afk
+    /// claim unconditionally, BEFORE the runner had actually won its single-flight
+    /// CompareExchange guard — so a losing concurrent RunAsync call (e.g. a recipe's
+    /// fire-and-forget Abort() racing a prior run that hadn't unwound yet) could still
+    /// get a claim published for alts nobody was servicing. The fix moves claim
+    /// publication onto a new AssignmentPhase.Started signal that RunAsync emits exactly
+    /// once, only for the call that actually wins the guard — mirroring how Stopped
+    /// already works. This test proves the mechanism the fix depends on: a losing
+    /// concurrent call must emit NO Started progress at all, so nothing downstream (like
+    /// PluginRuntime's claim publisher) ever fires for it. Reuses the same
+    /// BlockingFakePlayer pin-mid-flight rig as
+    /// RunAsync_ConcurrentEntry_SecondCallRefusesWithoutStartingSecondLoop.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ConcurrentEntry_SecondCallEmitsNoStarted()
+    {
+        var macro = NewMacro("started-guard-test");
+        var alt1 = Alt(1001, 47821334, "Goldnail8");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var player = new BlockingFakePlayer(entered, release);
+        var fg = new FakeForeground { Resolver = () => alt1 };
+
+        var runner = new AssignmentRunner(player, fg, _ => (true, null));
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
+
+        var startedEvents = new List<AssignmentProgress>();
+        runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Started) startedEvents.Add(p); };
+
+        // ── FIRST call: wins the race, pinned mid-flight inside PlayAsync. ──
+        using var firstCts = new CancellationTokenSource();
+        var firstTask = runner.RunAsync(assignments, firstCts.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(runner.IsRunning, "Expected the round-robin loop to be mid-flight.");
+
+        // ── SECOND call: must be refused atomically, without emitting Started — a
+        // downstream claim publisher hanging off Started (see PluginRuntime) must
+        // therefore never see this call at all. ──
+        using var secondCts = new CancellationTokenSource();
+        var secondTask = runner.RunAsync(assignments, secondCts.Token);
+        await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Exactly one Started — the winner's, carrying its assignment set.
+        var started = Assert.Single(startedEvents);
+        Assert.Same(assignments, started.AllAssignments);
+
+        // ── Unwind. ──
+        release.TrySetResult();
+        firstCts.Cancel();
+        try { await firstTask; } catch (OperationCanceledException) { /* acceptable unwind path */ }
     }
 
     /// <summary>
@@ -217,8 +271,8 @@ public class AssignmentRunnerTests
 
         var assignments = new List<Assignment>
         {
-            new(alt1, macro),  // explicit macro
-            new(alt2, null),   // keep-alive (Space)
+            Assignment.WithDerivedRole(alt1, macro),  // explicit macro
+            Assignment.WithDerivedRole(alt2, null),   // keep-alive (Space)
         };
 
         var phases = new List<(int index, AssignmentPhase phase)>();
@@ -287,10 +341,18 @@ public class AssignmentRunnerTests
         });
         fg.Resolver = () => alt2; // always return alt2 as foreground
 
+        // alt2 (succeeds) listed FIRST, alt1 (always fails) SECOND — deliberately, not
+        // the original assignment order. RunActiveAsync's focus-fail path now takes a
+        // bounded 30s backoff before yielding (the Active-side hot-spin fix), and this
+        // test's compat ctor runs on the REAL clock (real Task.Delay), not a fake one.
+        // With the failing alt first in round-robin order, that 30s real Sleep would
+        // block the loop before alt2 ever got a look, blowing well past this test's 5s
+        // real-time budget. Ordering the succeeding alt first guarantees it plays
+        // before alt1's failure (and backoff) is ever reached.
         var assignments = new List<Assignment>
         {
-            new(alt1, macro),
-            new(alt2, macro),
+            Assignment.WithDerivedRole(alt2, macro),
+            Assignment.WithDerivedRole(alt1, macro),
         };
 
         var phases = new List<(int index, AssignmentPhase phase)>();
@@ -299,8 +361,12 @@ public class AssignmentRunnerTests
         runner.Progress += (_, p) =>
         {
             phases.Add((p.IndexInCycle, p.Phase));
-            // Cancel at the start of cycle 2 so we capture a complete first cycle.
-            if (p.Cycle == 2 && p.Phase == AssignmentPhase.Focusing) cts.Cancel();
+            // Cancel the instant alt1's Skipped fires, but only once alt2 has already
+            // played — cancelling here lands INSIDE RunActiveAsync's focus-fail branch,
+            // before its `await _deps.Sleep(FocusRetryBackoffMs, ct)` is entered, so
+            // that Sleep observes an already-cancelled token and returns immediately
+            // instead of genuinely backing off for 30 real seconds.
+            if (p.Phase == AssignmentPhase.Skipped && player.Calls.Count >= 1) cts.Cancel();
         };
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -309,8 +375,8 @@ public class AssignmentRunnerTests
         try { await runner.RunAsync(assignments, linked.Token); }
         catch (OperationCanceledException) { }
 
-        // alt1 should have been skipped (focus failed) in cycle 1
-        Assert.Contains(phases, p => p.phase == AssignmentPhase.Skipped && p.index == 0);
+        // alt1 is now second in list order, so its IndexInCycle is 1.
+        Assert.Contains(phases, p => p.phase == AssignmentPhase.Skipped && p.index == 1);
         // alt2 should have been played (focus succeeded) at least once
         Assert.True(player.Calls.Count >= 1, $"Expected at least 1 PlayAsync call for alt2, got {player.Calls.Count}");
         Assert.All(player.Calls, call => Assert.Equal(alt2.RobloxUserId, call.userId));
@@ -334,7 +400,7 @@ public class AssignmentRunnerTests
         var fg = new FakeForeground { Resolver = () => alt1 };
         var runner = new AssignmentRunner(player, fg, _ => (true, null));
 
-        var assignments = new List<Assignment> { new(alt1, macro) };
+        var assignments = new List<Assignment> { Assignment.WithDerivedRole(alt1, macro) };
 
         var progressed = new List<AssignmentProgress>();
         var cts = new CancellationTokenSource();

@@ -52,4 +52,12 @@
     </None>
   </ItemGroup>
 
+  <!-- NO XAML is copied to the test output on purpose. Copying the dialogs next to the test binary
+       looked obvious and broke the build: this is a WPF project, its Page glob is `**/*.xaml`, and
+       it happily re-compiled the copies out of tests\bin\ as a second set of pages — duplicate
+       InitializeComponent, duplicate _contentLoaded, on every dialog.
+       ModalDefaultButtonSafetyTests walks up to the repo root and reads src\UI\ directly instead,
+       which is also what the host's XamlStyleScanner does. -->
+
+
 </Project>

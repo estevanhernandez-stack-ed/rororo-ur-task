@@ -30,6 +30,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly MacroPlayer _player;
     private readonly SequencePlayer _sequence;
     private readonly AssignmentRunner _runner;
+    private readonly ClaimFile _claim = new();
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
@@ -50,6 +51,22 @@ internal sealed class PluginRuntime : IAsyncDisposable
     // ---------- Assignment state ----------
     private readonly Dictionary<int, Macro?> _assignments = new(); // key: alt.Pid; value: assigned Macro or null for keep-alive
 
+    // Task 8: UI-driven cadence-role override, keyed by alt.Pid — independent of
+    // _assignments above (macro). Absent an entry, role-building falls back to
+    // Assignment.WithDerivedRole (macro present -> Active, none -> KeepAlive), the
+    // pre-Task-8 rule. Present, it wins outright — this is what makes backgrounding
+    // an alt (Active -> KeepAlive) non-destructive: the macro in _assignments is
+    // never touched, so flipping the override back to Active resumes farming with
+    // nothing re-picked.
+    //
+    // ConcurrentDictionary, not plain Dictionary: SetRoleOverride is written from
+    // the UI thread (ComboBox/preset commands) and GetRoleOverride is read from the
+    // hotkey thread (OnHotkey building the PLAY assignment list) — an unsynchronized
+    // Dictionary racing a concurrent read/write is undefined behavior. (The same
+    // shape of race pre-dates this branch on _assignments below; that one is
+    // untouched here — this fixes only the NEW race this branch introduced.)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, CadenceRole> _roleOverrides = new();
+
     public RecordMode CurrentRecordMode { get; set; } = RecordMode.PerWindow;
 
     /// <summary>
@@ -65,7 +82,22 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Accounts.AccountAdded += (_, info) =>
             Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
         Accounts.AccountRemoved += (_, info) =>
+        {
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+            // Minor fix: Windows recycles PIDs, so a fresh alt launched later can
+            // reuse a dead alt's pid — an un-pruned override would silently hand
+            // the new alt a role choice that was never actually made for it.
+            _roleOverrides.TryRemove(info.Pid, out CadenceRole _);
+            // Same recycled-pid hazard applies to the macro pairing itself: a
+            // stale _assignments[pid] entry would hand a brand-new alt a
+            // stranger's macro — and with no role override surviving it either
+            // (just pruned above), ResolveRole derives Active from the inherited
+            // macro's mere presence, so the new alt starts FARMING someone else's
+            // routine outright, rather than the safer KeepAlive an explicitly
+            // backgrounded PID would have inherited pre-pruning. Drop both pieces
+            // of stale state together.
+            _assignments.Remove(info.Pid);
+        };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground, _metrics);
@@ -117,6 +149,31 @@ internal sealed class PluginRuntime : IAsyncDisposable
             RaiseUI(() => AssignmentProgressed?.Invoke(p));
             if (p.Phase == AssignmentPhase.Refused)
                 Log($"Assignment playback refused for {p.Current?.Alt.DisplayName ?? "(unknown alt)"}: {p.Reason}");
+            // Warning covers both the unschedulable-alt notice (emitted once up front
+            // in AssignmentRunner.RunAsync) and the 3+-consecutive-focus-failure
+            // notice (emitted mid-run from ServiceKeepAliveAsync) — both already carry
+            // the alt's display name inside Reason itself, so log it as-is rather than
+            // re-wrapping with "for {alt}: " like the Refused case above. Previously
+            // Warning reached no user surface at all (only Refused was logged here).
+            else if (p.Phase == AssignmentPhase.Warning && !string.IsNullOrWhiteSpace(p.Reason))
+                Log(p.Reason);
+            // Started fires exactly once, only for the RunAsync call that actually
+            // won the runner's single-flight CompareExchange guard — a losing
+            // concurrent call (e.g. a still-unwinding prior run racing a recipe's
+            // preemption) emits nothing. Publish the claim HERE, off the runner's
+            // own confirmation that it is really about to service these alts, not
+            // at the caller's call site before the race is even decided — that
+            // ordering used to let a losing call's claim outlive the run it was
+            // never attached to (see TryStartClaim's doc for the full story).
+            else if (p.Phase == AssignmentPhase.Started && p.AllAssignments is not null)
+                TryStartClaim(p.AllAssignments);
+            // Stopped fires exactly once, right before AssignmentRunner.RunAsync's own
+            // finally clears _activeCts — same moment for every termination path
+            // (toggle-stop, Esc/Ctrl+Shift+A abort, host-lost, recipe preemption all
+            // route through _runner.Abort() cancelling the loop's token). Release the
+            // claim here instead of duplicating a Stop() call at every abort call site.
+            else if (p.Phase == AssignmentPhase.Stopped)
+                TryStopClaim();
         };
 
         _ = new AutoStopCoordinator(_player, Accounts);
@@ -256,9 +313,34 @@ internal sealed class PluginRuntime : IAsyncDisposable
         RaiseUI(() => AssignmentChanged?.Invoke(altPid, macro));
     }
 
+    /// <summary>
+    /// UI-driven cadence-role override for one alt (Task 8's per-row Active/Keep-alive
+    /// toggle and the "All equal" / "One focused" presets). Deliberately does NOT touch
+    /// <see cref="_assignments"/> — Role and macro assignment are orthogonal axes, same
+    /// as <see cref="UI.AssignmentRow.IsCheckedForRoutine"/> is orthogonal to
+    /// AssignedMacro on the same row.
+    /// </summary>
+    public void SetRoleOverride(int altPid, CadenceRole role) => _roleOverrides[altPid] = role;
+
+    /// <summary>
+    /// Read-side counterpart to <see cref="SetRoleOverride"/> — null means "no
+    /// explicit choice on record for this alt yet, derive from macro presence."
+    /// Lets the VM tell an override-in-force apart from a display value it seeded
+    /// itself, so re-deriving a row's Role after a macro assign/clear never
+    /// clobbers a genuine user choice (see RecorderViewModel.SeedRowRole).
+    /// </summary>
+    public CadenceRole? GetRoleOverride(int altPid)
+        => _roleOverrides.TryGetValue(altPid, out var r) ? r : null;
+
     public void ResetAssignments()
     {
         _assignments.Clear();
+        // Minor fix: a role override left behind here is exactly as stale as one
+        // left behind by a departed alt (see AccountRemoved above) — CLEAR wipes
+        // every macro pairing back to a blank slate, so a role choice made against
+        // one of those now-gone pairings shouldn't silently resurrect itself the
+        // next time this pid gets a fresh macro assigned.
+        _roleOverrides.Clear();
         Log("all assignments cleared.");
         RaiseUI(() => AssignmentsReset?.Invoke());
     }
@@ -332,6 +414,16 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
+            // The recipe's terminal Loop/KeepAlive step is the OTHER place
+            // _runner.RunAsync gets kicked off (the plain Ctrl+Shift+P path above is
+            // the first). Same as that path, do NOT claim here — the Abort() just
+            // above is fire-and-forget (not awaited), so a prior run may still be
+            // unwinding when this RunAsync call is made, and it can legitimately
+            // lose the single-flight race against that stale run. Claiming
+            // unconditionally here would publish coverage for alts this call never
+            // actually started servicing. The _runner.Progress subscription's
+            // Started handler claims instead, and only fires for the call that
+            // really wins.
             runLoop: (assignments, ct) => _runner.RunAsync(assignments, ct),
             resolveMacro: id => macros.TryGetValue(id, out var m) ? m : null);
         runner.Progress += (_, p) => Log($"Recipe '{recipe.Name ?? "(unnamed)"}': {p.StepLabel} ({p.Phase}).");
@@ -416,6 +508,49 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
+    // ---------- Heartbeat claim (Task 7) ----------
+
+    /// <summary>
+    /// Publish the accounts <see cref="_runner"/> is about to actively manage — see
+    /// <see cref="ClaimFile"/>. Called from the <c>_runner.Progress</c> subscription's
+    /// <see cref="AssignmentPhase.Started"/> handler (constructor) — that phase fires
+    /// exactly once, only for the <c>_runner.RunAsync</c> call that actually won the
+    /// single-flight <c>CompareExchange</c> guard, whether that call came from the
+    /// plain Ctrl+Shift+P path in <see cref="OnHotkey"/> or the recipe terminal-loop
+    /// path in <see cref="RunRecipe"/>.
+    ///
+    /// Deliberately NOT called at either call site directly, before RunAsync is
+    /// kicked off: a losing concurrent call (e.g. a recipe's fire-and-forget
+    /// <c>_runner.Abort()</c> racing a prior run that hasn't unwound yet — see
+    /// RunRecipe's comment) would otherwise publish a claim for alts nobody actually
+    /// started servicing, exactly the lying-claim failure mode this file's SAFETY
+    /// DIRECTION exists to avoid. Hanging the claim off the runner's own confirmed
+    /// start makes it symmetric with <see cref="TryStopClaim"/>, which already hangs
+    /// off the runner's confirmed <see cref="AssignmentPhase.Stopped"/>.
+    ///
+    /// Publishing a claim is bookkeeping; keeping alts alive is the product. A failed
+    /// write must never stop the cadence loop, so any I/O failure here is caught and
+    /// logged rather than allowed to propagate into the caller (which would otherwise
+    /// abort the loop before it even starts).
+    /// </summary>
+    private void TryStartClaim(IReadOnlyList<Assignment> assignments)
+    {
+        try { _claim.Start(assignments.Select(a => a.Alt.RobloxUserId)); }
+        catch (Exception ex) { Log($"Claim publish failed (non-fatal — ur-afk may double-cover these alts briefly): {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Release the claim — see the <c>AssignmentPhase.Stopped</c> handler on
+    /// <see cref="_runner"/>'s Progress subscription, which is the single place this
+    /// is called from. Fails SAFE even if this throws: the heartbeat's TTL (see
+    /// <see cref="ClaimFile"/>) still expires on its own, so a failed delete here
+    /// never leaves ur-afk permanently locked out.
+    /// </summary>
+    private void TryStopClaim()
+    {
+        try { _claim.Stop(); } catch (Exception ex) { Log($"Claim release failed (non-fatal — TTL expiry covers it): {ex.Message}"); }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -458,6 +593,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         try { _activeRecipeRunner?.Abort(); } catch { }
+        // Belt-and-suspenders: a graceful app exit may race the runner's own
+        // Stopped event (background task hasn't ticked yet) — dispose the claim
+        // directly too so a clean quit doesn't wait out the TTL for no reason.
+        try { _claim.Dispose(); } catch { }
         await _client.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -536,15 +675,34 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 }
 
                 // Build assignment list — every running alt gets a slot,
-                // unassigned = null macro (keep-alive Space).
+                // unassigned = null macro (keep-alive Space). Role: an explicit
+                // Task-8 UI override wins outright; absent one, fall back to the
+                // legacy derived rule (macro present -> Active, none -> KeepAlive).
+                // Assignment.ResolveRole is the single source of truth for this —
+                // CRITICAL 2: it also coerces a null-macro override back to
+                // KeepAlive, so a stray "Active with no macro" override (which the
+                // UI is supposed to prevent, but this is the belt to that brace)
+                // can never actually reach the runner as Active.
                 var assignments = alts.Select(a =>
-                    new Assignment(a, _assignments.TryGetValue(a.Pid, out var m) ? m : null)).ToList();
+                {
+                    var macro = _assignments.TryGetValue(a.Pid, out var m) ? m : null;
+                    var role = Assignment.ResolveRole(macro, GetRoleOverride(a.Pid));
+                    return new Assignment(a, macro, role);
+                }).ToList();
 
-                var explicitCount = assignments.Count(a => a.Macro is not null);
-                var keepAliveCount = assignments.Count(a => a.Macro is null);
-                Log($"Playing assignments — {explicitCount} explicit, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
+                // Counted by actual Role now, not by macro presence — a macro-assigned
+                // alt manually backgrounded (Task 8's per-row toggle) farms nothing
+                // this run, and the log line should say so rather than call it "active"
+                // just because it happens to have a macro attached.
+                var activeCount = assignments.Count(a => a.Role == CadenceRole.Active);
+                var keepAliveCount = assignments.Count(a => a.Role == CadenceRole.KeepAlive);
+                Log($"Playing assignments — {activeCount} active, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
 
                 _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
+                // Claim publication happens off _runner's own Started progress event
+                // (see the Progress subscription in the constructor) — NOT here —
+                // so it only fires once RunAsync has actually won its single-flight
+                // guard, not on the optimistic assumption that this call will win.
                 _ = Task.Run(async () =>
                 {
                     try

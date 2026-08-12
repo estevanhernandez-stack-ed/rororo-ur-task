@@ -108,7 +108,9 @@ internal sealed class RecipeRunner
                 return;
             }
 
-            var assignments = live.Select(a => new Assignment(a, terminalMacro)).ToList();
+            // A recipe's terminal step is an explicit instruction: Loop means farm it (Active),
+            // KeepAlive means just hold it awake. Derive from the macro the terminal produced.
+            var assignments = live.Select(a => Assignment.WithDerivedRole(a, terminalMacro)).ToList();
 
             Emit(new RecipePhaseEvent(
                 terminal.Iteration == StepIteration.Loop ? "Looping" : "Keep-alive",

@@ -1,6 +1,7 @@
 <Window x:Class="Labs626.UrTask.UI.RecorderWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:macros="clr-namespace:Labs626.UrTask.Macros"
         Title="RoRoRo Ur Task"
         Icon="pack://application:,,,/icon.png"
         Width="860" Height="600"
@@ -775,6 +776,25 @@
                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                    Margin="0,3,0,0"
                                                    TextWrapping="Wrap" />
+                                        <!-- Cadence-role presets. "All equal" runs every alt back-to-back
+                                             (v0.6 behavior). Backgrounding one alt so another gets full
+                                             attention is a per-row action (the FOCUS button on each row
+                                             below) — that's where FocusOneCommand actually fires, since it
+                                             needs to know WHICH alt to focus. -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                            <TextBlock Text="cadence:"
+                                                       FontFamily="{StaticResource MonoFont}"
+                                                       FontSize="8"
+                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,8,0" />
+                                            <Button Content="All equal"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding SetAllActiveCommand}"
+                                                    ToolTip="Set every alt to Active — round-robins back-to-back"
+                                                    FontSize="9"
+                                                    Padding="9,4" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
 
@@ -830,12 +850,59 @@
                                                                   ToolTip="Target this alt for the next routine RUN" />
                                                         <StackPanel Grid.Column="1">
                                                             <TextBlock Text="{Binding Alt.DisplayName}" FontSize="12" FontWeight="SemiBold" />
-                                                            <TextBlock Text="{Binding DisplayMacroName}"
-                                                                       FontSize="10"
-                                                                       Foreground="{DynamicResource MutedTextBrush}"
-                                                                       Margin="0,2,0,0" />
+                                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                                <TextBlock Text="{Binding DisplayMacroName}"
+                                                                           FontSize="10"
+                                                                           Foreground="{DynamicResource MutedTextBrush}" />
+                                                                <!-- Proof-of-life for a sleeping scheduler (Task 8) — empty
+                                                                     string for Active rows, so there's no gap to hide. -->
+                                                                <TextBlock Text="{Binding NextDueText}"
+                                                                           FontSize="10"
+                                                                           FontFamily="{StaticResource MonoFont}"
+                                                                           Foreground="{DynamicResource CyanBrush}"
+                                                                           Margin="6,0,0,0" />
+                                                            </StackPanel>
                                                         </StackPanel>
                                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <!-- Cadence-role toggle. ComboBox (not a raw click surface) marks
+                                                                 its own MouseLeftButtonDown Handled internally, same reasoning
+                                                                 as the routine checkbox above — never fires the row's
+                                                                 OnAssignmentRowClicked macro-assign toggle.
+                                                                 CRITICAL 2 UI gate: disabled with no macro assigned — a
+                                                                 macro-less alt has nothing for Active to farm, so Active
+                                                                 must not even be selectable here (ThemedComboBox's own
+                                                                 IsEnabled=False trigger — opacity 0.35 — handles the look,
+                                                                 same idiom as every other disabled control in this window). -->
+                                                            <ComboBox Style="{StaticResource ThemedComboBox}"
+                                                                      SelectedValuePath="Tag"
+                                                                      SelectedValue="{Binding Role, Mode=TwoWay}"
+                                                                      IsEnabled="{Binding HasMacro}"
+                                                                      FontSize="8"
+                                                                      Padding="6,3"
+                                                                      Width="82"
+                                                                      Margin="0,0,6,0"
+                                                                      ToolTip="Active farms its macro back-to-back; Keep-alive only taps Space near its deadline">
+                                                                <ComboBoxItem Content="ACTIVE" Tag="{x:Static macros:CadenceRole.Active}" />
+                                                                <ComboBoxItem Content="KEEP-ALIVE" Tag="{x:Static macros:CadenceRole.KeepAlive}" />
+                                                            </ComboBox>
+                                                            <!-- "One focused, rest background" — per row, since FocusOneCommand
+                                                                 needs to know WHICH alt to focus. FocusOneCommand lives on the
+                                                                 window's DataContext (RecorderViewModel), not this row, hence
+                                                                 the AncestorType lookup — same pattern CurrentRunnerAltPid uses
+                                                                 above for the "now playing" highlight.
+                                                                 CRITICAL 2 UI gate: same reasoning as the ComboBox above —
+                                                                 FOCUS would make this alt Active, so it's disabled with no
+                                                                 macro to farm (RecorderViewModel.FocusOneCommand also
+                                                                 no-ops defensively if ever invoked another way). -->
+                                                            <Button Content="FOCUS"
+                                                                    Style="{StaticResource SecondaryButton}"
+                                                                    Command="{Binding DataContext.FocusOneCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding}"
+                                                                    IsEnabled="{Binding HasMacro}"
+                                                                    ToolTip="Make this alt Active; background every other alt to Keep-alive"
+                                                                    FontSize="8"
+                                                                    Padding="6,3"
+                                                                    Margin="0,0,6,0" />
                                                             <!-- Soft mismatch warning — macro recorded in a different game.
                                                                  Advisory only; playback is never blocked. -->
                                                             <Border Background="{DynamicResource RowBgBrush}"

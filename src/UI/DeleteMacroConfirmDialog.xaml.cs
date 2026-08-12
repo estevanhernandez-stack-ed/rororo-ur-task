@@ -18,6 +18,9 @@ public partial class DeleteMacroConfirmDialog : Window
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape) { DialogResult = false; Close(); }
-        else if (e.Key == Key.Enter) { DialogResult = true; Close(); }
+        // Enter CANCELS. This handler is what actually decides — it runs before the
+        // markup's IsDefault ever gets a say, which is why setting IsDefault on CANCEL
+        // alone changed nothing and Enter still deleted (found in smoke, 2026-08-11).
+        else if (e.Key == Key.Enter) { DialogResult = false; Close(); }
     }
 }
