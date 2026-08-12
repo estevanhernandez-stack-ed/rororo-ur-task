@@ -32,7 +32,21 @@ That is a 30x difference. It is easy to feel and easy to be wrong about, so **do
 - [ ] Quit any running RoRoRo **and** any running Ur Task first (both hold single-instance claims).
 - [ ] Build this branch: `dotnet build rororo-ur-task.csproj` — build the **`.csproj`**, never the
       `.sln`, which drags the whole host app in and fails while RoRoRo is running.
-- [ ] Start RoRoRo, then start Ur Task.
+- [ ] Start **the host build you are merging into**, then start Ur Task.
+      This machine has two: a Store install and a dev build, at different versions. Single-instance
+      means whichever starts first wins and the second silently forwards and exits, so check what
+      you actually launched:
+      ```
+      Get-Process ROROROblox* | Select-Object Path
+      ```
+      Use the **dev build off current `main`** — `src\ROROROblox.Appin\Debug
+et10.0-windows\ROROROblox.App.exe`
+      in the host repo. Two reasons: it is the code these PRs merge into, and PR #31's theme feed
+      (`IThemePaletteSource`, host v1.19+) does not exist in older builds — smoke it against an old
+      host and the plugin falls back to its mirrored palettes and looks broken when it is only
+      talking to a host that cannot answer.
+      The plugin logs `Connected. Host version X` — confirm that says what you expect before
+      trusting anything downstream of it.
 - [ ] Have **at least 2 alts** running, at least one set to **Active** and one to keep-alive. One
       alt cannot show round-robin behaviour.
 
