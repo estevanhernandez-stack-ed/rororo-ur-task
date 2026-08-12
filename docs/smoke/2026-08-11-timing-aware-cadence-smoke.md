@@ -46,6 +46,20 @@ That is a 30x difference. It is easy to feel and easy to be wrong about, so **do
       talking to a host that cannot answer.
       The plugin logs `Connected. Host version X` — confirm that says what you expect before
       trusting anything downstream of it.
+- [ ] Start **the branch build of Ur Task**, not the installed one.
+      RoRoRo autostarts the INSTALLED plugin from
+      `%LOCALAPPDATA%\ROROROblox\plugins\626labs.ur-task\`, which is whatever version was last
+      released. Quit it from the tray first — it holds the action-bridge pipe — then launch:
+      ```
+      bin\Debug\net10.0-windows\626labs.ur-task.exe
+      ```
+      **Then check the log's first line says the version you are testing:**
+      ```
+      === RoRoRo Ur Task v0.7.0 starting ===
+      ```
+      If it says 0.6.0 you are measuring the released build and the run is void. This has already
+      happened once: a full session of observations turned out to be the old round-robin doing
+      exactly what it always did.
 - [ ] Have **at least 2 alts** running, at least one set to **Active** and one to keep-alive. One
       alt cannot show round-robin behaviour.
 
