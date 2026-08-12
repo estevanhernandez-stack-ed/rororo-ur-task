@@ -39,8 +39,7 @@ That is a 30x difference. It is easy to feel and easy to be wrong about, so **do
       ```
       Get-Process ROROROblox* | Select-Object Path
       ```
-      Use the **dev build off current `main`** — `src\ROROROblox.Appin\Debug
-et10.0-windows\ROROROblox.App.exe`
+      Use the **dev build off current `main`** — `src\ROROROblox.App\bin\Debug\net10.0-windows\ROROROblox.App.exe`
       in the host repo. Two reasons: it is the code these PRs merge into, and PR #31's theme feed
       (`IThemePaletteSource`, host v1.19+) does not exist in older builds — smoke it against an old
       host and the plugin falls back to its mirrored palettes and looks broken when it is only
