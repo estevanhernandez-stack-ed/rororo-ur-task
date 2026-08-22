@@ -69,40 +69,67 @@ internal sealed class MacroRunnerServer
         }
     }
 
-    /// <summary>Process exactly one request/response over an already-connected stream.</summary>
+    /// <summary>
+    /// Process exactly one request/response over an already-connected stream. Bridge 1.x grew
+    /// heterogeneous methods (ListMacros/StopMacro beside RunMacro), so the frame is peeked as a
+    /// method envelope first, then deserialized per method — each branch serializes its own
+    /// response type. Refusal order is unchanged: empty → version-mismatch → unknown method →
+    /// missing callerPluginId → invoker.
+    /// </summary>
     public async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
     {
         var frame = await FrameCodec.ReadFrameAsync(stream, ct).ConfigureAwait(false);
         if (frame is null) return; // peer connected then closed
 
-        RunMacroResponse response;
+        byte[] outBytes;
         try
         {
-            var request = JsonSerializer.Deserialize<RunMacroRequest>(frame, BridgeContract.Json);
-            response = await ValidateAndDispatchAsync(request, ct).ConfigureAwait(false);
+            var env = JsonSerializer.Deserialize<RequestEnvelope>(frame, BridgeContract.Json);
+            outBytes = await DispatchAsync(env, frame, ct).ConfigureAwait(false);
         }
         catch (JsonException)
         {
-            response = RunMacroResponse.Refused("refused", "Malformed request JSON.");
+            outBytes = Bytes(RunMacroResponse.Refused("refused", "Malformed request JSON."));
         }
 
-        var outBytes = JsonSerializer.SerializeToUtf8Bytes(response, BridgeContract.Json);
         await FrameCodec.WriteFrameAsync(stream, outBytes, ct).ConfigureAwait(false);
     }
 
-    private async Task<RunMacroResponse> ValidateAndDispatchAsync(RunMacroRequest? request, CancellationToken ct)
+    private async Task<byte[]> DispatchAsync(RequestEnvelope? env, byte[] frame, CancellationToken ct)
     {
-        if (request is null)
-            return RunMacroResponse.Refused("refused", "Empty request.");
-        if (!BridgeContract.IsSupportedVersion(request.ContractVersion))
-            return RunMacroResponse.Refused("version-mismatch", $"Unsupported contractVersion '{request.ContractVersion}'.");
-        if (!string.Equals(request.Method, BridgeContract.Method, StringComparison.Ordinal))
-            return RunMacroResponse.Refused("refused", $"Unknown method '{request.Method}'.");
-        if (string.IsNullOrWhiteSpace(request.CallerPluginId))
-            return RunMacroResponse.Refused("refused", "Missing callerPluginId.");
+        if (env is null)
+            return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+        if (!BridgeContract.IsSupportedVersion(env.ContractVersion))
+            return Bytes(RunMacroResponse.Refused("version-mismatch", $"Unsupported contractVersion '{env.ContractVersion}'."));
 
-        return await _invoker.RunAsync(request, ct).ConfigureAwait(false);
+        switch (env.Method)
+        {
+            case BridgeContract.MethodRunMacro:
+            {
+                var req = JsonSerializer.Deserialize<RunMacroRequest>(frame, BridgeContract.Json);
+                if (req is null)
+                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                if (string.IsNullOrWhiteSpace(req.CallerPluginId))
+                    return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
+                return Bytes(await _invoker.RunAsync(req, ct).ConfigureAwait(false));
+            }
+            case BridgeContract.MethodListMacros:
+                return Bytes(ListMacrosResponse.Success(_invoker.ListMacros()));
+            case BridgeContract.MethodStopMacro:
+            {
+                var req = JsonSerializer.Deserialize<StopMacroRequest>(frame, BridgeContract.Json);
+                if (req is null)
+                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                if (string.IsNullOrWhiteSpace(req.CallerPluginId))
+                    return Bytes(StopMacroResponse.Refused("refused", "Missing callerPluginId."));
+                return Bytes(_invoker.StopMacro(req));
+            }
+            default:
+                return Bytes(RunMacroResponse.Refused("refused", $"Unknown method '{env.Method}'."));
+        }
     }
+
+    private static byte[] Bytes<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, BridgeContract.Json);
 
     private NamedPipeServerStream CreateServerPipe()
     {

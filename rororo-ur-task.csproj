@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>626labs.ur-task</AssemblyName>
     <RootNamespace>Labs626.UrTask</RootNamespace>
-    <Version>0.7.0</Version>
+    <Version>0.8.0</Version>
     <Company>626 Labs LLC</Company>
     <Product>RoRoRo Ur Task</Product>
     <Description>Per-window-aware macro recording for RoRoRo-managed Roblox alts. Record once, play on any alt — round-robin assignments, keep-alive, window-relative mouse macros, shareable macro bundles, an action bridge for sibling plugins, and theming that follows the host.</Description>

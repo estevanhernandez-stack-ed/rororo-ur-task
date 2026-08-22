@@ -20,6 +20,10 @@ public class MacroRunnerServerPipeBusyTests
     {
         public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
             => throw new InvalidOperationException("no connections expected in this test");
+        public IReadOnlyList<MacroSummary> ListMacros()
+            => throw new InvalidOperationException("no connections expected in this test");
+        public StopMacroResponse StopMacro(StopMacroRequest request)
+            => throw new InvalidOperationException("no connections expected in this test");
     }
 
     [Fact]
