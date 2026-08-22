@@ -1,4 +1,3 @@
-// src/Ipc/IMacroRunInvoker.cs
 namespace Labs626.UrTask.Ipc;
 
 /// <summary>
@@ -9,4 +8,10 @@ namespace Labs626.UrTask.Ipc;
 internal interface IMacroRunInvoker
 {
     Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct);
+
+    /// <summary>Enumerate the macro library (id + display name) for name resolution.</summary>
+    IReadOnlyList<MacroSummary> ListMacros();
+
+    /// <summary>Cancel a playback by id, or all active playbacks when the id is null.</summary>
+    StopMacroResponse StopMacro(StopMacroRequest request);
 }
