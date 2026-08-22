@@ -2,6 +2,18 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.8.0 — 2026-08-22
+
+### Added
+
+- **The action bridge speaks three methods now.** `ListMacros` enumerates the macro library
+  (id + name) so a caller can resolve "the farm macro" to an id; `repeat` on `RunMacro` loops a
+  macro end-to-start until stopped; and `StopMacro` cancels a running playback by id — or all of
+  them — and aborts the in-flight pass rather than waiting for the next loop boundary. Built for
+  the RoRoRo MCP connector, so an AI operator can run and stop macros the way Ur OCR already
+  triggers them. The wire contract stays 1.0: every addition is additive, and a 0.7-era caller's
+  frames parse exactly as before.
+
 ## 0.7.0 — 2026-08-11
 
 ### Changed
