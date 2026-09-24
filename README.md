@@ -77,7 +77,7 @@ Two buttons in the recorder window operate on all running alts:
 
 ## License
 
-MIT © 626 Labs LLC. The reference contract bindings (`ROROROblox.PluginContract`) ship under the same license — see the parent RoRoRo repository.
+Apache License 2.0, © 2026 626Labs LLC. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases published before 2026-09-24 were released under the MIT License. The contract bindings (`ROROROblox.PluginContract`) come from the parent RoRoRo repository under its own license (MIT).
 
 ---
 
