@@ -23,8 +23,10 @@ public class StepRunnerTests
         public int Captures;
         public List<(int X, int Y, int W, int H)> CaptureRects = new();
         public Action? OnDelay;
+        public bool SendWorks = true;
+        public bool WrongGeometry; // returns a block one pixel off from the rect asked for
 
-        public bool Send(MacroEvent e) { Sent.Add(e with { TimestampMs = NowMs }); if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y); return true; }
+        public bool Send(MacroEvent e) { Sent.Add(e with { TimestampMs = NowMs }); if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y); return SendWorks; }
         public bool MoveRelative(int dx, int dy) { Relative.Add((dx, dy)); return true; }
         public (int X, int Y)? CursorClient() => Cursor;
         public (int W, int H)? ClientSize() => Client;
@@ -41,7 +43,7 @@ public class StepRunnerTests
                 var rgb = Screen(NowMs, x + c, y + r);
                 px[r * w + c] = 0xFF000000u | (uint)(rgb.R << 16) | (uint)(rgb.G << 8) | (uint)rgb.B;
             }
-            return new PixelBlock(x, y, w, h, px);
+            return WrongGeometry ? new PixelBlock(x + 1, y, w, h, px) : new PixelBlock(x, y, w, h, px);
         }
         public Task Delay(int ms, CancellationToken ct)
         {
@@ -264,6 +266,78 @@ public class StepRunnerTests
         Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
         Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
         Assert.Null(r.StepIndex); // not a check failure, so GetPlayback must not call it check-failed
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_during_an_unchecked_delay_sends_nothing()
+    {
+        // SendInput goes to whatever window is in front, so the press must not follow a focus change.
+        var io = new FakeIo();
+        io.OnDelay = () => { if (io.NowMs >= 300) io.Foreground = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { new PointStep(1000, "p1", null, 42, 398) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
+        Assert.Null(r.StepIndex);
+        Assert.Empty(io.Downs);
+        Assert.Empty(io.Sent);
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_midway_through_a_drag_stops_moving_and_releases()
+    {
+        var io = new FakeIo();
+        int sentAtDrop = -1;
+        // Jump takes 150 ms, then 30 ms slices: the drop lands after the second drag move.
+        io.OnDelay = () => { if (io.NowMs >= 240 && io.Foreground) { io.Foreground = false; sentAtDrop = io.Sent.Count; } };
+        var r = await StepRunner.RunAsync(new MacroStep[] { new DragStep(0, 2, 400, 300, 0, 300, 300) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Null(r.StepIndex);
+        Assert.True(sentAtDrop > 0);
+        var after = io.Sent.Skip(sentAtDrop).ToList();
+        var release = Assert.Single(after); // no further moves, only the finally's release
+        Assert.Equal((MacroEventKind.MouseUp, 2), (release.Kind, release.MouseButton));
+    }
+
+    [Fact]
+    public async Task A_refused_send_aborts()
+    {
+        var io = new FakeIo { SendWorks = false };
+        var r = await StepRunner.RunAsync(new MacroStep[] { new PointStep(0, "p1", null, 42, 398), new PointStep(0, "p2", null, 5, 5) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Could not send input to CElCPapa at step 1/2.", r.Reason);
+        Assert.Null(r.StepIndex);
+        Assert.Empty(io.Downs);
+    }
+
+    [Fact]
+    public async Task A_capture_of_the_wrong_shape_could_not_see_the_window()
+    {
+        var io = new FakeIo { WrongGeometry = true, Screen = (_, _, _) => Green };
+        var step = new PointStep(0, "p1", "Tile", 100, 100, Check: GreenCheck(), CheckEnabled: true);
+        var r = await StepRunner.RunAsync(new MacroStep[] { step }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Tile' could not see the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+
+        var io2 = new FakeIo { WrongGeometry = true, Screen = (_, _, _) => Green };
+        var fm = new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "t8", "#8", 137, 390, Check: GreenCheck(Grey)) });
+        var r2 = await StepRunner.RunAsync(new MacroStep[] { fm }, Ctx(), io2, default);
+        Assert.Equal("CElCPapa: step 1 'Best mine' could not see the window.", r2.Reason);
+    }
+
+    [Fact]
+    public async Task Tuning_log_lines_use_invariant_numbers()
+    {
+        var prev = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+        try
+        {
+            var log = new List<string>();
+            var io = new FakeIo { Screen = (t, _, _) => t >= 1000 ? Green : DarkBlue };
+            var step = new PointStep(5200, "p1", "Tile", 100, 100, Check: GreenCheck(), CheckEnabled: true);
+            await StepRunner.RunAsync(new MacroStep[] { step }, Ctx(log), io, default);
+            Assert.Contains(log, l => l.Contains("matched at distance 0 after 1.0 s"));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
     }
 
     [Fact]

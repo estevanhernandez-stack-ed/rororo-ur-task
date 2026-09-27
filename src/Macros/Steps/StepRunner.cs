@@ -31,6 +31,13 @@ internal static class StepRunner
         public int StepIndex { get; } = stepIndex;
     }
 
+    /// <summary>The target lost the foreground, or input could not be sent, just before an input
+    /// event. Not a check failure: it ends the run like the step-boundary foreground abort.</summary>
+    private sealed class InputBlockedException(bool sendFailed) : Exception
+    {
+        public bool SendFailed { get; } = sendFailed;
+    }
+
     public static async Task<PlaybackResult> RunAsync(IReadOnlyList<MacroStep> steps, StepContext ctx, IStepIo io, CancellationToken ct)
     {
         var invalid = StepValidator.Validate(steps);
@@ -38,9 +45,10 @@ internal static class StepRunner
 
         var heldKeys = new HashSet<int>();
         var heldButtons = new HashSet<int>();
+        int i = 0;
         try
         {
-            for (int i = 0; i < steps.Count; i++)
+            for (; i < steps.Count; i++)
             {
                 // Not a check failure: no StepIndex, so GetPlayback reports "aborted", not "check-failed".
                 if (!io.TargetInForeground())
@@ -50,7 +58,7 @@ internal static class StepRunner
                 {
                     case KeyStep k:
                         await io.Delay(k.DelayMs, ct);
-                        io.Send(new MacroEvent(0, k.Down ? MacroEventKind.KeyDown : MacroEventKind.KeyUp, k.VirtualKeyCode, 0, 0, 0, 0));
+                        SendGuarded(io, new MacroEvent(0, k.Down ? MacroEventKind.KeyDown : MacroEventKind.KeyUp, k.VirtualKeyCode, 0, 0, 0, 0));
                         if (k.Down) heldKeys.Add(k.VirtualKeyCode); else heldKeys.Remove(k.VirtualKeyCode);
                         break;
                     case PointStep p:
@@ -66,7 +74,7 @@ internal static class StepRunner
                         await io.Delay(w.DelayMs, ct);
                         var wp = Place(ctx, (w.X, w.Y));
                         await JumpAsync(io, wp, ct);
-                        io.Send(new MacroEvent(0, MacroEventKind.MouseWheel, 0, wp.X, wp.Y, 0, w.Delta));
+                        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseWheel, 0, wp.X, wp.Y, 0, w.Delta));
                         break;
                     case PointerMoveStep m:
                         await io.Delay(m.DelayMs, ct);
@@ -82,6 +90,13 @@ internal static class StepRunner
                 }
             }
             return PlaybackResult.Completed();
+        }
+        catch (InputBlockedException b)
+        {
+            // Same shape as the step-boundary abort: no StepIndex, so it never reads as check-failed.
+            return PlaybackResult.Aborted(b.SendFailed
+                ? $"Could not send input to {ctx.AccountName} at step {i + 1}/{steps.Count}."
+                : $"Foreground shifted away from {ctx.AccountName} at step {i + 1}/{steps.Count}.");
         }
         catch (StopException s)
         {
@@ -128,12 +143,14 @@ internal static class StepRunner
             // would read its pixels as a false colour (spec §2 and §5).
             if (!io.TargetInForeground()) throw new StopException($"{name} could not see the window.", index);
             var block = io.Capture(box.X, box.Y, box.W, box.H) ?? throw new StopException($"{name} could not see the window.", index);
-            seen = block.AverageBox(box.X, box.Y, box.W, box.H)!.Value;
+            // A capture of the wrong shape is a window it could not see, never an exception.
+            seen = block.AverageBox(box.X, box.Y, box.W, box.H) ?? throw new StopException($"{name} could not see the window.", index);
             var v = ColorMatcher.Evaluate(seen, check);
             if (v.Matched)
             {
                 // Logged so the default tolerance can be tuned from real runs (spec, section 1).
-                ctx.Log($"step {index + 1} '{p.Label ?? p.Id}' matched at distance {v.Distance:F0} after {(io.NowMs - start) / 1000.0:F1} s");
+                ctx.Log(string.Create(CultureInfo.InvariantCulture,
+                    $"step {index + 1} '{p.Label ?? p.Id}' matched at distance {v.Distance:F0} after {(io.NowMs - start) / 1000.0:F1} s"));
                 await PressAsync(io, at, p.Button, heldButtons, ct);
                 return;
             }
@@ -213,7 +230,7 @@ internal static class StepRunner
             {
                 var b = cands[k].Box;
                 var block = io.Capture(b.X, b.Y, b.W, b.H) ?? throw new StopException($"{name} could not see the window.", index);
-                seen[k] = block.AverageBox(b.X, b.Y, b.W, b.H)!.Value;
+                seen[k] = block.AverageBox(b.X, b.Y, b.W, b.H) ?? throw new StopException($"{name} could not see the window.", index);
                 if (ColorMatcher.Evaluate(seen[k], cands[k].Check).Matched) { if (firstMatch < 0) firstMatch = k; continue; }
                 // Resolved without matching only when it shows its other state.
                 if (!ColorMatcher.ShowsOther(seen[k], cands[k].Check)) allResolved = false;
@@ -253,13 +270,27 @@ internal static class StepRunner
 
     // ---------- movement ----------
 
+    /// <summary>SendInput goes to whatever window is in front, so every input event re-checks the
+    /// target first, and a refused send stops the run. The finally block's releases bypass this on
+    /// purpose: held keys and buttons must come up whatever is in front.</summary>
+    private static void SendGuarded(IStepIo io, MacroEvent e)
+    {
+        GuardForeground(io);
+        if (!io.Send(e)) throw new InputBlockedException(sendFailed: true);
+    }
+
+    private static void GuardForeground(IStepIo io)
+    {
+        if (!io.TargetInForeground()) throw new InputBlockedException(sendFailed: false);
+    }
+
     private static async Task PressAsync(IStepIo io, (int X, int Y) at, int button, HashSet<int> heldButtons, CancellationToken ct)
     {
         await JumpAsync(io, at, ct);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, button, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, button, 0));
         heldButtons.Add(button);
         await io.Delay(StepTiming.PressHoldMs, ct);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, button, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, button, 0));
         heldButtons.Remove(button);
     }
 
@@ -267,11 +298,11 @@ internal static class StepRunner
     private static async Task JumpAsync(IStepIo io, (int X, int Y) at, CancellationToken ct)
     {
         var third = StepTiming.JumpWiggleMs / 3;
-        io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X - 3, at.Y - 2, 0, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X - 3, at.Y - 2, 0, 0));
         await io.Delay(third, ct);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X + 2, at.Y + 1, 0, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X + 2, at.Y + 1, 0, 0));
         await io.Delay(third, ct);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X, at.Y, 0, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, at.X, at.Y, 0, 0));
         await io.Delay(StepTiming.JumpWiggleMs - 2 * third, ct);
     }
 
@@ -298,7 +329,7 @@ internal static class StepRunner
             {
                 var q = (X: Math.Clamp(s.X, 0, client.W - 1), Y: Math.Clamp(s.Y, 0, client.H - 1));
                 if (boxes.Any(bb => NearBox(q, bb))) continue;
-                io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, q.X, q.Y, 0, 0));
+                SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, q.X, q.Y, 0, 0));
                 await io.Delay(0, ct);
                 return;
             }
@@ -311,16 +342,16 @@ internal static class StepRunner
         var from = Place(ctx, (d.StartX, d.StartY));
         var to = Place(ctx, (d.StartX + d.Dx, d.StartY + d.Dy));
         await JumpAsync(io, from, ct);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseDown, 0, from.X, from.Y, d.Button, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, from.X, from.Y, d.Button, 0));
         heldButtons.Add(d.Button);
         const int slices = 10;
         for (int s = 1; s <= slices; s++)
         {
             await io.Delay(Math.Max(1, d.DurationMs / slices), ct);
-            io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0,
+            SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0,
                 from.X + (to.X - from.X) * s / slices, from.Y + (to.Y - from.Y) * s / slices, 0, 0));
         }
-        io.Send(new MacroEvent(0, MacroEventKind.MouseUp, 0, to.X, to.Y, d.Button, 0));
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, to.X, to.Y, d.Button, 0));
         heldButtons.Remove(d.Button);
     }
 
@@ -332,7 +363,8 @@ internal static class StepRunner
         {
             await io.Delay(Math.Max(1, m.DurationMs / slices), ct);
             int tx = m.Dx * s / slices, ty = m.Dy * s / slices;
-            io.MoveRelative(tx - sentX, ty - sentY);
+            GuardForeground(io);
+            if (!io.MoveRelative(tx - sentX, ty - sentY)) throw new InputBlockedException(sendFailed: true);
             (sentX, sentY) = (tx, ty);
         }
     }
@@ -351,7 +383,7 @@ internal static class StepRunner
                 var at = Place(ctx, (e.X, e.Y));
                 ev = e with { X = at.X, Y = at.Y };
             }
-            io.Send(ev);
+            SendGuarded(io, ev);
             switch (ev.Kind)
             {
                 case MacroEventKind.KeyDown: heldKeys.Add(ev.VirtualKeyCode); break;
