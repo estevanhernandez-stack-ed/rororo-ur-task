@@ -25,10 +25,26 @@ public class StepRunnerTests
         public Action? OnDelay;
         public bool SendWorks = true;
         public bool WrongGeometry; // returns a block one pixel off from the rect asked for
+        // The target window has closed: no client origin, so client-space mouse sends fail and
+        // the cursor has no client position. Keys and screen-space releases still work.
+        public bool WindowGone;
+        public List<int> Released = new();
 
-        public bool Send(MacroEvent e) { Sent.Add(e with { TimestampMs = NowMs }); if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y); return SendWorks; }
+        public bool Send(MacroEvent e)
+        {
+            Sent.Add(e with { TimestampMs = NowMs });
+            if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y);
+            if (WindowGone && e.Kind is not (MacroEventKind.KeyDown or MacroEventKind.KeyUp)) return false;
+            return SendWorks;
+        }
+        public bool ReleaseButton(int button)
+        {
+            Released.Add(button);
+            Sent.Add(new MacroEvent(NowMs, MacroEventKind.MouseUp, 0, Cursor.X, Cursor.Y, button, 0));
+            return true;
+        }
         public bool MoveRelative(int dx, int dy) { Relative.Add((dx, dy)); return true; }
-        public (int X, int Y)? CursorClient() => Cursor;
+        public (int X, int Y)? CursorClient() => WindowGone ? null : Cursor;
         public (int W, int H)? ClientSize() => Client;
         public bool TargetInForeground() => Foreground;
         public PixelBlock? Capture(int x, int y, int w, int h)
@@ -356,6 +372,23 @@ public class StepRunnerTests
         Assert.Null(r.StepIndex); // Esc is not a check failure
         Assert.True(io.NowMs < 1000);
         Assert.Contains(io.Sent, e => e.Kind == MacroEventKind.KeyUp && e.VirtualKeyCode == 0x41);
+    }
+
+    [Fact]
+    public async Task A_window_that_closes_mid_press_still_gets_its_button_and_keys_released()
+    {
+        // AutoStopCoordinator aborts exactly when the account's window closes. The press is under
+        // way (button down, 80 ms hold), the client origin is gone, and a client-space MouseUp
+        // would be dropped: the release has to go out in screen space instead.
+        using var cts = new CancellationTokenSource();
+        var io = new FakeIo();
+        io.OnDelay = () => { if (io.Downs.Any() && !io.WindowGone) { io.WindowGone = true; cts.Cancel(); } };
+        var steps = new MacroStep[] { new KeyStep(0, 0x57, true), new PointStep(0, "p1", null, 42, 398) };
+        var r = await StepRunner.RunAsync(steps, Ctx(), io, cts.Token);
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp); // the release, not a finished press
+        Assert.Contains(io.Sent, e => e.Kind == MacroEventKind.KeyUp && e.VirtualKeyCode == 0x57);
     }
 
     [Fact]

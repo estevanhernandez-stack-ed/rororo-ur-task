@@ -6,6 +6,9 @@ namespace Labs626.UrTask.Macros.Steps;
 internal interface IStepIo
 {
     bool Send(MacroEvent clientEvent);
+    /// <summary>Button up in screen space at wherever the cursor is now. Needs no window, so a
+    /// held button still comes up after the target has closed (the v3 release rule).</summary>
+    bool ReleaseButton(int button);
     bool MoveRelative(int dx, int dy);
     (int X, int Y)? CursorClient();
     (int W, int H)? ClientSize();
@@ -108,9 +111,11 @@ internal static class StepRunner
         }
         finally
         {
+            // Keys need no window. Buttons go up in screen space at the cursor, never through the
+            // client-space Send: when the window has gone (AutoStopCoordinator aborts exactly
+            // then), Send drops the event and the button would stay down system-wide.
             foreach (var vk in heldKeys) io.Send(new MacroEvent(0, MacroEventKind.KeyUp, vk, 0, 0, 0, 0));
-            var c = io.CursorClient() ?? (0, 0);
-            foreach (var b in heldButtons) io.Send(new MacroEvent(0, MacroEventKind.MouseUp, 0, c.X, c.Y, b, 0));
+            foreach (var b in heldButtons) io.ReleaseButton(b);
         }
     }
 
