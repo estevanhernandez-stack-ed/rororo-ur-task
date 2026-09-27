@@ -34,17 +34,19 @@ public sealed class PointAdjustmentStore
             try
             {
                 Refresh();
+                return _data.TryGetValue(macroId, out var pts) && pts.TryGetValue(pointId, out var accts)
+                    && accts.TryGetValue(userId.ToString(), out var scales) && scales.TryGetValue(scale.ToString(), out var a)
+                    ? a : null;
             }
-            catch (IOException ex)
+            catch (Exception ex)
             {
-                // A write racing this read (the overlay saves while a playback reads). Missing one
-                // run's adjustment is better than failing the playback.
-                Labs626.UrTask.Diagnostics.DiagLog.Write($"adjustments.json unreadable, playing recorded points: {ex.Message}");
+                // Anything at all: a write racing this read (IOException, or UnauthorizedAccessException
+                // while a replace is pending), or a hand-edited file with a JSON null in it. This runs
+                // inside a playback, and an escape would reach AssignmentRunner, which catches only
+                // cancellation. Missing one run's adjustment is better than failing the playback.
+                Labs626.UrTask.Diagnostics.DiagLog.Write($"adjustments.json unreadable, playing recorded points: {ex.GetType().Name}: {ex.Message}");
                 return null;
             }
-            return _data.TryGetValue(macroId, out var pts) && pts.TryGetValue(pointId, out var accts)
-                && accts.TryGetValue(userId.ToString(), out var scales) && scales.TryGetValue(scale.ToString(), out var a)
-                ? a : null;
         }
     }
 

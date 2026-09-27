@@ -1,13 +1,24 @@
 using System.IO;
+using Labs626.UrTask.Diagnostics;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.Macros.Steps;
 
 namespace Labs626.UrTask.Tests.Steps;
 
+// Unreadable files write a DiagLog line: join the shared "DiagLog" collection and point the log
+// at the scratch dir so these tests never touch the real log (same pattern as MacroPlayerClientSpaceTests).
+[Collection("DiagLog")]
 public class PointAdjustmentStoreTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "urtask-adj-" + Guid.NewGuid().ToString("N"));
     private string PathIn => Path.Combine(_dir, "adjustments.json");
+
+    public PointAdjustmentStoreTests()
+    {
+        DiagLog.Directory = Path.Combine(_dir, "logs");
+        DiagLog.ResetForTests();
+    }
+
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
     [Fact]
@@ -58,6 +69,20 @@ public class PointAdjustmentStoreTests : IDisposable
         s.Set("m1", "p1", 1, 100, new PointAdjustment(2, 2));
         using var hold = new FileStream(PathIn, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         Assert.Null(new PointAdjustmentStore(PathIn).Get("m1", "p1", 1, 100));
+    }
+
+    [Theory]
+    [InlineData("{\"m1\": null}")]
+    [InlineData("{\"m1\": {\"p1\": null}}")]
+    [InlineData("{\"m1\": {\"p1\": {\"1\": null}}}")]
+    public void A_json_null_entry_reads_as_no_adjustment_and_is_logged(string json)
+    {
+        // Hand- or agent-edited files can hold a null at any level. It deserializes cleanly and
+        // used to throw NullReferenceException from the lookup, out through the step runner.
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(PathIn, json);
+        Assert.Null(new PointAdjustmentStore(PathIn).Get("m1", "p1", 1, 100));
+        Assert.Contains("adjustments.json unreadable", File.ReadAllText(DiagLog.CurrentLogPath));
     }
 
     [Fact]
