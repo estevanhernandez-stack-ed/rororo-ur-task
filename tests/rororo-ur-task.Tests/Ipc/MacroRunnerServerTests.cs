@@ -28,6 +28,9 @@ public class MacroRunnerServerTests
             SeenStop = request;
             return StopResult;
         }
+
+        public GetPlaybackResponse GetPlayback(GetPlaybackRequest request)
+            => new(true, "finished", null, null, null);
     }
 
     // Drives one raw JSON payload through HandleConnectionAsync over an in-process named-pipe
@@ -163,5 +166,32 @@ public class MacroRunnerServerTests
 
         Assert.False(resp.Ok);
         Assert.Equal("refused", resp.Reason);
+    }
+
+    [Fact]
+    public async Task GetPlayback_Dispatches_AndReturnsState()
+    {
+        var server = new MacroRunnerServer(new FakeInvoker());
+
+        var respJson = await RoundTripJsonAsync(server,
+            "{\"contractVersion\":\"1.0\",\"method\":\"GetPlayback\",\"playbackId\":\"x\",\"callerPluginId\":\"t\"}");
+        var resp = JsonSerializer.Deserialize<GetPlaybackResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.True(resp.Ok);
+        Assert.Equal("finished", resp.State);
+    }
+
+    // Pin for Ur MCP: wait_for_macro detects a pre-0.9 Ur Task (no GetPlayback) by this exact
+    // unknown-method detail. Do not reword it without coordinating the Ur MCP side.
+    [Fact]
+    public async Task UnknownMethod_RefusedWithThePinnedDetail()
+    {
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(new FakeInvoker()),
+            "{\"contractVersion\":\"1.0\",\"method\":\"NoSuchMethod\",\"callerPluginId\":\"t\"}");
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.False(resp.Ok);
+        Assert.Equal("refused", resp.Reason);
+        Assert.Equal("Unknown method 'NoSuchMethod'.", resp.Detail);
     }
 }
