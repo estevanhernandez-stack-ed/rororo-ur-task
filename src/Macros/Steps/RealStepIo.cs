@@ -29,6 +29,12 @@ internal sealed class RealStepIo : IStepIo
         return MacroPlayer.SendMacroEvent(e with { X = sx, Y = sy });
     }
 
+    public bool ReleaseButton(int button)
+    {
+        var (x, y) = MacroPlayer.GetCurrentCursorPos();
+        return MacroPlayer.SendMacroEvent(new MacroEvent(0, MacroEventKind.MouseUp, 0, x, y, button, 0));
+    }
+
     public bool MoveRelative(int dx, int dy) => MacroPlayer.SendMouseRelative(dx, dy);
 
     public (int X, int Y)? CursorClient()
