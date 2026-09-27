@@ -14,4 +14,7 @@ internal interface IMacroRunInvoker
 
     /// <summary>Cancel a playback by id, or all active playbacks when the id is null.</summary>
     StopMacroResponse StopMacro(StopMacroRequest request);
+
+    /// <summary>How a playback is going or how it ended (kept 10 minutes after it ends).</summary>
+    GetPlaybackResponse GetPlayback(GetPlaybackRequest request);
 }

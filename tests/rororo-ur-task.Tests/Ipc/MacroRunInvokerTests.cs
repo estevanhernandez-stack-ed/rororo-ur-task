@@ -232,4 +232,90 @@ public class MacroRunInvokerTests
         Assert.True(stop.Ok);
         Assert.Equal(0, stop.Stopped);
     }
+
+    private static MacroRunInvoker BuildWithResult(Macro m, AccountRegistry.AccountInfo alt,
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult)
+        => new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: playWithResult);
+
+    private static async Task WaitUntilAsync(Func<bool> cond)
+    {
+        for (int i = 0; i < 200 && !cond(); i++) await Task.Delay(10);
+        Assert.True(cond());
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_a_check_failure_and_repeat_stops_there()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var failed = new SequenceResult(new[]
+        {
+            new AltOutcome(alt, PlaybackOutcome.Aborted, "alt-123: step 2 'Tile' expected green #8BE03A, saw grey #969696 (distance 90) after 3.4 s at 100%.", 1),
+        }, 0, 1, 0, TimeSpan.FromSeconds(4));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => { passes++; return Task.FromResult<SequenceResult?>(failed); });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp"));
+        Assert.Equal(("failed", "check-failed", 2), (status.State, status.Reason, status.StepIndex)); // AltOutcome index 1 → wire step 2
+        Assert.StartsWith("alt-123: step 2 'Tile'", status.Detail);
+        Assert.Equal(1, passes);
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_finished_for_a_clean_pass()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        var ok = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.FromSeconds(1));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => Task.FromResult<SequenceResult?>(ok));
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("finished", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_stopped_after_StopMacro()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        var inv = BuildWithResult(m, alt, async (_, _, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return null; });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Assert.Equal("running", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+        inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-mcp"));
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+    }
+
+    [Fact]
+    public async Task A_refused_alt_does_not_end_a_repeat()
+    {
+        // A refusal or foreground shift with no step index is not a failed check. Repeat keeps
+        // looping exactly as in 0.8 until StopMacro, and the playback then reads "stopped".
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var refused = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Refused, "Foreground window is user 9.") }, 0, 1, 0, TimeSpan.Zero);
+        var inv = BuildWithResult(m, alt, async (_, _, _, ct) =>
+        {
+            Interlocked.Increment(ref passes);
+            await Task.Delay(5, ct);
+            return refused;
+        });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) >= 3);
+        inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-mcp"));
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+    }
 }
