@@ -16,11 +16,12 @@
 
 - Build `rororo-ur-task.csproj`, never the `.sln` (it drags in the host repo and fails while RoRoRo runs).
 - Fast test command, used by every task: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
-- Schema: `Macro.CurrentSchemaVersion` becomes `4`. A macro without `steps` plays through the existing event path, byte-for-byte unchanged in behaviour.
+- **Test gate is "no new failures".** The baseline has 2 environmental `HotkeyServiceTests` failures (Win32 error 1409, hotkey already registered: a live Ur Task holds Ctrl+Shift+R). Wherever a step below says "all pass", read it as "all pass except those 2, and nothing new fails".
+- Schema: `Macro.CurrentSchemaVersion` becomes `4`. v3 playback is unchanged: a macro without `steps` plays through the existing event path exactly as before. The only v3-visible change is the size-refusal wording (spec §5), in Task 7.
 - `events` is never dropped from a v4 file. It is the original recording.
 - Bridge contract: add fields and methods only. Keep every existing reply field (`ok`, `playbackId`, `queued`, `reason`, `detail`, `stopped`, `macros[].id/name`). Keep accepting contract version `"1.0"`. `RunMacro` still returns when playback starts. The unknown-method answer (`reason: "refused"`, `detail: "Unknown method '<name>'."`) must not change: Ur MCP detects a pre-0.9 Ur Task by that detail. `GetPlayback`'s `stepIndex` is 1-based on the wire; the in-process `PlaybackResult.StepIndex` stays 0-based.
 - Adjustments live at `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\adjustments.json`, never inside `macros\` (Ur Task and Ur OCR read every `.json` there as a macro).
-- Defaults, verbatim from the spec: check box 5x5, at most 9x9; tolerance 15 (Euclidean RGB); wait ceiling = the step's delay plus 3 s; nearby search radius about 24 px, scaled like the point; same-spot threshold 4 px; jump and wiggle about 0.15 s; finished playbacks kept 10 minutes.
+- Defaults, verbatim from the spec: check box 5x5, at most 9x9; tolerance 15 (Euclidean RGB); wait ceiling = the step's delay plus 3 s; nearby search radius about 24 px, scaled like the point; same-spot threshold 8 px (spec amended from 4 px: the real "Mining Z8 Egg" recording has a click whose down and up are 6 px apart); jump and wiggle about 0.15 s; finished playbacks kept 10 minutes.
 - Version: `rororo-ur-task.csproj` `<Version>` and `manifest.json` `"version"` must agree (a test enforces it). Target `0.9.0`.
 - Commits: conventional commits. Run `powershell -ExecutionPolicy Bypass -File .claude/hooks/install.ps1` once per clone so the secret scan and local-path guard run.
 - Copy: sentences, sentence case, no emoji. Failure text names the account, step, label, expected and seen colour, distance, wait, and display scale.
@@ -33,10 +34,11 @@
 4. **`GetPlayback` reply:** `reason` is a short code (`check-failed`, `refused`, `aborted`, `error`) and `detail` is the full sentence. The Ur MCP session was told both would be sentences; tell it this when the task ships.
 5. **First match waits until the candidates ahead of a match are settled**, rather than giving the wait to the first candidate only. A candidate is settled when it shows its expected or its other colour. So a locked #8 (grey) lets #7 be pressed on the first poll, while a Teleport window still sliding in (neither colour yet) is waited for, up to the step's delay plus 3 s. This is the live 2026-09-27 failure the spec records, and the plain "first candidate only" rule would have pressed #7 before #8 had drawn.
 6. **The overlay's file lock is plan 2.** It belongs with the overlay that takes it.
+7. **A key is two steps, a down and an up, not one step with a held duration.** The spec's `Key` holds "how long it is held"; here the held time is the up step's `delayMs`, measured from the down. Separate records carry the real held time and still play overlapping holds (the egg recording holds A, then W, then A again), and Tasks 6 and 10 consume them as-is. Plan 2's overlay reads a key's held time from its up step's delay.
 
 ## Review Focus
 
-1. **Hand-edited or agent-written v4 JSON**: `kind` not first, an unknown `kind`, a missing field. Expect: the file is listed as a load failure with a reason, nothing crashes, other macros load. Test in Task 2.
+1. **Hand-edited or agent-written v4 JSON**: `kind` not first, an unknown `kind`, a missing field. Expect: nothing crashes and other macros load. An unknown `kind` or a missing `expect` makes the file a listed load failure with a reason. A missing check `box` or point `id` is refused by `StepValidator` with a sentence before any input. Tests in Task 2.
 2. **A check box that falls partly outside the window**, including nearby-search offsets that cross the edge. Expect: never sample pixels outside the client area; a box outside refuses with "outside the window"; search offsets that cross the edge are skipped. Tests in Tasks 4 and 6.
 3. **A first-match step with no candidates, or a candidate without a check.** Expect: playback refuses before the first input with a sentence naming the step. Tests in Tasks 2 and 6.
 4. **`repeat: true` on a macro whose check fails.** Expect: the repeat loop stops at the failure instead of retrying forever, and `GetPlayback` reports `failed` with the sentence. Test in Task 9.
@@ -63,9 +65,9 @@ Create:
 | `src/PluginHost/IDisplayScale.cs`, `DisplayScale.cs` | Display scale per window |
 | `src/Ipc/PlaybackRegistry.cs` | Playback states with 10-minute retention |
 | `tests/rororo-ur-task.Tests/Steps/*.cs` | Tests per unit |
-| `tests/rororo-ur-task.Tests/Fixtures/mine-zone-8.json`, `mining-z8-egg.json` | Real recordings, anonymised |
+| `tests/fixtures/mine-zone-8.json`, `mining-z8-egg.json` | Real recordings, anonymised (repo convention: `tests/fixtures`, linked into the test output) |
 
-Modify: `src/Macros/Macro.cs`, `src/Macros/MacroV1Migrator.cs`, `src/Macros/MacroStore.cs`, `src/Macros/MacroBundle.cs`, `src/Macros/MacroPlayer.cs`, `src/Macros/SequenceTypes.cs`, `src/Macros/SequencePlayer.cs`, `src/Macros/AutoHotkeyExporter.cs`, `src/PluginRuntime.cs`, `src/Ipc/BridgeContract.cs`, `src/Ipc/IMacroRunInvoker.cs`, `src/Ipc/MacroRunInvoker.cs`, `src/Ipc/MacroRunnerServer.cs`, test fakes of `IMacroRunInvoker`, `rororo-ur-task.csproj`, `manifest.json`, `CHANGELOG.md`, `tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj`.
+Modify: `src/Macros/Macro.cs`, `src/Macros/MacroV1Migrator.cs`, `src/Macros/MacroStore.cs`, `src/Macros/MacroBundle.cs`, `src/Macros/MacroPlayer.cs`, `src/Macros/SequenceTypes.cs`, `src/Macros/SequencePlayer.cs`, `src/Macros/AutoHotkeyExporter.cs`, `src/PluginRuntime.cs`, `src/Ipc/BridgeContract.cs`, `src/Ipc/IMacroRunInvoker.cs`, `src/Ipc/MacroRunInvoker.cs`, `src/Ipc/MacroRunnerServer.cs`, test fakes of `IMacroRunInvoker`, `tests/rororo-ur-task.Tests/MacroV1MigrationTests.cs` and `MacroV3MigrationTests.cs` (schema-3 asserts), `rororo-ur-task.csproj`, `manifest.json`, `CHANGELOG.md`, `docs/BACKLOG.md`, `docs/display-scale-findings.md`, `tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj`.
 
 ---
 
@@ -73,7 +75,11 @@ Modify: `src/Macros/Macro.cs`, `src/Macros/MacroV1Migrator.cs`, `src/Macros/Macr
 
 **Files:** none changed.
 
-- [ ] **Step 1: Branch from main and bring the spec and plan along**
+> **Done, 2026-09-27.** Branch `feat/point-clicks` exists and the docs merge is commit `d75cbdf` ("merge: event-authoring docs, spec and plan for point clicks"). Do not re-run Step 1; `git checkout -b` would fail on the existing branch. On a fresh clone, `git checkout feat/point-clicks` and run Step 2.
+>
+> **Baseline:** the suite has 2 environmental `HotkeyServiceTests` failures (Win32 error 1409: a live Ur Task already holds Ctrl+Shift+R). They are not caused by this work. The gate for every later task is "no new failures", not a fully green run.
+
+- [x] **Step 1: Branch from main and bring the spec and plan along** (done: `d75cbdf`)
 
 Run from the repo root (check with `git rev-parse --show-toplevel`; stuck working directories have bitten this estate before):
 
@@ -85,7 +91,7 @@ git merge --no-ff docs/event-authoring-sept-2026 -m "merge: event-authoring docs
 
 If the docs branch only exists on the remote (a fresh PC), merge `origin/docs/event-authoring-sept-2026` instead. Expected: a clean merge (the docs branch touches only `docs/`, `tools/`, `.gitignore`).
 
-- [ ] **Step 2: Install the guard hooks and run the baseline**
+- [x] **Step 2: Install the guard hooks and run the baseline** (done; baseline has the 2 known `HotkeyServiceTests` failures above)
 
 ```bash
 powershell -ExecutionPolicy Bypass -File .claude/hooks/install.ps1
@@ -93,7 +99,7 @@ dotnet build rororo-ur-task.csproj
 dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true
 ```
 
-Expected: build succeeds, every test passes. Record the pass count; every later task must keep it and add to it.
+Expected: build succeeds, and every test passes except the 2 environmental `HotkeyServiceTests` failures. Record the pass count. Every later task must keep it, add to it, and introduce no new failures.
 
 ---
 
@@ -104,7 +110,7 @@ Expected: build succeeds, every test passes. Record the pass count; every later 
 - Test: `tests/rororo-ur-task.Tests/Steps/ColorCheckTests.cs`
 
 **Interfaces:**
-- Produces: `Rgb(int R, int G, int B)` with `DistanceTo(Rgb)` and `Hex`; `CheckBox(int OffsetX = -2, int OffsetY = -2, int W = 5, int H = 5)` with `IsValid`, `MaxSide = 9`; `ColorCheck(CheckBox Box, Rgb Expect, Rgb? Other = null, int Tolerance = 15)`; `ColorVerdict(bool Matched, double Distance, double? DistanceToOther)`; `ColorMatcher.Evaluate(Rgb seen, ColorCheck check)`; `ColorNamer.Describe(Rgb)` returning e.g. `"green #8BE03A"`.
+- Produces: `Rgb(int R, int G, int B)` with `DistanceTo(Rgb)` and `Hex`; `CheckBox(int OffsetX = -2, int OffsetY = -2, int W = 5, int H = 5)` with `IsValid`, `MaxSide = 9`; `ColorCheck(CheckBox Box, Rgb Expect, Rgb? Other = null, int Tolerance = 15)`; `ColorVerdict(bool Matched, double Distance, double? DistanceToOther)`; `ColorMatcher.Evaluate(Rgb seen, ColorCheck check)`; `ColorMatcher.ShowsOther(Rgb seen, ColorCheck check)` (the one "shows its other state" rule, used by both check paths in Task 6); `ColorNamer.Describe(Rgb)` returning e.g. `"green #8BE03A"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -155,6 +161,16 @@ public class ColorCheckTests
         var v = ColorMatcher.Evaluate(new Rgb(126, 130, 126), check);
         Assert.False(v.Matched);
         Assert.NotNull(v.DistanceToOther);
+    }
+
+    [Fact]
+    public void Shows_other_only_when_within_tolerance_of_other_and_nearer_it()
+    {
+        var check = new ColorCheck(new CheckBox(), Green, Other: Grey);
+        Assert.True(ColorMatcher.ShowsOther(new Rgb(130, 128, 126), check));   // grey, 2.8 from Other
+        Assert.False(ColorMatcher.ShowsOther(Green, check));                   // the expected state
+        Assert.False(ColorMatcher.ShowsOther(new Rgb(20, 30, 90), check));     // neither state yet
+        Assert.False(ColorMatcher.ShowsOther(Grey, new ColorCheck(new CheckBox(), Green))); // no Other set
     }
 
     [Theory]
@@ -222,8 +238,16 @@ public sealed record CheckBox(int OffsetX = -2, int OffsetY = -2, int W = 5, int
 /// What a point expects to see. <see cref="Other"/> is the colour of the other state
 /// (the grey of a locked tile, the red of "Off"): greys drift 20–40 under darkening and
 /// hover, so a fixed tolerance alone cannot tell green from grey.
+/// <para>Hand- or agent-written JSON: <c>expect</c> is required, because <see cref="Rgb"/> is a value
+/// type and a missing one would silently read as black. A file without it fails to load, with the
+/// serializer's reason. A missing <c>box</c> reads as null and <c>StepValidator</c> refuses it
+/// with a sentence before playback.</para>
 /// </summary>
-public sealed record ColorCheck(CheckBox Box, Rgb Expect, Rgb? Other = null, int Tolerance = ColorCheck.DefaultTolerance)
+public sealed record ColorCheck(
+    CheckBox Box,
+    [property: JsonRequired] Rgb Expect,
+    Rgb? Other = null,
+    int Tolerance = ColorCheck.DefaultTolerance)
 {
     /// <summary>Unproven default (Ur OCR only ever shipped single-pixel checks). Checks log
     /// their measured distance so this can be tuned from real runs.</summary>
@@ -242,6 +266,14 @@ public static class ColorMatcher
         var matched = d <= check.Tolerance && (dOther is null || d < dOther.Value);
         return new ColorVerdict(matched, d, dOther);
     }
+
+    /// <summary>True when the box shows the check's OTHER state: within tolerance of Other and
+    /// nearer it than Expect. The single definition of "settled without matching" — first match
+    /// uses it to decide whether a candidate ahead of a match can be skipped.</summary>
+    public static bool ShowsOther(Rgb seen, ColorCheck check)
+        => check.Other is { } o
+           && seen.DistanceTo(o) <= check.Tolerance
+           && seen.DistanceTo(o) < seen.DistanceTo(check.Expect);
 }
 
 /// <summary>Plain-language colour names for failure reports, with the hex for precision.</summary>
@@ -299,11 +331,12 @@ git commit -m "feat(steps): colour checks with a two-state rule and readable col
 **Files:**
 - Create: `src/Macros/Steps/MacroStep.cs`
 - Modify: `src/Macros/Macro.cs`, `src/Macros/MacroV1Migrator.cs`, `src/Macros/MacroStore.cs`, `src/Macros/MacroBundle.cs`
+- Modify (existing tests pinned to schema 3): `tests/rororo-ur-task.Tests/MacroV1MigrationTests.cs` (lines 16 and 44), `tests/rororo-ur-task.Tests/MacroV3MigrationTests.cs` (line 31)
 - Test: `tests/rororo-ur-task.Tests/Steps/MacroV4FileTests.cs`
 
 **Interfaces:**
 - Consumes: `ColorCheck`, `CheckBox`, `Rgb` (Task 1).
-- Produces: `abstract record MacroStep(int DelayMs)`; `KeyStep(int DelayMs, int VirtualKeyCode, bool Down)`; `PointStep(int DelayMs, string Id, string? Label, int X, int Y, int Button = 1, ColorCheck? Check = null, bool CheckEnabled = false)`; `DragStep(int DelayMs, int Button, int StartX, int StartY, int Dx, int Dy, int DurationMs)`; `WheelStep(int DelayMs, int X, int Y, int Delta)`; `PointerMoveStep(int DelayMs, int Dx, int Dy, int DurationMs)`; `WaitStep(int DelayMs)`; `enum NoMatchAction { Skip, StopAndReport }`; `FirstMatchStep(int DelayMs, string Id, string? Label, IReadOnlyList<PointStep> Candidates, NoMatchAction OnNoMatch = NoMatchAction.StopAndReport)`; `RawStep(int DelayMs, IReadOnlyList<MacroEvent> Events, string Note)`; `StepValidator.Validate(IReadOnlyList<MacroStep>) : string?`; `StepTiming` constants `JumpWiggleMs = 150`, `PressHoldMs = 80`, `PollMs = 100`, `CheckGraceMs = 3000`, and `StepTiming.EstimateMs(MacroStep)`; `Macro.RecordedDisplayScale` (`int?`), `Macro.Steps` (`IReadOnlyList<MacroStep>?`), `Macro.HasSteps`, `Macro.CurrentSchemaVersion = 4`.
+- Produces: `abstract record MacroStep(int DelayMs)`; `KeyStep(int DelayMs, int VirtualKeyCode, bool Down)`; `PointStep(int DelayMs, string Id, string? Label, int X, int Y, int Button = 1, ColorCheck? Check = null, bool CheckEnabled = false)`; `DragStep(int DelayMs, int Button, int StartX, int StartY, int Dx, int Dy, int DurationMs)`; `WheelStep(int DelayMs, int X, int Y, int Delta)`; `PointerMoveStep(int DelayMs, int Dx, int Dy, int DurationMs)`; `WaitStep(int DelayMs)`; `enum NoMatchAction { Skip, StopAndReport }`, stored as `"skip"` / `"stopAndReport"` per the spec; `FirstMatchStep(int DelayMs, string Id, string? Label, IReadOnlyList<PointStep> Candidates, NoMatchAction OnNoMatch = NoMatchAction.StopAndReport)`; `RawStep(int DelayMs, IReadOnlyList<MacroEvent> Events, string Note)`; `StepValidator.Validate(IReadOnlyList<MacroStep>) : string?`; `StepTiming` constants `JumpWiggleMs = 150`, `PressHoldMs = 80`, `PollMs = 100`, `CheckGraceMs = 3000`, and `StepTiming.EstimateMs(MacroStep)`; `Macro.RecordedDisplayScale` (`int?`), `Macro.Steps` (`IReadOnlyList<MacroStep>?`), `Macro.HasSteps`, `Macro.CurrentSchemaVersion = 4`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -381,6 +414,36 @@ public class MacroV4FileTests : IDisposable
         Assert.Contains("\"events\"", json);
         Assert.Contains("\"steps\"", json);
         Assert.Contains("\"kind\": \"point\"", json);
+        Assert.Contains("\"onNoMatch\": \"skip\"", json); // spec casing, not the C# member name
+    }
+
+    [Fact]
+    public void A_check_without_a_box_loads_and_is_refused_with_a_sentence()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "point", "delayMs": 0, "id": "p1", "x": 10, "y": 20, "checkEnabled": true,
+                       "check": { "expect": { "r": 1, "g": 2, "b": 3 } } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal("Step 1 'p1' has a check with no box.", StepValidator.Validate(m.Steps!));
+    }
+
+    [Fact]
+    public void A_check_without_an_expected_colour_is_a_listed_failure()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "point", "delayMs": 0, "id": "p1", "x": 10, "y": 20,
+                       "check": { "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 } } } ] }
+        """);
+        var result = new MacroStore(_dir).LoadAll();
+        Assert.Empty(result.Macros);
+        Assert.Contains(result.Failures, f => f.Path.EndsWith(id + ".json") && f.Reason.Contains("expect"));
     }
 
     [Fact]
@@ -489,6 +552,36 @@ public class MacroV4FileTests : IDisposable
         });
         Assert.Equal("Step 1 'Big' has a check box larger than 9x9.", err);
     }
+
+    [Fact]
+    public void Validator_refuses_an_empty_box()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new PointStep(0, "p1", "Flat", 1, 1, Check: new ColorCheck(new CheckBox(0, 0, 0, 5), new Rgb(0, 0, 0)), CheckEnabled: true),
+        });
+        Assert.Equal("Step 1 'Flat' has an empty check box.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_a_point_with_no_id()
+    {
+        Assert.Equal("Step 1 has no point id.", StepValidator.Validate(new MacroStep[] { new PointStep(0, null!, null, 1, 1) }));
+        Assert.Equal("Step 1 'Best mine': a candidate has no point id.", StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, " ", "#8", 1, 1, Check: new ColorCheck(new CheckBox(), new Rgb(0, 0, 0))) }),
+        }));
+    }
+
+    [Fact]
+    public void Validator_refuses_a_candidate_check_with_no_box()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "f1a", "#8", 1, 1, Check: new ColorCheck(null!, new Rgb(0, 0, 0))) }),
+        });
+        Assert.Equal("Step 1 'Best mine': candidate '#8' has a check with no box.", err);
+    }
 }
 ```
 
@@ -536,7 +629,13 @@ public sealed record PointerMoveStep(int DelayMs, int Dx, int Dy, int DurationMs
 
 public sealed record WaitStep(int DelayMs) : MacroStep(DelayMs);
 
-public enum NoMatchAction { Skip, StopAndReport }
+/// <summary>Stored as the spec spells it ("skip", "stopAndReport"). The store's global
+/// JsonStringEnumConverter honours these member names.</summary>
+public enum NoMatchAction
+{
+    [JsonStringEnumMemberName("skip")] Skip,
+    [JsonStringEnumMemberName("stopAndReport")] StopAndReport,
+}
 
 /// <summary>Candidates are checked in order; the first that matches is pressed.</summary>
 public sealed record FirstMatchStep(
@@ -569,7 +668,9 @@ public static class StepTiming
 
 public static class StepValidator
 {
-    /// <summary>Null when the list can play; otherwise one sentence naming the first problem.</summary>
+    /// <summary>Null when the list can play; otherwise one sentence naming the first problem.
+    /// Runs before any input, and null-guards what hand- or agent-written JSON can leave out
+    /// (point id, check box), so a bad file ends in a sentence, never an exception.</summary>
     public static string? Validate(IReadOnlyList<MacroStep> steps)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -580,21 +681,25 @@ public static class StepValidator
             {
                 case PointStep p:
                 {
+                    if (string.IsNullOrWhiteSpace(p.Id)) return $"Step {n} has no point id.";
                     if (!ids.Add(p.Id)) return $"Step {n} reuses point id '{p.Id}'.";
-                    var err = CheckPoint(p, $"Step {n} '{p.Label ?? p.Id}'");
-                    if (err is not null) return err;
+                    var name = $"Step {n} '{p.Label ?? p.Id}'";
+                    if (p.CheckEnabled && p.Check is null) return $"{name} has its check on but no colour sample.";
+                    if (p.Check is { } pc && BoxProblem(pc, name) is { } err) return err;
                     break;
                 }
                 case FirstMatchStep f:
                 {
+                    if (string.IsNullOrWhiteSpace(f.Id)) return $"Step {n} has no point id.";
                     var name = $"Step {n} '{f.Label ?? f.Id}'";
                     if (!ids.Add(f.Id)) return $"Step {n} reuses point id '{f.Id}'.";
                     if (f.Candidates is null || f.Candidates.Count == 0) return $"{name} is a first match with no candidates.";
                     foreach (var c in f.Candidates)
                     {
+                        if (string.IsNullOrWhiteSpace(c.Id)) return $"{name}: a candidate has no point id.";
                         if (!ids.Add(c.Id)) return $"{name} reuses point id '{c.Id}'.";
                         if (c.Check is null) return $"{name}: candidate '{c.Label ?? c.Id}' has no colour to check.";
-                        if (!c.Check.Box.IsValid) return $"{name}: candidate '{c.Label ?? c.Id}' has a check box larger than 9x9.";
+                        if (BoxProblem(c.Check, $"{name}: candidate '{c.Label ?? c.Id}'") is { } err) return err;
                     }
                     break;
                 }
@@ -603,10 +708,13 @@ public static class StepValidator
         return null;
     }
 
-    private static string? CheckPoint(PointStep p, string name)
+    /// <summary>A missing box (null from JSON), an empty one, and an oversized one each get
+    /// their own sentence.</summary>
+    private static string? BoxProblem(ColorCheck check, string who)
     {
-        if (p.CheckEnabled && p.Check is null) return $"{name} has its check on but no colour sample.";
-        if (p.Check is { } c && !c.Box.IsValid) return $"{name} has a check box larger than 9x9.";
+        if (check.Box is null) return $"{who} has a check with no box.";
+        if (check.Box.W < 1 || check.Box.H < 1) return $"{who} has an empty check box.";
+        if (check.Box.W > CheckBox.MaxSide || check.Box.H > CheckBox.MaxSide) return $"{who} has a check box larger than 9x9.";
         return null;
     }
 }
@@ -664,12 +772,20 @@ Update the class doc comment's "returns a v3 Macro" to "returns a current-schema
 - [ ] **Step 6: Run to verify it passes, then the full suite**
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
-Expected: all pass, including every pre-existing test. If a pre-existing test asserts `SchemaVersion == 3`, change it to `Macro.CurrentSchemaVersion`; do not change any behaviour assertion.
+Before running, update the three existing asserts that pin schema 3. They go red the moment `CurrentSchemaVersion` becomes 4:
+
+- `tests/rororo-ur-task.Tests/MacroV1MigrationTests.cs` line 16: `Assert.Equal(3, macro.SchemaVersion);` becomes `Assert.Equal(Macro.CurrentSchemaVersion, macro.SchemaVersion);`
+- same file, line 44: `Assert.Equal(3, result.SchemaVersion);` becomes `Assert.Equal(Macro.CurrentSchemaVersion, result.SchemaVersion);`
+- `tests/rororo-ur-task.Tests/MacroV3MigrationTests.cs` line 31: `Assert.Equal(3, macro.SchemaVersion);` becomes `Assert.Equal(Macro.CurrentSchemaVersion, macro.SchemaVersion);`
+
+Change nothing else in those files, and no behaviour assertion.
+
+Expected: the new tests and every pre-existing test pass, except the 2 known environmental `HotkeyServiceTests` failures (Win32 1409, a live Ur Task holds Ctrl+Shift+R). The gate is no new failures.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/Macros/Steps/MacroStep.cs src/Macros/Macro.cs src/Macros/MacroV1Migrator.cs src/Macros/MacroStore.cs src/Macros/MacroBundle.cs tests/rororo-ur-task.Tests/Steps/MacroV4FileTests.cs
+git add src/Macros/Steps/MacroStep.cs src/Macros/Macro.cs src/Macros/MacroV1Migrator.cs src/Macros/MacroStore.cs src/Macros/MacroBundle.cs tests/rororo-ur-task.Tests/Steps/MacroV4FileTests.cs tests/rororo-ur-task.Tests/MacroV1MigrationTests.cs tests/rororo-ur-task.Tests/MacroV3MigrationTests.cs
 git commit -m "feat(macros): schema v4 with point steps beside the kept recording"
 ```
 
@@ -679,13 +795,13 @@ git commit -m "feat(macros): schema v4 with point steps beside the kept recordin
 
 **Files:**
 - Create: `src/Macros/Steps/StepConverter.cs`
-- Create: `tests/rororo-ur-task.Tests/Fixtures/mine-zone-8.json`, `tests/rororo-ur-task.Tests/Fixtures/mining-z8-egg.json`
+- Create: `tests/fixtures/mine-zone-8.json`, `tests/fixtures/mining-z8-egg.json` (the repo's fixture folder, beside `macro-v1.json`)
 - Modify: `tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj`
 - Test: `tests/rororo-ur-task.Tests/Steps/StepConverterTests.cs`
 
 **Interfaces:**
 - Consumes: step records (Task 2), `MacroEvent`.
-- Produces: `StepConverter.Convert(IReadOnlyList<MacroEvent> events) : IReadOnlyList<MacroStep>`; constants `SameSpotPx = 4`, `TravelGapMs = 150`, `CameraDragMargin = 1.5`.
+- Produces: `StepConverter.Convert(IReadOnlyList<MacroEvent> events) : IReadOnlyList<MacroStep>`; constants `SameSpotPx = 8`, `TravelGapMs = 150`, `CameraDragMargin = 1.5`.
 
 - [ ] **Step 1: Add the fixtures, anonymised**
 
@@ -693,7 +809,7 @@ Copy the two real recordings from `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\macros\` 
 
 ```powershell
 $src = "$env:LOCALAPPDATA\626Labs\RoRoRoUrTask\macros"
-$dst = "tests\rororo-ur-task.Tests\Fixtures"
+$dst = "tests\fixtures"
 New-Item -ItemType Directory -Force $dst | Out-Null
 foreach ($pair in @(@('82791a3c-ac2c-4eb2-bdc8-6e70fc2ed810','mine-zone-8'), @('b7bd7845-9cfb-4d60-81cd-0b6b6b46d83e','mining-z8-egg'))) {
   $j = Get-Content "$src\$($pair[0]).json" -Raw | ConvertFrom-Json
@@ -705,10 +821,17 @@ foreach ($pair in @(@('82791a3c-ac2c-4eb2-bdc8-6e70fc2ed810','mine-zone-8'), @('
 
 If the macros are missing on this PC, stop and ask Este to copy them over. Do not invent fixtures: the travel numbers below were measured on the real files.
 
-Add to the test csproj, inside a new `<ItemGroup>`:
+In the test csproj, add these two items to the existing `<ItemGroup>` that already links `..\fixtures\macro-v1.json`, following its pattern:
 
 ```xml
-    <None Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\mine-zone-8.json">
+      <Link>fixtures\mine-zone-8.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\fixtures\mining-z8-egg.json">
+      <Link>fixtures\mining-z8-egg.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
 ```
 
 - [ ] **Step 2: Write the failing tests**
@@ -724,7 +847,7 @@ namespace Labs626.UrTask.Tests.Steps;
 public class StepConverterTests
 {
     private static Macro Fixture(string name)
-        => MacroV1Migrator.LoadAndMigrate(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", name)));
+        => MacroV1Migrator.LoadAndMigrate(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", name)));
 
     private static MacroEvent Ev(long t, MacroEventKind k, int x = 0, int y = 0, int vk = 0, int btn = 0, int wheel = 0)
         => new(t, k, vk, x, y, btn, wheel);
@@ -754,10 +877,14 @@ public class StepConverterTests
     public void Egg_macro_collapses_auto_repeat_into_single_key_downs()
     {
         var steps = StepConverter.Convert(Fixture("mining-z8-egg.json").Events);
+        // 8 clicks. One moves 6 px between down (578,420) and up (581,426). At the old 4 px
+        // threshold it became a drag, which is why the threshold is 8 px.
         Assert.Equal(8, steps.OfType<PointStep>().Count());
+        Assert.Empty(steps.OfType<DragStep>());
+        Assert.Contains(steps.OfType<PointStep>(), p => (p.X, p.Y) == (578, 420));
         Assert.IsType<PointStep>(steps[0]);
         Assert.Equal(new KeyStep(steps[1].DelayMs, 0x41, true), steps[1]); // A pressed right after the wake-up click
-        Assert.Equal(1, steps.OfType<KeyStep>().Count(k => k.VirtualKeyCode == 0x57 && k.Down)); // W: ~240 repeats, one press
+        Assert.Equal(1, steps.OfType<KeyStep>().Count(k => k.VirtualKeyCode == 0x57 && k.Down)); // W: 142 recorded downs, one press
         Assert.Equal(1, steps.OfType<KeyStep>().Count(k => k.VirtualKeyCode == 0x45 && k.Down)); // E
 
         // The property that matters, whatever the fixture's key-ups look like:
@@ -773,15 +900,42 @@ public class StepConverterTests
     [Fact]
     public void Egg_macro_drops_the_stop_hotkey_tail()
     {
+        // The recording ends LCtrl down, LShift down, LShift up, LShift down (the stop hotkey).
+        // Every modifier down with no later up goes, so Ctrl can never be left held. The
+        // Shift down/up pair is a complete press and stays.
         var steps = StepConverter.Convert(Fixture("mining-z8-egg.json").Events);
-        var last = steps[^1];
-        Assert.False(last is KeyStep { Down: true } k && k.VirtualKeyCode is 0x10 or 0x11 or 0xA0 or 0xA1 or 0xA2 or 0xA3);
+        var keys = steps.OfType<KeyStep>().ToList();
+        Assert.DoesNotContain(keys, k => k.VirtualKeyCode == 0xA2); // LCtrl, the key the old trim left held
+        for (int i = 0; i < keys.Count; i++)
+        {
+            var k = keys[i];
+            if (k.Down && k.VirtualKeyCode is 0x10 or 0x11 or 0x12 or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5)
+                Assert.Contains(keys.Skip(i + 1), u => !u.Down && u.VirtualKeyCode == k.VirtualKeyCode);
+        }
     }
 
     [Fact]
-    public void Down_and_up_within_four_pixels_is_a_point()
+    public void Mine_zone_8_drops_its_stop_hotkey_ctrl()
+        => Assert.DoesNotContain(StepConverter.Convert(Fixture("mine-zone-8.json").Events).OfType<KeyStep>(), k => k.VirtualKeyCode == 0xA2);
+
+    [Fact]
+    public void A_key_keeps_its_real_held_time_while_the_mouse_moves()
     {
-        var steps = StepConverter.Convert(new[] { Ev(100, MacroEventKind.MouseDown, 50, 50, btn: 1), Ev(180, MacroEventKind.MouseUp, 53, 52, btn: 1) });
+        // W held 1100 ms while the hand moves the mouse for 900 ms of it. Travel is dropped only
+        // before clicks; a key's up delay is its real held time.
+        var evs = new List<MacroEvent> { Ev(0, MacroEventKind.KeyDown, vk: 0x57) };
+        for (int i = 0; i < 19; i++) evs.Add(Ev(100 + i * 50, MacroEventKind.MouseMove, i * 10, 0));
+        evs.Add(Ev(1100, MacroEventKind.KeyUp, vk: 0x57));
+        var up = Assert.IsType<KeyStep>(StepConverter.Convert(evs)[1]);
+        Assert.False(up.Down);
+        Assert.Equal(1100, up.DelayMs);
+    }
+
+    [Fact]
+    public void Down_and_up_within_eight_pixels_is_a_point()
+    {
+        // 7 px and 6 px of hand jitter: still one click (the real egg recording has a 6 px click).
+        var steps = StepConverter.Convert(new[] { Ev(100, MacroEventKind.MouseDown, 50, 50, btn: 1), Ev(180, MacroEventKind.MouseUp, 57, 56, btn: 1) });
         var p = Assert.IsType<PointStep>(Assert.Single(steps));
         Assert.Equal((50, 50), (p.X, p.Y));
         Assert.Equal(100, p.DelayMs);
@@ -869,7 +1023,7 @@ namespace Labs626.UrTask.Macros.Steps;
 /// </summary>
 public static class StepConverter
 {
-    public const int SameSpotPx = 4;
+    public const int SameSpotPx = 8;   // spec §2, amended from 4: the real egg recording has a 6 px click
     public const int TravelGapMs = 150;
     public const double CameraDragMargin = 1.5;
 
@@ -894,7 +1048,9 @@ public static class StepConverter
         long rawDelay = 0;
         string rawNote = "";
 
-        int Delay(long at) => (int)Math.Clamp(at - anchorMs - travelMs, 0, int.MaxValue);
+        // Travel is dropped only from the gap before a mouse press or wheel (the hand moving to
+        // the spot). Keys keep their real timing, so a key's up delay is its real held time.
+        int Delay(long at, bool dropTravel = true) => (int)Math.Clamp(at - anchorMs - (dropTravel ? travelMs : 0), 0, int.MaxValue);
         void Anchor(long at) { anchorMs = at; travelMs = 0; }
 
         for (int i = 0; i < events.Count; i++)
@@ -927,13 +1083,13 @@ public static class StepConverter
 
                 case MacroEventKind.KeyDown:
                     if (!heldKeys.Add(e.VirtualKeyCode)) break; // auto-repeat
-                    steps.Add(new KeyStep(Delay(e.TimestampMs), e.VirtualKeyCode, true));
+                    steps.Add(new KeyStep(Delay(e.TimestampMs, dropTravel: false), e.VirtualKeyCode, true));
                     Anchor(e.TimestampMs);
                     break;
 
                 case MacroEventKind.KeyUp:
                     if (!heldKeys.Remove(e.VirtualKeyCode)) break; // orphan (e.g. the record hotkey's release)
-                    steps.Add(new KeyStep(Delay(e.TimestampMs), e.VirtualKeyCode, false));
+                    steps.Add(new KeyStep(Delay(e.TimestampMs, dropTravel: false), e.VirtualKeyCode, false));
                     Anchor(e.TimestampMs);
                     break;
 
@@ -986,10 +1142,19 @@ public static class StepConverter
             steps.Add(Raw(downDelay, rest, "A mouse button was pressed and never released."));
         }
 
-        // The stop hotkey leaves Ctrl and Shift downs at the very end. The player releases held
-        // keys anyway; trimming keeps the steps honest.
-        while (steps.Count > 0 && steps[^1] is KeyStep { Down: true } k && Modifiers.Contains(k.VirtualKeyCode))
-            steps.RemoveAt(steps.Count - 1);
+        // The stop hotkey leaves modifier presses at the very end (the egg ends LCtrl down,
+        // LShift down, LShift up, LShift down). In the trailing run of modifier key steps, drop
+        // every down that has no later up, so Ctrl can never be left held. A complete down/up
+        // pair in the run is a real press and stays. Walk backwards so indices stay valid.
+        int runStart = steps.Count;
+        while (runStart > 0 && steps[runStart - 1] is KeyStep rk && Modifiers.Contains(rk.VirtualKeyCode))
+            runStart--;
+        for (int j = steps.Count - 1; j >= runStart; j--)
+        {
+            if (steps[j] is KeyStep { Down: true } d
+                && !steps.Skip(j + 1).Any(s => s is KeyStep { Down: false } u && u.VirtualKeyCode == d.VirtualKeyCode))
+                steps.RemoveAt(j);
+        }
 
         return steps;
     }
@@ -1005,12 +1170,17 @@ public static class StepConverter
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true --filter FullyQualifiedName~StepConverterTests`
-Expected: all pass. If `Mine_zone_8_keeps_still_time_and_drops_travel` misses its ranges, print the five delays and compare with the table in the spec's "Seen live" section before touching the tolerances; the travel rule is the thing under test.
+Expected: all pass. This was verified before execution by porting this exact converter to a script and running it on both real recordings:
+
+- "Mine Zone 8" gives 5 points at (472,317) (42,398) (100,172) (134,373) (302,430), delays 1509 / 478 / 4773 / 1870 / 5233 ms (sum 13 863), and no key steps: the trailing LCtrl is trimmed.
+- "Mining Z8 Egg" gives 18 steps: 8 points, 0 drags, A and W and E once each (A twice, as two separate holds). It ends with LShift down then LShift up, and has no LCtrl.
+
+If a number differs, print the steps and compare them with these values before touching a tolerance. The travel rule is the thing under test.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/Macros/Steps/StepConverter.cs tests/rororo-ur-task.Tests/Steps/StepConverterTests.cs tests/rororo-ur-task.Tests/Fixtures tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+git add src/Macros/Steps/StepConverter.cs tests/rororo-ur-task.Tests/Steps/StepConverterTests.cs tests/fixtures/mine-zone-8.json tests/fixtures/mining-z8-egg.json tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
 git commit -m "feat(steps): collapse recordings to point steps, keeping still time and dropping travel"
 ```
 
@@ -1142,6 +1312,17 @@ public class PointAdjustmentStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_file_locked_by_a_writer_reads_as_no_adjustment()
+    {
+        // The points overlay (plan 2) saves while a playback reads. A read that loses the race
+        // must play the recorded point, not throw into the step runner.
+        var s = new PointAdjustmentStore(PathIn);
+        s.Set("m1", "p1", 1, 100, new PointAdjustment(2, 2));
+        using var hold = new FileStream(PathIn, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Null(new PointAdjustmentStore(PathIn).Get("m1", "p1", 1, 100));
+    }
+
+    [Fact]
     public void Default_path_is_outside_the_macros_folder()
     {
         var adj = Path.GetDirectoryName(PointAdjustmentStore.DefaultPath())!;
@@ -1248,7 +1429,17 @@ public sealed class PointAdjustmentStore
     {
         lock (_gate)
         {
-            Refresh();
+            try
+            {
+                Refresh();
+            }
+            catch (IOException ex)
+            {
+                // A write racing this read (the overlay saves while a playback reads). Missing one
+                // run's adjustment is better than failing the playback.
+                Labs626.UrTask.Diagnostics.DiagLog.Write($"adjustments.json unreadable, playing recorded points: {ex.Message}");
+                return null;
+            }
             return _data.TryGetValue(macroId, out var pts) && pts.TryGetValue(pointId, out var accts)
                 && accts.TryGetValue(userId.ToString(), out var scales) && scales.TryGetValue(scale.ToString(), out var a)
                 ? a : null;
@@ -1460,10 +1651,12 @@ internal sealed class ScreenSampler : IScreenSampler
         IntPtr mem = CreateCompatibleDC(screen);
         IntPtr bmp = CreateCompatibleBitmap(screen, w, h);
         IntPtr old = SelectObject(mem, bmp);
+        bool selected = true;
         try
         {
             if (!BitBlt(mem, 0, 0, w, h, screen, sx, sy, SRCCOPY)) return null;
-            SelectObject(mem, old);
+            SelectObject(mem, old); // GetDIBits needs the bitmap out of any DC
+            selected = false;
             var info = new BITMAPINFO
             {
                 biSize = Marshal.SizeOf<BITMAPINFO>(), biWidth = w, biHeight = -h, // negative = top-down rows
@@ -1476,6 +1669,9 @@ internal sealed class ScreenSampler : IScreenSampler
         }
         finally
         {
+            // A bitmap still selected into a DC cannot be deleted. Without this, every failed
+            // BitBlt would leak one GDI bitmap, once per poll.
+            if (selected) SelectObject(mem, old);
             DeleteObject(bmp);
             DeleteDC(mem);
             ReleaseDC(IntPtr.Zero, screen);
@@ -1577,7 +1773,10 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
 
-    /// <summary>Stopped by a step (a failed check, a missing window). StepIndex is 0-based.</summary>
+    /// <summary>Stopped by a check: a colour that never showed, a window it could not see, or a
+    /// box outside the window. Only check failures carry a StepIndex (0-based), so GetPlayback's
+    /// failed/check-failed always means a check. Foreground loss and cancellation use
+    /// <see cref="Aborted"/> without an index.</summary>
     public static PlaybackResult AbortedAt(string reason, int stepIndex) => new(PlaybackOutcome.Aborted, reason, stepIndex);
 }
 ```
@@ -1609,6 +1808,7 @@ public class StepRunnerTests
         public bool CaptureWorks = true;
         public (int X, int Y) Cursor = (0, 0);
         public int Captures;
+        public List<(int X, int Y, int W, int H)> CaptureRects = new();
         public Action? OnDelay;
 
         public bool Send(MacroEvent e) { Sent.Add(e with { TimestampMs = NowMs }); if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y); return true; }
@@ -1619,6 +1819,7 @@ public class StepRunnerTests
         public PixelBlock? Capture(int x, int y, int w, int h)
         {
             Captures++;
+            CaptureRects.Add((x, y, w, h));
             if (!CaptureWorks) return null;
             var px = new uint[w * h];
             for (int r = 0; r < h; r++)
@@ -1762,7 +1963,50 @@ public class StepRunnerTests
         var stop = await StepRunner.RunAsync(new MacroStep[] { new FirstMatchStep(0, "f1", "Best mine", cands) }, Ctx(), io2, default);
         Assert.Equal(PlaybackOutcome.Aborted, stop.Outcome);
         Assert.StartsWith("CElCPapa: step 1 'Best mine' found no candidate that matched after", stop.Reason);
-        Assert.Contains("'#8' saw grey", stop.Reason);
+        // Full colour names plus expected colour and distance, per the failure-text constraint.
+        Assert.Contains("'#8' expected green #8BE03A, saw grey #9696A0 (distance 126)", stop.Reason);
+        Assert.Equal(0, stop.StepIndex);
+    }
+
+    [Fact]
+    public async Task First_match_parks_the_pointer_off_every_candidate()
+    {
+        // The pointer rests on #8 after an earlier press, and hover would tint it.
+        var io = new FakeIo { Cursor = (137, 390), Screen = (_, _, _) => Green };
+        var fm = new FirstMatchStep(0, "f1", "Best mine", new[]
+        {
+            new PointStep(0, "t8", "#8", 137, 390, Check: GreenCheck(Grey)),
+            new PointStep(0, "t7", "#7", 312, 390, Check: GreenCheck(Grey)),
+        });
+        await StepRunner.RunAsync(new MacroStep[] { fm }, Ctx(), io, default);
+        var park = io.Sent.First(e => e.Kind == MacroEventKind.MouseMove);
+        Assert.True(Math.Abs(park.X - 137) > 10 || Math.Abs(park.Y - 390) > 10);
+        Assert.True(Math.Abs(park.X - 312) > 10 || Math.Abs(park.Y - 390) > 10);
+    }
+
+    [Fact]
+    public async Task A_window_covered_while_waiting_for_its_colour_is_not_a_colour_mismatch()
+    {
+        // Another window comes to the front 300 ms into the wait. What the capture sees then is
+        // not the target, so the stop must say so rather than report a wrong colour.
+        var io = new FakeIo { Screen = (_, _, _) => DarkBlue };
+        io.OnDelay = () => { if (io.NowMs >= 300) io.Foreground = false; };
+        var step = new PointStep(1000, "p1", "Tile", 100, 100, Check: GreenCheck(), CheckEnabled: true);
+        var r = await StepRunner.RunAsync(new MacroStep[] { step }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Tile' could not see the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Downs);
+    }
+
+    [Fact]
+    public async Task First_match_covered_while_waiting_could_not_see_the_window()
+    {
+        var io = new FakeIo { Screen = (_, _, _) => DarkBlue };
+        io.OnDelay = () => { if (io.NowMs >= 300) io.Foreground = false; };
+        var fm = new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "t8", "#8", 137, 390, Check: GreenCheck(Grey)) });
+        var r = await StepRunner.RunAsync(new MacroStep[] { fm }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Best mine' could not see the window.", r.Reason);
+        Assert.Empty(io.Downs);
     }
 
     [Fact]
@@ -1778,11 +2022,16 @@ public class StepRunnerTests
     [Fact]
     public async Task Search_never_samples_outside_the_window()
     {
-        // Point near the left edge; search offsets that cross x<0 must be skipped, not crash.
-        var io = new FakeIo { Screen = (_, x, _) => x == 12 ? Green : DarkBlue };
-        var step = new PointStep(0, "p1", "Edge", 4, 100, Check: new ColorCheck(new CheckBox(-2, -2, 5, 5), new Rgb(0, 0, 1)), CheckEnabled: true);
+        // The point sits 4 px from the left edge and its button is 8 px right (green at x 10..14).
+        // The search must skip offsets whose box would cross x < 0, still find the button, and
+        // never capture a pixel outside the 800x599 client area.
+        var io = new FakeIo { Screen = (_, x, _) => x is >= 10 and <= 14 ? Green : DarkBlue };
+        var step = new PointStep(0, "p1", "Edge", 4, 100, Check: GreenCheck(), CheckEnabled: true);
         var r = await StepRunner.RunAsync(new MacroStep[] { step }, Ctx(), io, default);
-        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome); // nothing matches; the point is that it ends cleanly
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal((12, 100), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.NotEmpty(io.CaptureRects);
+        Assert.All(io.CaptureRects, c => Assert.True(c.X >= 0 && c.Y >= 0 && c.X + c.W <= 800 && c.Y + c.H <= 599, $"captured {c} outside the window"));
     }
 
     [Fact]
@@ -1799,7 +2048,9 @@ public class StepRunnerTests
     {
         var io = new FakeIo { Foreground = false };
         var r = await StepRunner.RunAsync(new MacroStep[] { new PointStep(0, "p1", null, 1, 1) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
         Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
+        Assert.Null(r.StepIndex); // not a check failure, so GetPlayback must not call it check-failed
     }
 
     [Fact]
@@ -1815,6 +2066,7 @@ public class StepRunnerTests
         };
         var r = await StepRunner.RunAsync(steps, Ctx(), io, cts.Token);
         Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Null(r.StepIndex); // Esc is not a check failure
         Assert.True(io.NowMs < 1000);
         Assert.Contains(io.Sent, e => e.Kind == MacroEventKind.KeyUp && e.VirtualKeyCode == 0x41);
     }
@@ -1917,13 +2169,13 @@ internal static class StepRunner
 
         var heldKeys = new HashSet<int>();
         var heldButtons = new HashSet<int>();
-        int i = 0;
         try
         {
-            for (i = 0; i < steps.Count; i++)
+            for (int i = 0; i < steps.Count; i++)
             {
+                // Not a check failure: no StepIndex, so GetPlayback reports "aborted", not "check-failed".
                 if (!io.TargetInForeground())
-                    return PlaybackResult.AbortedAt($"Foreground shifted away from {ctx.AccountName} at step {i + 1}/{steps.Count}.", i);
+                    return PlaybackResult.Aborted($"Foreground shifted away from {ctx.AccountName} at step {i + 1}/{steps.Count}.");
 
                 switch (steps[i])
                 {
@@ -1968,7 +2220,7 @@ internal static class StepRunner
         }
         catch (OperationCanceledException)
         {
-            return PlaybackResult.AbortedAt("Playback cancelled.", i);
+            return PlaybackResult.Aborted("Playback cancelled."); // Esc or StopMacro, not a check failure
         }
         finally
         {
@@ -1997,12 +2249,15 @@ internal static class StepRunner
         var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
         if (!PointMath.InsideClient(box, client)) throw new StopException($"{name} checks a box outside the window.", index);
 
-        await ParkCursorAsync(io, box, client, ct);
+        await ParkCursorAsync(io, new[] { box }, client, ct);
         var start = io.NowMs;
         var ceiling = p.DelayMs + StepTiming.CheckGraceMs;
         Rgb seen;
         while (true)
         {
+            // Every poll: a window that came to the front covers the target, and the capture
+            // would read its pixels as a false colour (spec §2 and §5).
+            if (!io.TargetInForeground()) throw new StopException($"{name} could not see the window.", index);
             var block = io.Capture(box.X, box.Y, box.W, box.H) ?? throw new StopException($"{name} could not see the window.", index);
             seen = block.AverageBox(box.X, box.Y, box.W, box.H)!.Value;
             var v = ColorMatcher.Evaluate(seen, check);
@@ -2075,11 +2330,14 @@ internal static class StepRunner
             if (!PointMath.InsideClient(c.Box, client))
                 throw new StopException($"{name}: candidate '{c.Step.Label ?? c.Step.Id}' checks a box outside the window.", index);
 
+        // Hover tints a button, so the pointer leaves every candidate box before the first sample.
+        await ParkCursorAsync(io, cands.Select(c => c.Box).ToList(), client, ct);
         var start = io.NowMs;
         var ceiling = f.DelayMs + StepTiming.CheckGraceMs;
         var seen = new Rgb[cands.Count];
         while (true)
         {
+            if (!io.TargetInForeground()) throw new StopException($"{name} could not see the window.", index);
             bool allResolved = true;
             int firstMatch = -1;
             for (int k = 0; k < cands.Count; k++)
@@ -2087,11 +2345,9 @@ internal static class StepRunner
                 var b = cands[k].Box;
                 var block = io.Capture(b.X, b.Y, b.W, b.H) ?? throw new StopException($"{name} could not see the window.", index);
                 seen[k] = block.AverageBox(b.X, b.Y, b.W, b.H)!.Value;
-                var v = ColorMatcher.Evaluate(seen[k], cands[k].Check);
-                if (v.Matched) { if (firstMatch < 0) firstMatch = k; continue; }
+                if (ColorMatcher.Evaluate(seen[k], cands[k].Check).Matched) { if (firstMatch < 0) firstMatch = k; continue; }
                 // Resolved without matching only when it shows its other state.
-                var isOther = cands[k].Check.Other is { } o && seen[k].DistanceTo(o) <= cands[k].Check.Tolerance && seen[k].DistanceTo(o) < v.Distance;
-                if (!isOther) allResolved = false;
+                if (!ColorMatcher.ShowsOther(seen[k], cands[k].Check)) allResolved = false;
             }
             var expired = io.NowMs - start >= ceiling;
             if (firstMatch >= 0 && (allResolved || expired || AllBeforeResolved(cands, seen, firstMatch)))
@@ -2110,7 +2366,10 @@ internal static class StepRunner
             return;
         }
         var secs = (io.NowMs - start) / 1000.0;
-        var detail = string.Join("; ", cands.Select((c, k) => $"'{c.Step.Label ?? c.Step.Id}' saw {ColorNamer.Describe(seen[k]).Split(' ')[0]}"));
+        // Full colour names (never cut: "dark blue" must not become "dark"), plus expected colour
+        // and distance for each candidate, per the failure-text constraint.
+        var detail = string.Join("; ", cands.Select((c, k) => string.Create(CultureInfo.InvariantCulture,
+            $"'{c.Step.Label ?? c.Step.Id}' expected {ColorNamer.Describe(c.Check.Expect)}, saw {ColorNamer.Describe(seen[k])} (distance {seen[k].DistanceTo(c.Check.Expect):F0})")));
         throw new StopException(string.Create(CultureInfo.InvariantCulture,
             $"{name} found no candidate that matched after {secs:F1} s at {ctx.DisplayScale}% ({detail})."), index);
     }
@@ -2119,11 +2378,7 @@ internal static class StepRunner
     private static bool AllBeforeResolved(List<(PointStep Step, (int X, int Y) At, ColorCheck Check, (int X, int Y, int W, int H) Box)> cands, Rgb[] seen, int firstMatch)
     {
         for (int k = 0; k < firstMatch; k++)
-        {
-            var c = cands[k].Check;
-            if (c.Other is not { } o) return false;
-            if (!(seen[k].DistanceTo(o) <= c.Tolerance && seen[k].DistanceTo(o) < seen[k].DistanceTo(c.Expect))) return false;
-        }
+            if (!ColorMatcher.ShowsOther(seen[k], cands[k].Check)) return false;
         return true;
     }
 
@@ -2151,18 +2406,34 @@ internal static class StepRunner
         await io.Delay(StepTiming.JumpWiggleMs - 2 * third, ct);
     }
 
-    /// <summary>Hover changes a button's colour, so the pointer leaves the box before a check.</summary>
-    private static async Task ParkCursorAsync(IStepIo io, (int X, int Y, int W, int H) box, (int W, int H) client, CancellationToken ct)
+    private const int ParkMargin = 8;
+
+    private static bool NearBox((int X, int Y) c, (int X, int Y, int W, int H) b)
+        => c.X >= b.X - ParkMargin && c.X <= b.X + b.W + ParkMargin && c.Y >= b.Y - ParkMargin && c.Y <= b.Y + b.H + ParkMargin;
+
+    /// <summary>Hover changes a button's colour, so the pointer leaves every box before a check.
+    /// Tries the four corners 30 px outside each box and takes the first spot inside the client
+    /// area that is near none of the boxes.</summary>
+    private static async Task ParkCursorAsync(IStepIo io, IReadOnlyList<(int X, int Y, int W, int H)> boxes, (int W, int H) client, CancellationToken ct)
     {
         if (io.CursorClient() is not { } c) return;
-        const int margin = 8;
-        bool near = c.X >= box.X - margin && c.X <= box.X + box.W + margin && c.Y >= box.Y - margin && c.Y <= box.Y + box.H + margin;
-        if (!near) return;
-        var px = Math.Clamp(box.X + box.W + 30, 0, client.W - 1);
-        var py = Math.Clamp(box.Y + box.H + 30, 0, client.H - 1);
-        if (px == c.X && py == c.Y) px = Math.Clamp(box.X - 30, 0, client.W - 1);
-        io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, px, py, 0, 0));
-        await io.Delay(0, ct);
+        if (!boxes.Any(b => NearBox(c, b))) return;
+        foreach (var b in boxes)
+        {
+            var spots = new[]
+            {
+                (X: b.X + b.W + 30, Y: b.Y + b.H + 30), (X: b.X - 30, Y: b.Y + b.H + 30),
+                (X: b.X + b.W + 30, Y: b.Y - 30),       (X: b.X - 30, Y: b.Y - 30),
+            };
+            foreach (var s in spots)
+            {
+                var q = (X: Math.Clamp(s.X, 0, client.W - 1), Y: Math.Clamp(s.Y, 0, client.H - 1));
+                if (boxes.Any(bb => NearBox(q, bb))) continue;
+                io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, q.X, q.Y, 0, 0));
+                await io.Delay(0, ct);
+                return;
+            }
+        }
     }
 
     private static async Task PlayDragAsync(DragStep d, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
@@ -2556,7 +2827,9 @@ public class RecordingFinalizerTests
     [Fact]
     public void Keyboard_only_recordings_stay_on_the_event_path()
     {
-        var m = RecordingFinalizer.WithSteps(Rec(Macro.CoordSpaceScreen, KeyA), 100);
+        // Client space on purpose: the screen-space guard must not be what keeps it off the step
+        // path. It is the "no mouse press" rule.
+        var m = RecordingFinalizer.WithSteps(Rec(Macro.CoordSpaceClient, KeyA), 100);
         Assert.False(m.HasSteps);
         Assert.Null(m.RecordedDisplayScale);
     }
@@ -2622,15 +2895,28 @@ In `src/PluginRuntime.cs`:
             _recordingDisplayScale = anchorHwnd != IntPtr.Zero ? _displayScale.ScalePercentFor(anchorHwnd) : null;
 ```
 
-3. Replace `Store.Save(macro);` (the save after `var macro = new Macro(...)`) with:
+3. Keep `Store.Save(macro);` (the save after `var macro = new Macro(...)`) exactly where it is, so the raw recording is on disk first. Directly after it, add:
 
 ```csharp
-            macro = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
-            Store.Save(macro);
+            // Convert only after the raw recording is safe on disk. A converter bug must never
+            // cost a recording: on failure the v3 file stays, and the log says why.
+            try
+            {
+                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
+                if (!ReferenceEquals(converted, macro))
+                {
+                    Store.Save(converted);
+                    macro = converted;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Kept as a plain recording; converting it to points failed: {ex.Message}");
+            }
             _recordingDisplayScale = null;
 ```
 
-`macro` is declared with `var`, so it is reassignable. Then extend the "Saved macro" log line so it says what happened:
+`macro` is declared with `var`, so it is reassignable. The later `_lastMacro = macro` and `PromptRename(macro)` then see the converted macro when there is one. Then extend the "Saved macro" log line so it says what happened:
 
 ```csharp
             Log(macro.HasSteps
@@ -2660,7 +2946,7 @@ git commit -m "feat(recorder): save click recordings as point macros with their 
 - Test: `tests/rororo-ur-task.Tests/Ipc/PlaybackRegistryTests.cs`, additions to `tests/rororo-ur-task.Tests/Ipc/MacroRunInvokerTests.cs`
 
 **Interfaces:**
-- Consumes: `SequenceResult`, `AltOutcome.StepIndex`.
+- Consumes: `SequenceResult`, `AltOutcome.StepIndex` (set only by a failed check, per Task 6's `PlaybackResult.AbortedAt`, so a non-null index alone means `check-failed`).
 - Produces: `GetPlaybackRequest(string ContractVersion, string Method, string? PlaybackId, string? CallerPluginId)`; `GetPlaybackResponse(bool Ok, string? State, string? Reason, string? Detail, int? StepIndex)`; `BridgeContract.MethodGetPlayback = "GetPlayback"`; `enum PlaybackState { Running, Finished, Stopped, Failed }`; `PlaybackRegistry` with `Started(id)`, `Finished(id, PlaybackState, string? reason, string? detail, int? stepIndex)`, `Get(string? id) : GetPlaybackResponse`, `static TimeSpan Retention`; `IMacroRunInvoker.GetPlayback(GetPlaybackRequest)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2732,7 +3018,6 @@ Add to `tests/rororo-ur-task.Tests/Ipc/MacroRunInvokerTests.cs`, which already h
             snapshot: () => new[] { alt },
             resolveForegroundUserId: () => alt.RobloxUserId,
             isBusy: () => false,
-            play: (_, _, _, _) => Task.CompletedTask,
             playWithResult: playWithResult);
 
     private static async Task WaitUntilAsync(Func<bool> cond)
@@ -2784,6 +3069,29 @@ Add to `tests/rororo-ur-task.Tests/Ipc/MacroRunInvokerTests.cs`, which already h
 
         var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
         Assert.Equal("running", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+        inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-mcp"));
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+    }
+
+    [Fact]
+    public async Task A_refused_alt_does_not_end_a_repeat()
+    {
+        // A refusal or foreground shift with no step index is not a failed check. Repeat keeps
+        // looping exactly as in 0.8 until StopMacro, and the playback then reads "stopped".
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var refused = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Refused, "Foreground window is user 9.") }, 0, 1, 0, TimeSpan.Zero);
+        var inv = BuildWithResult(m, alt, async (_, _, _, ct) =>
+        {
+            Interlocked.Increment(ref passes);
+            await Task.Delay(5, ct);
+            return refused;
+        });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) >= 3);
         inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-mcp"));
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
         Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
@@ -2879,16 +3187,47 @@ In `src/Ipc/IMacroRunInvoker.cs` add:
 
 In `src/Ipc/MacroRunInvoker.cs`:
 
-1. Fields: `private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _playWithResult;` and `private readonly PlaybackRegistry _registry;`.
-2. Production ctor: add `playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct)` to the `: this(...)` call.
-3. Test ctor: add two optional parameters at the end, `Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>>? playWithResult = null, PlaybackRegistry? registry = null`, and set:
+1. **One play delegate.** Change the `_play` field's type to return the pass result:
+   `private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _play;`. Also add `private readonly PlaybackRegistry _registry;`. There is no second delegate field.
+2. **Main ctor.** Replace the test ctor with this one. It is the only ctor that assigns fields:
 
 ```csharp
-        _playWithResult = playWithResult ?? (async (m, t, d, c) => { await play(m, t, d, c).ConfigureAwait(false); return null; });
+    // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
+    internal MacroRunInvoker(
+        Func<IReadOnlyList<Macro>> loadMacros,
+        Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
+        Func<long?> resolveForegroundUserId,
+        Func<bool> isBusy,
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
+        Func<bool>? abort = null,
+        PlaybackRegistry? registry = null)
+    {
+        _loadMacros = loadMacros;
+        _snapshot = snapshot;
+        _resolveForegroundUserId = resolveForegroundUserId;
+        _isBusy = isBusy;
+        _play = playWithResult;
+        _abort = abort ?? (() => false);
         _registry = registry ?? new PlaybackRegistry();
+    }
+
+    // Test ctor, unchanged signature: fakes that only need to run. Adapts into the one delegate.
+    internal MacroRunInvoker(
+        Func<IReadOnlyList<Macro>> loadMacros,
+        Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
+        Func<long?> resolveForegroundUserId,
+        Func<bool> isBusy,
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task> play,
+        Func<bool>? abort = null)
+        : this(loadMacros, snapshot, resolveForegroundUserId, isBusy,
+               playWithResult: async (m, t, d, c) => { await play(m, t, d, c).ConfigureAwait(false); return null; },
+               abort: abort)
+    { }
 ```
 
-Existing tests that pass only `play:` keep working unchanged.
+3. **Production ctor.** In its `: this(...)` call, replace `play: (macro, targets, delay, ct) => player.PlayAsync(macro, targets, delay, ct),` with `playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),`.
+
+Existing tests pass only `play:` (a named argument that exists only on the test ctor), so they keep working unchanged.
 4. In `RunAsync`, directly before `_ = ObservePlaybackAsync(...)`, add `_registry.Started(playbackId);`.
 5. Add:
 
@@ -2907,8 +3246,14 @@ Existing tests that pass only `play:` keep working unchanged.
         {
             do
             {
-                last = await _playWithResult(macro, targets, interAltDelayMs, playbackCts.Token).ConfigureAwait(false);
-                var failure = last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
+                last = await _play(macro, targets, interAltDelayMs, playbackCts.Token).ConfigureAwait(false);
+                // Each pass reports its own ending; a later clean pass clears an earlier refusal.
+                state = PlaybackState.Finished;
+                reason = null; detail = null; stepIndex = null;
+                // A StepIndex is set only by a failed check (PlaybackResult.AbortedAt), so it
+                // alone means check-failed. Prefer it over any other failed alt in the pass.
+                var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
+                           ?? last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
                 if (failure is not null && !playbackCts.IsCancellationRequested)
                 {
                     state = PlaybackState.Failed;
@@ -2916,7 +3261,10 @@ Existing tests that pass only `play:` keep working unchanged.
                            : failure.Outcome == PlaybackOutcome.Refused ? "refused" : "aborted";
                     detail = failure.Reason;
                     stepIndex = failure.StepIndex + 1; // 1-based on the wire, same as "step N" in the detail
-                    break; // a failed pass ends a repeat; retrying a failed check forever helps nobody
+                    // A failed check ends a repeat: retrying it forever helps nobody. Only step
+                    // macros can fail a check, so v3 repeat behaviour is unchanged: a refused or
+                    // aborted v3 pass loops on as it did in 0.8.
+                    if (failure.StepIndex is not null) break;
                 }
             }
             while (repeat && !playbackCts.IsCancellationRequested);
@@ -3154,7 +3502,7 @@ git commit -m "feat(export): AutoHotkey export of point macros, checks as commen
 ### Task 11: Version, changelog, and the live pass on Dunder-MiffLan
 
 **Files:**
-- Modify: `rororo-ur-task.csproj`, `manifest.json`, `CHANGELOG.md`, `docs/BACKLOG.md`
+- Modify: `rororo-ur-task.csproj`, `manifest.json`, `CHANGELOG.md`, `docs/BACKLOG.md`, `docs/display-scale-findings.md` (Step 5 adds the 125% results)
 
 - [ ] **Step 1: Bump to 0.9.0**
 
@@ -3192,7 +3540,12 @@ In `docs/BACKLOG.md`, under "Expose and drag a macro's click points", add a firs
 
 - [ ] **Step 3: Build and install the plugin locally**
 
-Follow the repo's existing build-and-install route for the plugin (see `README.md`, "Building"); do not build the `.sln`. Close Ur Task before replacing its files; RoRoRo restarts it.
+Run the branch build, not the installed plugin. This is the route in `docs/smoke/2026-08-11-timing-aware-cadence-smoke.md` (README's "Install" section only covers installing a published release by URL, so it is not the route here).
+
+1. `dotnet build rororo-ur-task.csproj`. Never build the `.sln`.
+2. Quit the installed Ur Task from its tray icon. RoRoRo autostarts it from `%LOCALAPPDATA%\ROROROblox\plugins\626labs.ur-task\`, and it holds the action-bridge pipe.
+3. Launch `bin\Debug\net10.0-windows\626labs.ur-task.exe`.
+4. Check that the log's first line reads `=== RoRoRo Ur Task v0.9.0 starting ===` (log: `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\logs\ur-task.log`). If it shows 0.8.0, you are measuring the released build and the run is void.
 
 - [ ] **Step 4: Live pass at 100% on Dunder-MiffLan** (manual; Este watches)
 

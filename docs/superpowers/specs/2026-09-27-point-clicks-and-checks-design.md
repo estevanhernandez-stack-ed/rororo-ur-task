@@ -102,7 +102,9 @@ Adjustments are not in the macro file. See section 3.
 
 Runs when a recording is saved, and on "Convert to points" for an existing macro.
 
-- A mouse down and up **at the same spot** (within 4 px) becomes a `Point` at the down position.
+- A mouse down and up **at the same spot** (within 8 px) becomes a `Point` at the down position.
+  *Amended 2026-09-27, from 4 px:* the real "Mining Z8 Egg" recording has a click whose down
+  (578, 420) and up (581, 426) are 6 px apart. At 4 px that click became a drag.
 - A down and up **far apart** becomes a `Drag`. A right-button drag is a camera turn, so it keeps
   its direction and a distance with margin added, so that playback overshoots to the camera limit
   (playbook: "Drive the camera to its limit, then count back").
