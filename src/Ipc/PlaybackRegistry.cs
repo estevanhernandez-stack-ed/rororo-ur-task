@@ -17,7 +17,12 @@ internal sealed class PlaybackRegistry
 
     public PlaybackRegistry(Func<DateTimeOffset>? now = null) => _now = now ?? (() => DateTimeOffset.UtcNow);
 
-    public void Started(string id) => _entries[id] = new Entry(PlaybackState.Running, null, null, null, null);
+    /// <summary>Also prunes, so expired entries go even when nobody ever polls.</summary>
+    public void Started(string id)
+    {
+        Prune();
+        _entries[id] = new Entry(PlaybackState.Running, null, null, null, null);
+    }
 
     public void Finished(string id, PlaybackState state, string? reason, string? detail, int? stepIndex)
         => _entries[id] = new Entry(state, reason, detail, stepIndex, _now());
