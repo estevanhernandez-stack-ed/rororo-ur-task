@@ -111,9 +111,11 @@ public static class StepConverter
                     }
                     else
                     {
+                        // Right drag = camera turn. The margin drives pitch (vertical) to its limit;
+                        // yaw has no limit, so overshooting it would change the heading.
                         var m = down.MouseButton == 2 ? CameraDragMargin : 1.0;
                         steps.Add(new DragStep((int)downDelay, down.MouseButton, down.X, down.Y,
-                            (int)Math.Round(dx * m), (int)Math.Round(dy * m), (int)(e.TimestampMs - down.TimestampMs)));
+                            dx, (int)Math.Round(dy * m), (int)(e.TimestampMs - down.TimestampMs)));
                     }
                     Anchor(e.TimestampMs);
                     down = null;
