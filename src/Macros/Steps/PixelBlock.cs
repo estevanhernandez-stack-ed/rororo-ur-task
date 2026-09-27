@@ -1,0 +1,32 @@
+namespace Labs626.UrTask.Macros.Steps;
+
+/// <summary>A captured rectangle of the client area. Pixels are 0xAARRGGBB, row-major.</summary>
+public sealed class PixelBlock
+{
+    private readonly uint[] _argb;
+    public int X { get; }
+    public int Y { get; }
+    public int W { get; }
+    public int H { get; }
+
+    public PixelBlock(int x, int y, int w, int h, uint[] argb)
+    {
+        if (argb is null || argb.Length != w * h) throw new ArgumentException("Pixel count does not match the block size.", nameof(argb));
+        (X, Y, W, H, _argb) = (x, y, w, h, argb);
+    }
+
+    /// <summary>Average colour of a box given in client coordinates; null if it is not fully inside.</summary>
+    public Rgb? AverageBox(int x, int y, int w, int h)
+    {
+        if (x < X || y < Y || x + w > X + W || y + h > Y + H || w <= 0 || h <= 0) return null;
+        long r = 0, g = 0, b = 0;
+        for (int row = y - Y; row < y - Y + h; row++)
+        for (int col = x - X; col < x - X + w; col++)
+        {
+            var p = _argb[row * W + col];
+            r += (p >> 16) & 0xFF; g += (p >> 8) & 0xFF; b += p & 0xFF;
+        }
+        long n = (long)w * h;
+        return new Rgb((int)(r / n), (int)(g / n), (int)(b / n));
+    }
+}
