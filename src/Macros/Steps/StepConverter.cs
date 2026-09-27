@@ -33,7 +33,10 @@ public static class StepConverter
         string rawNote = "";
 
         // Travel is dropped only from the gap before a mouse press or wheel (the hand moving to
-        // the spot). Keys keep their real timing, so a key's up delay is its real held time.
+        // the spot), and never while a key is held: a key's up is measured from the last step,
+        // so travel cut from a click inside the hold would be cut from the key's held time too.
+        // Keys keep their real timing. Playback's jump and press add about 230 ms per click
+        // made during a hold, the same as any click; the recorded time itself is never lost.
         int Delay(long at, bool dropTravel = true) => (int)Math.Clamp(at - anchorMs - (dropTravel ? travelMs : 0), 0, int.MaxValue);
         void Anchor(long at) { anchorMs = at; travelMs = 0; }
 
@@ -78,7 +81,7 @@ public static class StepConverter
                     break;
 
                 case MacroEventKind.MouseWheel:
-                    steps.Add(new WheelStep(Delay(e.TimestampMs), e.X, e.Y, e.WheelDelta));
+                    steps.Add(new WheelStep(Delay(e.TimestampMs, dropTravel: heldKeys.Count == 0), e.X, e.Y, e.WheelDelta));
                     Anchor(e.TimestampMs);
                     break;
 
@@ -95,7 +98,7 @@ public static class StepConverter
                     }
                     down = e;
                     downIndex = i;
-                    downDelay = Delay(e.TimestampMs);
+                    downDelay = Delay(e.TimestampMs, dropTravel: heldKeys.Count == 0);
                     break;
 
                 case MacroEventKind.MouseUp:

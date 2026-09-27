@@ -92,6 +92,38 @@ public class StepConverterTests
     }
 
     [Fact]
+    public void A_click_during_a_key_hold_keeps_the_key_held_for_its_real_time()
+    {
+        // W held 2.0 s. The hand moves the mouse for 0.5 s, then clicks at 1.0 s (80 ms press).
+        // Travel is not dropped while W is down, so the timeline from W's down to its up still
+        // adds up to 2.0 s: key down, click delay, the click's own press, key up delay.
+        var evs = new List<MacroEvent> { Ev(0, MacroEventKind.KeyDown, vk: 0x57) };
+        for (int t = 500; t <= 1000; t += 50) evs.Add(Ev(t, MacroEventKind.MouseMove, (t - 500) / 5, 100));
+        evs.Add(Ev(1000, MacroEventKind.MouseDown, 100, 100, btn: 1));
+        evs.Add(Ev(1080, MacroEventKind.MouseUp, 100, 100, btn: 1));
+        evs.Add(Ev(2000, MacroEventKind.KeyUp, vk: 0x57));
+        var steps = StepConverter.Convert(evs);
+        Assert.Equal(3, steps.Count);
+        var p = Assert.IsType<PointStep>(steps[1]);
+        var up = Assert.IsType<KeyStep>(steps[2]);
+        Assert.False(up.Down);
+        Assert.Equal(1000, p.DelayMs);
+        Assert.Equal(2000, steps[0].DelayMs + p.DelayMs + (1080 - 1000) + up.DelayMs);
+    }
+
+    [Fact]
+    public void A_wheel_during_a_key_hold_keeps_its_travel()
+    {
+        var evs = new List<MacroEvent> { Ev(0, MacroEventKind.KeyDown, vk: 0x57) };
+        for (int t = 500; t <= 1000; t += 50) evs.Add(Ev(t, MacroEventKind.MouseMove, (t - 500) / 5, 100));
+        evs.Add(Ev(1000, MacroEventKind.MouseWheel, 100, 100, wheel: -120));
+        evs.Add(Ev(2000, MacroEventKind.KeyUp, vk: 0x57));
+        var steps = StepConverter.Convert(evs);
+        Assert.Equal(1000, Assert.IsType<WheelStep>(steps[1]).DelayMs);
+        Assert.Equal(1000, steps[2].DelayMs);
+    }
+
+    [Fact]
     public void Down_and_up_within_eight_pixels_is_a_point()
     {
         // 7 px and 6 px of hand jitter: still one click (the real egg recording has a 6 px click).
