@@ -2,6 +2,28 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.9.0 — unreleased
+
+### Added
+
+- **Mouse recordings play as point clicks.** A recording with clicks saves as named points; the
+  path between clicks is dropped and the time the mouse sat still is kept. The original
+  recording stays in the file.
+- **Points can check a colour before pressing.** A point waits for its colour to show, looks a
+  few pixels around if the button moved, and otherwise stops with a sentence that says what it
+  expected and what it saw.
+- **First match.** One step checks a list of spots in order and presses the first that matches:
+  the best unlocked mine, or Auto Mine only when it is off.
+- **Display scale travels with the macro.** A macro recorded at 100% and played at 125% sizes the
+  window and its points for 125%, and says so in the log.
+- **`GetPlayback` on the action bridge.** A caller can ask how a playback is going or how it
+  ended, for 10 minutes after it ends. A failed check ends a repeating playback.
+
+### Changed
+
+- When Roblox will not shrink a window to the size a macro wants, the refusal names the display
+  scale and Roblox's smallest window instead of suggesting a larger screen.
+
 ## 0.8.0 — 2026-08-22
 
 ### Added

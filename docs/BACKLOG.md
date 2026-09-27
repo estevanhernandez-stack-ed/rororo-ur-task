@@ -99,6 +99,8 @@ today any other tool's injected input lands in a recording as though the user ha
 **Raised by Este:** 2026-09-21, after using it in the converted clan AutoHotkey script
 **Kind:** enhancement, not a fix
 
+**Engine shipped in 0.9.0** (point steps, checks, first match, GetPlayback). The overlay is plan 2.
+
 One button exposes every click point as a named tag over the real window, and dragging a tag
 re-aims that point. Este's words: "the click to expose and drag to move is helpful."
 
@@ -172,6 +174,8 @@ log. At 125% that recording cannot be reached, and `EnsureClientSize` refuses wi
 
 Full write-up, with measurements, ranked proposals, and the same analysis for Ur OCR:
 `docs/display-scale-findings.md`. First step is small: record the display scale with the macro.
+
+**Proposals 1–4 shipped in 0.9.0** for point macros. Proposal 5 (arrange floor) and 6 (exporter sizing helper) remain.
 
 ## Ur Task renders strangely under the flatline theme (v0.7.0)
 
