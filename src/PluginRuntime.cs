@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using Labs626.UrTask.Hotkeys;
 using Labs626.UrTask.Macros;
+using Labs626.UrTask.Macros.Steps;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask;
@@ -43,6 +44,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
     private (int W, int H)? _recordingClientSize;
     private bool? _recordingMaximized;
+    private int? _recordingDisplayScale;
+    private readonly IDisplayScale _displayScale = new DisplayScale();
     private Macro? _lastMacro;
     private bool _sequenceActive;
     private volatile bool _playerActive;
@@ -798,6 +801,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
+            _recordingDisplayScale = anchorHwnd != IntPtr.Zero ? _displayScale.ScalePercentFor(anchorHwnd) : null;
             _recordingBoundAccount = account;
             // Presence fills game identity AFTER the launch event (0.4.0 contract
             // semantics), so the registry entry captured above may carry no game
@@ -873,10 +877,30 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Store.Save(macro);
             _recordingClientSize = null;
             _recordingMaximized = null;
+
+            // Convert only after the raw recording is safe on disk. A converter bug must never
+            // cost a recording: on failure the v3 file stays, and the log says why.
+            try
+            {
+                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
+                if (!ReferenceEquals(converted, macro))
+                {
+                    Store.Save(converted);
+                    macro = converted;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Kept as a plain recording; converting it to points failed: {ex.Message}");
+            }
+            _recordingDisplayScale = null;
+
             _lastMacro = macro;
             RaiseUI(() => MacrosChanged?.Invoke());
             RaiseUI(() => LastMacroChanged?.Invoke(_lastMacro?.Id));
-            Log($"Saved macro: {events.Count} events, duration {macro.Duration.TotalSeconds:F1}s.");
+            Log(macro.HasSteps
+                ? $"Saved macro: {macro.Steps!.Count} steps from {events.Count} events, about {macro.Duration.TotalSeconds:F1}s, at {macro.RecordedDisplayScale}% display scale."
+                : $"Saved macro: {events.Count} events, duration {macro.Duration.TotalSeconds:F1}s.");
 
             // Prompt for rename — user can Enter to accept the auto-name or type a new one.
             RaiseUI(() => PromptRename(macro));
