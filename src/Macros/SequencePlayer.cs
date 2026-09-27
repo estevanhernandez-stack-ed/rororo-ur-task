@@ -118,7 +118,7 @@ internal sealed class SequencePlayer
                     continue;
                 }
 
-                perAlt.Add(new AltOutcome(target, playResult.Outcome, playResult.Reason));
+                perAlt.Add(new AltOutcome(target, playResult.Outcome, playResult.Reason, playResult.StepIndex));
                 switch (playResult.Outcome)
                 {
                     case PlaybackOutcome.Completed: completed++; break;
