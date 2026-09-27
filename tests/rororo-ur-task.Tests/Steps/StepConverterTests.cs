@@ -134,11 +134,13 @@ public class StepConverterTests
     }
 
     [Fact]
-    public void Right_drag_gets_the_camera_margin()
+    public void Right_drag_gets_the_camera_margin_on_pitch_only()
     {
-        var steps = StepConverter.Convert(new[] { Ev(0, MacroEventKind.MouseDown, 400, 300, btn: 2), Ev(400, MacroEventKind.MouseUp, 400, 500, btn: 2) });
+        // 100 px right, 200 px down. Pitch gets the 1.5x margin to reach its limit; yaw has no
+        // limit, so it keeps its recorded distance and the heading does not change.
+        var steps = StepConverter.Convert(new[] { Ev(0, MacroEventKind.MouseDown, 400, 300, btn: 2), Ev(400, MacroEventKind.MouseUp, 500, 500, btn: 2) });
         var d = Assert.IsType<DragStep>(Assert.Single(steps));
-        Assert.Equal((2, 400, 300, 0, 300, 400), (d.Button, d.StartX, d.StartY, d.Dx, d.Dy, d.DurationMs));
+        Assert.Equal((2, 400, 300, 100, 300, 400), (d.Button, d.StartX, d.StartY, d.Dx, d.Dy, d.DurationMs));
     }
 
     [Fact]
