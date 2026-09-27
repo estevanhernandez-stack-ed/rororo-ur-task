@@ -139,8 +139,8 @@ point's `delayMs`. Measured on "Mine Zone 8": of 19.4 s between clicks, 5.7 s wa
 
 Candidates are checked once each, in order. Only the first candidate gets the wait, so a window
 that is fading in has its moment. The first candidate that matches is pressed. None matching means
-`skip`, or stop and report naming the last candidate checked, such as *"CElCPapa stopped at #7:
-#8 is locked."*
+`skip`, or stop and report naming the last candidate checked, such as
+*"CElCPapa stopped at #7: #8 is locked."*
 
 All of this is a new step player beside today's event player. The v3 path does not change.
 
