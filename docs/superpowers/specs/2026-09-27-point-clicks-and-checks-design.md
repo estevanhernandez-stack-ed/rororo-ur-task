@@ -76,6 +76,10 @@ A **check** is:
 - `expect`: the average colour of the box.
 - `other` (optional): the colour of the other state, such as the grey of a locked tile or the red
   of an "Off" toggle.
+- Colours are stored as exactly `{ "r", "g", "b" }` and the box as exactly
+  `{ "offsetX", "offsetY", "w", "h" }`, the shape Ur OCR matches (its `fix/color-pick-box`).
+  Ur OCR keeps `targetRgb` and `toleranceRgb` as field names for its old triggers, and its
+  legacy triggers keep reading the region centre, because Ur OCR never stored a pick point.
 - `tolerance`: Euclidean RGB distance, default 15. This number is unproven: Ur OCR has only ever
   shipped single-pixel checks. Checks log their measured distance so the default can be tuned
   from real runs.

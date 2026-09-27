@@ -124,6 +124,15 @@ public class ColorCheckTests
         => Assert.Equal(5.0, new Rgb(0, 3, 4).DistanceTo(new Rgb(0, 0, 0)), 3);
 
     [Fact]
+    public void A_colour_is_stored_as_exactly_r_g_b()
+    {
+        // The shape Ur OCR matches. A stray "hex" key here is the bug this pins.
+        var opts = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        Assert.Equal("{\"r\":139,\"g\":224,\"b\":58}", System.Text.Json.JsonSerializer.Serialize(Green, opts));
+        Assert.Equal("{\"offsetX\":-2,\"offsetY\":-2,\"w\":5,\"h\":5}", System.Text.Json.JsonSerializer.Serialize(new CheckBox(), opts));
+    }
+
+    [Fact]
     public void Within_tolerance_matches()
     {
         var v = ColorMatcher.Evaluate(new Rgb(135, 220, 60), new ColorCheck(new CheckBox(), Green));
@@ -177,9 +186,11 @@ Expected: build error, `Rgb` and the other types do not exist.
 
 ```csharp
 // src/Macros/Steps/ColorCheck.cs
+using System.Text.Json.Serialization;
+
 namespace Labs626.UrTask.Macros.Steps;
 
-/// <summary>An average colour. Serialized as { "r", "g", "b" }.</summary>
+/// <summary>An average colour. Serialized as exactly { "r", "g", "b" } — the shape Ur OCR matches.</summary>
 public readonly record struct Rgb(int R, int G, int B)
 {
     public double DistanceTo(Rgb o)
@@ -188,6 +199,9 @@ public readonly record struct Rgb(int R, int G, int B)
         return Math.Sqrt(dr * dr + dg * dg + db * db);
     }
 
+    /// <summary>Not stored: System.Text.Json writes public get-only properties, and a "hex" key
+    /// would break the shared { r, g, b } shape (caught by the Ur OCR session, 2026-09-27).</summary>
+    [JsonIgnore]
     public string Hex => $"#{R:X2}{G:X2}{B:X2}";
 }
 
@@ -199,6 +213,8 @@ public readonly record struct Rgb(int R, int G, int B)
 public sealed record CheckBox(int OffsetX = -2, int OffsetY = -2, int W = 5, int H = 5)
 {
     public const int MaxSide = 9;
+
+    [JsonIgnore] // same reason as Rgb.Hex: keep the stored box to { offsetX, offsetY, w, h }
     public bool IsValid => W >= 1 && H >= 1 && W <= MaxSide && H <= MaxSide;
 }
 
