@@ -200,7 +200,14 @@ holds a lock while open; a write during that is refused with "Points overlay ope
     contract version `"1.0"` stays accepted. Older Ur MCP builds never call the new method.
   - `RunMacro` must not wait for playback to finish: Ur MCP's client has no read timeout, and a
     repeating macro never finishes.
-  - `reason` and `detail` reach Claude word for word, so they are written as sentences.
+  - `reason` and `detail` reach Claude word for word. On `failed`, `reason` is a short code
+    (`check-failed`, `refused`, `aborted`, `error`) and `detail` is the sentence.
+  - **`stepIndex` is 1-based on the wire**, the same number as "step 3" in the detail sentence.
+  - An unknown or expired playback id is refused with reason `unknown-playback`, never the
+    generic `refused`.
+  - **Pinned for older Ur Task builds:** the dispatcher's answer to an unknown method stays
+    `reason: "refused"` with `detail` starting `Unknown method '`. Ur MCP detects a pre-0.9 Ur Task
+    by that detail, so the wording must not change.
   - **Dependency on Ur MCP:** a tool that reads `GetPlayback`, likely `wait_for_macro`, polling
     like `wait_for_ingame`. That change lives in the `rororo-ur-mcp` repo and is built there, not
     by this spec. Este gave the go-ahead on 2026-09-27. It builds against the `GetPlayback` shape

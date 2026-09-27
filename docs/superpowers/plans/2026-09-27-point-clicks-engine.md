@@ -18,7 +18,7 @@
 - Fast test command, used by every task: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
 - Schema: `Macro.CurrentSchemaVersion` becomes `4`. A macro without `steps` plays through the existing event path, byte-for-byte unchanged in behaviour.
 - `events` is never dropped from a v4 file. It is the original recording.
-- Bridge contract: add fields and methods only. Keep every existing reply field (`ok`, `playbackId`, `queued`, `reason`, `detail`, `stopped`, `macros[].id/name`). Keep accepting contract version `"1.0"`. `RunMacro` still returns when playback starts.
+- Bridge contract: add fields and methods only. Keep every existing reply field (`ok`, `playbackId`, `queued`, `reason`, `detail`, `stopped`, `macros[].id/name`). Keep accepting contract version `"1.0"`. `RunMacro` still returns when playback starts. The unknown-method answer (`reason: "refused"`, `detail: "Unknown method '<name>'."`) must not change: Ur MCP detects a pre-0.9 Ur Task by that detail. `GetPlayback`'s `stepIndex` is 1-based on the wire; the in-process `PlaybackResult.StepIndex` stays 0-based.
 - Adjustments live at `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\adjustments.json`, never inside `macros\` (Ur Task and Ur OCR read every `.json` there as a macro).
 - Defaults, verbatim from the spec: check box 5x5, at most 9x9; tolerance 15 (Euclidean RGB); wait ceiling = the step's delay plus 3 s; nearby search radius about 24 px, scaled like the point; same-spot threshold 4 px; jump and wiggle about 0.15 s; finished playbacks kept 10 minutes.
 - Version: `rororo-ur-task.csproj` `<Version>` and `manifest.json` `"version"` must agree (a test enforces it). Target `0.9.0`.
@@ -2741,7 +2741,7 @@ Add to `tests/rororo-ur-task.Tests/Ipc/MacroRunInvokerTests.cs`, which already h
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
 
         var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp"));
-        Assert.Equal(("failed", "check-failed", 1), (status.State, status.Reason, status.StepIndex));
+        Assert.Equal(("failed", "check-failed", 2), (status.State, status.Reason, status.StepIndex)); // AltOutcome index 1 → wire step 2
         Assert.StartsWith("alt-123: step 2 'Tile'", status.Detail);
         Assert.Equal(1, passes);
     }
@@ -2899,7 +2899,7 @@ Existing tests that pass only `play:` keep working unchanged.
                     reason = failure.StepIndex is not null ? "check-failed"
                            : failure.Outcome == PlaybackOutcome.Refused ? "refused" : "aborted";
                     detail = failure.Reason;
-                    stepIndex = failure.StepIndex;
+                    stepIndex = failure.StepIndex + 1; // 1-based on the wire, same as "step N" in the detail
                     break; // a failed pass ends a repeat; retrying a failed check forever helps nobody
                 }
             }
@@ -2939,7 +2939,12 @@ Add to `FakeInvoker` in `tests/rororo-ur-task.Tests/Ipc/MacroRunnerServerTests.c
             => new(true, "finished", null, null, null);
 ```
 
-Add one dispatch test to `MacroRunnerServerTests`, following that file's existing request helper, asserting a `{"contractVersion":"1.0","method":"GetPlayback","playbackId":"x","callerPluginId":"t"}` frame returns `"state":"finished"`, and that the existing `RunMacro`, `ListMacros` and `StopMacro` tests still pass unmodified.
+Add two dispatch tests to `MacroRunnerServerTests`, following that file's existing request helper:
+
+- a `{"contractVersion":"1.0","method":"GetPlayback","playbackId":"x","callerPluginId":"t"}` frame returns `"state":"finished"`;
+- **a pin for Ur MCP:** a frame with `"method":"NoSuchMethod"` returns `"ok":false`, `"reason":"refused"`, `"detail":"Unknown method 'NoSuchMethod'."` exactly. Ur MCP's `wait_for_macro` detects a pre-0.9 Ur Task by this detail; the test's comment should say so.
+
+The existing `RunMacro`, `ListMacros` and `StopMacro` tests must still pass unmodified.
 
 - [ ] **Step 7: Run everything**
 
