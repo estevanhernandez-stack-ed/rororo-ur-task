@@ -21,7 +21,7 @@ laptop".
    | Display scale | Minimum client area | Source |
    | --- | --- | --- |
    | 100% | 800 x 599 | 56 `EnsureClientSize: already exact 800x599` lines in a real `ur-task.log` |
-   | 125% | 1002 x 750 | Measured on a Surface, 3840x2160 at 125% |
+   | 125% | 1002 x 750 | Measured on Dunder-MiffLan, 3840x2160 at 125% |
    | 150% | 1202 x 901 | Predicted |
    | 200% | 1606 x 1205 | Predicted |
 
@@ -33,7 +33,7 @@ laptop".
    pixels of slack to pass on a min-size recording.
 5. **The window frame changes with scale.** Left and top are 8 and 31 at 100%, 9 and 38 at 125%,
    11 and 45 at 150%, 13 and 58 at 200%. Client-space coordinates already make this irrelevant.
-6. **Even scaling gets close, not exact.** On the Surface at 125%, with size and points both
+6. **Even scaling gets close, not exact.** On Dunder-MiffLan at 125%, with size and points both
    multiplied by 1.25, every Pet Sim 99 point landed within a button's width of its target. That
    was still enough to break the one pixel-colour check. The points were then re-aimed by hand, by
    dragging a tag onto each button, and the full load-in sequence ran.
@@ -84,7 +84,7 @@ pixels of slack. `WindowArrangeService` uses a nominal 640x480 floor and says so
    an activity-log line saying so. That alone makes a miss explainable.
 3. Then scale: target client size and every point multiplied by player scale over recorded scale,
    with the size slack widened to about 6 logical pixels. This is what the converted AutoHotkey
-   script does, and it carried the Surface run apart from the one game-placed button.
+   script does, and it carried the Dunder-MiffLan run apart from the one game-placed button.
 4. Fix the refusal wording for the case where the window came out larger than requested. Name the
    display scale and Roblox's minimum size instead of a larger screen.
 5. Optionally raise the arrange floor from 640x480 to 816x638 times the scale, so GRID's overlap
@@ -95,7 +95,7 @@ pixels of slack. `WindowArrangeService` uses a nominal 640x480 floor and says so
 
 The AutoHotkey script also got a per-PC, per-scale way to re-aim a single point by dragging a named
 tag over the real window. Ur Task's closest equivalent today is re-recording the whole macro on
-that PC. Este used the tag editor on the Surface and wants the pattern in the products as an
+that PC. Este used the tag editor on Dunder-MiffLan and wants the pattern in the products as an
 enhancement. See the backlog entry "Expose and drag a macro's click points".
 
 ## Ur OCR
@@ -150,12 +150,13 @@ per machine, and flags stale regions when the display changes.
 
 ## How to test this class of thing
 
-- The Surface at 125% is the rig for anything other than 100%. Both monitors on the main PC are at
+- Dunder-MiffLan, switched to 125%, is the rig for anything other than 100%. Both monitors on
+  Nebuchadnezzar, the main PC, are at
   100%, which is why none of this showed up locally.
 - A stand-in window is only faithful if it has Roblox's minimum size. In AutoHotkey,
   `Gui("+Resize +MinSize800x599")` reproduces the clamp exactly. A C# test needs a fake
   `IWindowMetrics` that clamps the same way. The first AutoHotkey harness used an unconstrained
-  window, passed, and the script then refused on the Surface.
+  window, passed, and the script then refused on Dunder-MiffLan.
 - Run test harnesses hidden on the main PC. Live Roblox sessions and screen-recording plugins run
   there. Generate a copy of the script with its windows hidden and its hotkeys stripped, and never
   touch a real Roblox window, the mouse, or the clipboard.

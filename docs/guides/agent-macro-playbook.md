@@ -156,8 +156,9 @@ scale is a support thread that answers itself.
 **Keep a second way back in.** When a VIP link only opens a captcha, follow a friend who is still in
 the server. With RoRoRo as the relauncher, each account comes back with its own login.
 
-**Test at 125% before sharing.** Both main monitors run at 100%, where everything works. The
-Surface at 3840x2160 and 125% is the rig that finds what the clan's laptops will find.
+**Test at 125% before sharing.** Both of Nebuchadnezzar's monitors run at 100%, where everything
+works. Dunder-MiffLan, a 3840x2160 display switched to 125%, is the rig that finds what the clan's
+laptops will find. Check its scale before a test; it is not always left at 125%.
 
 ## Adding a tip
 
