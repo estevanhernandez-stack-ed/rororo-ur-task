@@ -101,6 +101,21 @@ today any other tool's injected input lands in a recording as though the user ha
 
 **Engine shipped in 0.9.0** (point steps, checks, first match, GetPlayback). The overlay is plan 2.
 
+Found in the 0.9.0 live pass, 2026-09-27. All are small, and none blocked the release:
+
+- **The stop sentence is not in the log.** A failed check's sentence reaches Ur MCP only through
+  `GetPlayback`. `ur-task.log` shows the playback start and nothing after it, and it never recorded
+  a normal finish either. Log the sentence, and log a finish line.
+- **The colour namer calls the Auto Mine red "pink".** #FF135A is the red dot, and the sentence read
+  "expected pink #FF135A". Widen the red hue band or name by nearest swatch.
+- **The stop hotkey's Ctrl leaks into recordings.** Ctrl+Shift+R to stop recording left a Ctrl
+  down and up at the end of the steps. It is harmless as a tap, but the tail trim should drop the
+  hotkey's own keys even when they come as a complete pair.
+- **Plan 2 inherits:**
+  - `PointAdjustmentStore` should skip null sub-dictionaries in `Refresh`. That fixes both the
+    repeated log line in `Get` and a throw in `Set`.
+  - The overlay should read a key's held time as the time from its down to its up.
+
 One button exposes every click point as a named tag over the real window, and dragging a tag
 re-aims that point. Este's words: "the click to expose and drag to move is helpful."
 
