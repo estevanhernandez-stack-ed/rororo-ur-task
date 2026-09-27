@@ -161,6 +161,29 @@ per machine, and flags stale regions when the display changes.
   there. Generate a copy of the script with its windows hidden and its hotkeys stripped, and never
   touch a real Roblox window, the mouse, or the clipboard.
 
+## 2026-09 point macros at 125%
+
+Live pass for Ur Task 0.9.0 on Dunder-MiffLan, 2026-09-27. Four accounts were in the Space Mine
+private server. Every macro was recorded or authored at 100%, and the machine was switched to 125%
+between runs.
+
+| Macro | At 125% | What happened |
+| --- | --- | --- |
+| "top/automine", a real recording converted to 3 points | CElCPapa | Windows had already resized the clients to about 1002x751. Ur Task logged "Display scale differs: recorded at 100%, playing at 125% — scaling to 1000x749" and "windowed-fit ok: 1000x749". Go to Top and the pickaxe both landed, and Auto Mine came on. |
+| First match over the eight Teleport tiles, started inside a mine | estehernandez, ItsJustEstePapa | Both sized to 1000x749. The robot button landed. The colour checks read the scaled tiles at the 100% samples (green 98,240,2 and grey 152,155,174) and chose #8 and #6, each account's best unlocked mine. |
+
+- **Scaling the points in proportion was enough.** The robot button, all eight tiles and the pickaxe
+  landed with no per-scale adjustment. Inside the mines, then, the UI scales evenly. The up-and-left
+  shift in the table above was measured on the spawn-world left column, which reflows, and this pass
+  did not test it.
+- **Colours hold across scale.** Box averages taken at 100% matched at 125% within the default
+  tolerance of 15.
+- **The focus guard earned its keep.** One run started while another account's Roblox window was
+  opening. That window took the foreground at step 3, and the run stopped with "Foreground shifted
+  away from CElCPapa at step 3/5". Nothing was sent to the wrong window.
+- **The first try after switching scale was refused** with "Couldn't focus CElCPapa". That refusal
+  comes from the existing pre-flight check, not the step runner. A retry a minute later worked.
+
 ## Open questions
 
 - Is the 125% shift in the table above the same on every 125% PC? One PC is one data point. If a
