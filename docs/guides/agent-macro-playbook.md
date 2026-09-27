@@ -119,6 +119,29 @@ minute. The Mining League a week later scores ore rarity, so that same loop scor
 - Consumables that move or clear rock in a fixed way, like a charge that bores twenty layers down,
   are buttons in the "buttons are best" sense. Use them where the clan uses them.
 
+**Move with the arrow keys while automine is on.** In Pet Sim 99, Up and Down arrows walk the
+character and Left and Right turn the camera. W and S also walk, but they switch Auto Mine off; the
+arrows do not. So a macro can reposition mid-mine without touching the automine toggle, which is
+the click most likely to misfire. (Este, 2026-09-27.)
+
+- Use Up and Down for any step taken while mining. Keep W, A, S, D for steps where automine is
+  already off.
+- Left and Right turn the camera on the level, so they are safe for "face the other way" and cannot
+  tilt the view by accident.
+
+**Drive the camera to its limit, then count back.** The camera's starting state is unknown, but its
+limits are fixed. Roblox stops tilting at its lowest angle and stops zooming at its closest and
+furthest, so pushing past a limit just pins it there. A known view comes from overshooting to the
+limit, not from reproducing a recorded amount. Older clan macros got a reliable top-down view in
+third person this way. (Este and the session, 2026-09-27.)
+
+- Top-down: hold the right mouse button, drag well past what the tilt needs, release. The view
+  pins at Roblox's steepest angle, which is close to straight down but not quite.
+- Zoom: hold O until fully out, then press I a counted number of times. Or hold I into first
+  person, the other fixed end.
+- Make the camera part of the starting state, next to the transport button, so every run begins
+  from the same view.
+
 ## Learned building the disconnect script, September 2026
 
 **Size the game picture, not the window, and multiply by the display scale.** Points measured from

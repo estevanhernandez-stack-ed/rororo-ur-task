@@ -54,6 +54,31 @@ one-click action a macro can rely on.
   Tier II.
 - **Pets** raise pickaxe damage. Ore eggs, one per mine, hatch with Space Coins.
 
+## UI map, measured 2026-09-27
+
+Game-area pixels on an 800x599 client at 100% display scale. Measured with `tools/grid-capture.ps1`
+on four accounts.
+
+- **The left button column is not fixed.** It reflows around the icons an account has, so the same
+  button sits in a different place per account. The blue crystal was at about (40, 365) on
+  estehernandez and (100, 305) on CElCPapa. Anything opened from that column needs a moveable
+  point or an image search, never a fixed click.
+- **Go to Top** is fixed, top centre, about (400, 50).
+- **Teleport window** (opened from the left column) is fixed on every account. Tiles run #1 to #4
+  along the top at y about 230, x about 137, 312, 485, 660, then #5 to #8 back along the bottom at
+  y about 390, x 660, 485, 312, 137. Close X about (750, 112). **An unlocked mine's tile is green
+  with its name; a locked one is grey with "???".** Read the tile colour to find an account's best
+  mine.
+- **Hatch Settings** (the green circling-arrows button in the left column). Auto Hatch toggle: on
+  shows green "On" on the right at about (555, 193); off shows red "Off" on the left at about
+  (490, 190). Charged Eggs is the row below in the same green, so keep a sample box inside the Auto
+  Hatch row.
+- **Egg buy dialog** (press E at the egg): "Would you like to Auto Hatch" with Buy 1, Buy N, Buy M
+  at about (248, 430), (400, 430), (548, 430). The numbers change per account; the positions and the
+  green do not.
+- **Movement keys:** Up and Down arrows walk without stopping Auto Mine; W and S stop it. Left and
+  Right arrows turn the camera.
+
 ## What this means for the macros
 
 - **Week 1 shape.** Transport to the bottom layer, or Core Charge down, then bombs and automine.
