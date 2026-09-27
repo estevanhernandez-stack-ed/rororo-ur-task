@@ -30,3 +30,4 @@ If Part A passes, the pipeline is proven; only event-specific values remain.
   the **active** alt; the macro's `targets` decide which alts get the action.
 - Coordinates are screen-absolute in v1. Moving the window breaks both detection
   and clicks. Window-anchored coordinates are a phase-2 upgrade.
+- Authoring rules that apply to every macro and trigger (buttons over movement, hotbars over clicks, and what the September 2026 sessions taught) are collected in `agent-macro-playbook.md`. Read it before building the recovery macro.
