@@ -53,7 +53,7 @@ builds the week's Ur OCR trigger and Ur Task macro from "here's the event", read
 - **The handout for AutoHotkey authors** is also a private claude.ai artifact (Este owns it; find
   it in the artifact gallery under "Any-Screen AHK Macros").
 
-## What to test next, on the Surface (3840x2160 at 125%)
+## What to test next, on Dunder-MiffLan (3840x2160, switch it to 125% first)
 
 1. **RoRoRo as the relauncher.** RoRoRo running with Ur MCP installed there. In the AHK script,
    type the account's RoRoRo name, pick "RoRoRo: relaunch account", press F10. First real launch
@@ -96,7 +96,7 @@ pinned first person, zoomed in, looking down, so the block under the character i
 ## Open questions
 
 - Which PS99 button moved at 125%, and is it the same on every 125% PC? Este's `[Points@125]`
-  section of `AutominingDisconnect.ini` on the Surface holds the numbers; two left-column points
+  section of `AutominingDisconnect.ini` on Dunder-MiffLan holds the numbers; two left-column points
   moved about 8 left and 16 up, the first 5th-mine click 40 up.
 - Do the cracks show on darker rock, and does the star texture animate while standing still?
 - Points per ore and block health per layer for the league week. Only play tells.

@@ -83,7 +83,7 @@ points were really calibrated on. Roblox scales that minimum with the display sc
 | Windows scale | Smallest Roblox game picture | How we know |
 | --- | --- | --- |
 | 100% | 800 x 599 | Measured, 56 log entries on a 100% PC |
-| 125% | 1002 x 750 | Measured on a Surface at 3840x2160, 125% |
+| 125% | 1002 x 750 | Measured on Dunder-MiffLan, 3840x2160 at 125% |
 | 150% | 1202 x 901 | Predicted from the two above |
 | 200% | 1606 x 1205 | Predicted from the two above |
 
@@ -91,12 +91,12 @@ points were really calibrated on. Roblox scales that minimum with the display sc
 scale setting. Roblox staff confirmed this on the developer forum in March 2026. On a 125% PC every
 button is 1.25x as big and 1.25x as far from the corner.
 
-**What that adds up to on a real PC: a 3840x2160 Surface.** This is the PC the converted script was
+**What that adds up to on a real PC: Dunder-MiffLan, a 3840x2160 desktop.** This is the PC the converted script was
 tested on. It runs at 3840x2160 with Windows set to 125%. Here is your original script on your PC,
-next to the same script on that Surface. The window and frame sizes were measured there. Where the
+next to the same script on Dunder-MiffLan. The window and frame sizes were measured there. Where the
 original's points land is worked out from them.
 
-| | Your PC, 100% | The Surface, 3840x2160 at 125% |
+| | Your PC, 100% | Dunder-MiffLan, 3840x2160 at 125% |
 | --- | --- | --- |
 | Window Roblox gives an 800x600 request | 816 x 638 | 1020 x 797 |
 | Game picture inside it | 800 x 599 | 1002 x 750 |
@@ -105,13 +105,13 @@ original's points land is worked out from them.
 | What the loaded check "53, 245" reads | The orange of the gift icon | A spot about 43 px above the orange, so it never sees it |
 | What the user sees | It works | Stuck on "Waiting for player to load in". The clicks never happen, and a reconnect relaunches Roblox over and over |
 
-That matches what happened. On that Surface the original did not work with the screen at its full
+That matches what happened. On Dunder-MiffLan the original did not work with the screen at its full
 3840x2160. It worked once the screen was dropped to 1920x1080. An experienced user reaches for that
 fix without thinking. A lot of users will not get that far. They will assume the macro does not
 work and message you about it. The fix most likely works because Windows changes the scale along
 with the resolution.
 
-The converted script on that Surface asks for a 1000 x 749 game picture, accepts the 1002 x 750
+The converted script on Dunder-MiffLan asks for a 1000 x 749 game picture, accepts the 1002 x 750
 Roblox allows, and aims at 58, 501 for the Mine world button. Every point landed within a button's
 width. The five points were nudged into place by dragging tags, and the load-in sequence ran through.
 
@@ -370,9 +370,9 @@ that account's job.
 Measured on real Roblox windows:
 
 - At 100% scale the game picture at Roblox's minimum is 800 x 599.
-- At 125% scale on a 3840x2160 Surface it is 1002 x 750. An early version of the script wanted
+- At 125% scale on Dunder-MiffLan, 3840x2160, it is 1002 x 750. An early version of the script wanted
   980 x 701 there and correctly refused. That refusal is how the minimum-size rule was found.
-- On that Surface the corrected script sized the window, and the in-game points sat within a
+- On Dunder-MiffLan the corrected script sized the window, and the in-game points sat within a
   button's width of their predicted spots. One of them, the loaded check, had slipped just off the
   orange it looks for, which would have looped the reconnect.
 - All five points were then re-aimed by dragging tags over the real Roblox window, and the load-in
@@ -382,7 +382,7 @@ Checked by 66 automated tests against a stand-in window given Roblox's minimum s
 
 - Asking for an 800x600 window yields 816x638 with an 800 x 599 game picture, as Roblox does.
 - The converted points hit the same screen pixels as the original points at 100%.
-- The 125% Surface case is accepted, and points scale by 1.25.
+- The 125% Dunder-MiffLan case is accepted, and points scale by 1.25.
 - A minimum far above the wanted size is refused rather than faked.
 - A moved point is saved for its scale only, lands back on the dropped pixel, shows its original
   in the list, and restores. A drop outside the game picture is rejected.

@@ -136,7 +136,7 @@ laptops at 125% or 150%, which is most of them
 Window-relative macros reproduce the recorded **physical** client size. Roblox lays its UI out in
 logical units, physical divided by display scale, so a macro recorded at 100% and played at 125%
 gets the right window and the wrong layout, with no warning. Both dev-PC monitors are at 100%, so
-it never showed up here. The Surface at 125% is the rig that does show it.
+it never showed up here. Dunder-MiffLan at 125% is the rig that does show it.
 
 Two related facts came out of the same work. Roblox's minimum window is 816x638 times the display
 scale, which is an 800x599 client at 100%, and recordings at exactly that size are common in the
