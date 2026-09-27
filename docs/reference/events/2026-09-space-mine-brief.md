@@ -78,6 +78,32 @@ on four accounts.
   green do not.
 - **Movement keys:** Up and Down arrows walk without stopping Auto Mine; W and S stop it. Left and
   Right arrows turn the camera.
+- **Inside the mines the left column is the same on every account.** It only reflowed in the
+  spawn world. The Auto Mine button (pickaxe) is at about (40, 300); its corner dot at about
+  (55, 288) is **red when Auto Mine is off and green when on.** Check the dot before pressing.
+- **The route from spawn:** "Space Mine!" in the left column, then the robot Teleport button
+  (about 100, 172 on the main), then the tile. Give the Teleport window time to finish opening:
+  a tile click 2.5 s after it appears missed on slower alts.
+- **Auto Mine digs straight down and returns to the top by itself at the bottom.** Go to Top is
+  the manual version. Without enchants it misses ore to the sides.
+
+## Recovering after a network drop, 2026-09-27
+
+Two drops, four accounts, recovered through Ur MCP.
+
+- **Clients that die** leave a `--launch-to-tray` Roblox process behind; harmless. Relaunch the
+  main into the private server, have the alts follow it, then route each to its best mine.
+- **Clients that survive** sit on Roblox's "Disconnected (Error 277)" dialog. Reconnect, at about
+  (493, 388), rejoins faster than a relaunch.
+- **Reconnect can meet a captcha** ("Verifying you're not a bot"). Never touch it. Closing that
+  client and having it follow the main got straight in, once. One data point, not proof.
+- **Windows reopen stacked.** Arrange them before reading anything off the screen.
+
+## The goal for the league week (Este, 2026-09-27)
+
+Auto Mine as travel, ore as the score. Ur OCR spots ore, the macro stops Auto Mine, mines every
+ore block it can reach from there, then turns Auto Mine back on. That is the stop-for-gem flow
+widened to the whole vein.
 
 ## What this means for the macros
 
