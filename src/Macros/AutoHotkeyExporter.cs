@@ -40,7 +40,7 @@ public static class AutoHotkeyExporter
 
     private static void AppendHeader(StringBuilder sb, Macro macro)
     {
-        var name = (macro.Name ?? "(unnamed)").Replace("\r", "").Replace("\n", " ");
+        var name = SanitizeComment(macro.Name ?? "(unnamed)");
         sb.Append($"; Exported from RoRoRo Ur Task — macro \"{name}\"").Append(Nl);
         sb.Append("; Best-effort port — original event timing is preserved via Sleep calls.").Append(Nl);
         sb.Append("; Caveats: plays on the ACTIVE window only (no per-window targeting); can't").Append(Nl);
@@ -196,12 +196,17 @@ public static class AutoHotkeyExporter
                     break;
                 case PointStep p:
                     if (p.CheckEnabled && p.Check is { } c)
-                        sb.Append($"; check: '{p.Label ?? p.Id}' expects {c.Expect.Hex} here (Ur Task only)").Append(Nl);
+                        sb.Append($"; check: '{SanitizeComment(p.Label ?? p.Id)}' expects {c.Expect.Hex} here (Ur Task only)").Append(Nl);
                     sb.Append(ClickAt(p.X, p.Y, p.Button, version)).Append(Nl);
                     break;
                 case FirstMatchStep f:
+                    if (f.Candidates is not { Count: > 0 })
+                    {
+                        sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}' has no candidates — nothing exported here").Append(Nl);
+                        break;
+                    }
                     var first = f.Candidates[0];
-                    sb.Append($"; first match '{f.Label ?? f.Id}': Ur Task presses the first candidate whose colour matches; exported as '{first.Label ?? first.Id}'").Append(Nl);
+                    sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}': Ur Task presses the first candidate whose colour matches; exported as '{SanitizeComment(first.Label ?? first.Id)}'").Append(Nl);
                     sb.Append(ClickAt(first.X, first.Y, first.Button, version)).Append(Nl);
                     break;
                 case DragStep d:
@@ -230,6 +235,11 @@ public static class AutoHotkeyExporter
             }
         }
     }
+
+    /// <summary>Strips CR/LF from label text before it lands in a `;` comment line — a raw
+    /// newline would push the rest of the label past the comment onto its own, uncommented
+    /// line. Same treatment <see cref="AppendHeader"/> gives the macro name.</summary>
+    private static string SanitizeComment(string s) => s.Replace("\r", "").Replace("\n", " ");
 
     private static string Sleep(long ms, AhkVersion version)
         => version == AhkVersion.V1 ? FormattableString.Invariant($"Sleep, {ms}") : FormattableString.Invariant($"Sleep {ms}");
