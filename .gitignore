@@ -50,3 +50,6 @@ secrets/
 # fails outright when a running RoRoRo holds its own DLLs. Build the .csproj directly. Same trap
 # the host repo documents for its own legacy .sln.
 rororo-ur-task.sln
+
+# Raw PS99 devblog text kept for local reference: third-party writing, not published from this repo
+docs/reference/events/raw/
