@@ -615,12 +615,18 @@ internal sealed class MacroPlayer : IMacroPlayer
 
 public enum PlaybackOutcome { Refused, Completed, Aborted, Skipped }
 
-public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
+public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int? StepIndex = null)
 {
     public static PlaybackResult Refused(string reason) => new(PlaybackOutcome.Refused, reason);
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
+
+    /// <summary>Stopped by a check: a colour that never showed, a window it could not see, or a
+    /// box outside the window. Only check failures carry a StepIndex (0-based), so GetPlayback's
+    /// failed/check-failed always means a check. Foreground loss and cancellation use
+    /// <see cref="Aborted"/> without an index.</summary>
+    public static PlaybackResult AbortedAt(string reason, int stepIndex) => new(PlaybackOutcome.Aborted, reason, stepIndex);
 }
 
 internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo? BoundAccount, long TargetUserId);
