@@ -25,7 +25,8 @@ public sealed record SequenceProgress(
 public sealed record AltOutcome(
     AccountRegistry.AccountInfo Alt,
     PlaybackOutcome Outcome,                     // Completed | Refused | Aborted | Skipped (sequence aborted)
-    string? Reason);
+    string? Reason,
+    int? StepIndex = null);                      // 0-based step that stopped a v4 macro
 
 public sealed record SequenceResult(
     IReadOnlyList<AltOutcome> PerAlt,
