@@ -55,4 +55,23 @@ public class AutoHotkeyStepExportTests
         var v3 = M() with { Steps = null, Events = new[] { new MacroEvent(0, MacroEventKind.MouseDown, 0, 1, 2, 1, 0) } };
         Assert.Contains("Click, 1, 2, Left, , D", AutoHotkeyExporter.Export(v3, AhkVersion.V1));
     }
+
+    [Fact]
+    public void FirstMatch_with_no_candidates_does_not_throw_and_notes_it()
+    {
+        var text = AutoHotkeyExporter.Export(
+            M(new FirstMatchStep(0, "f0", "Empty pick", Array.Empty<PointStep>())), AhkVersion.V1);
+        Assert.Contains("; first match 'Empty pick' has no candidates", text);
+    }
+
+    [Fact]
+    public void Labels_with_newlines_are_sanitised_in_comments()
+    {
+        var text = AutoHotkeyExporter.Export(M(
+            new PointStep(0, "p1", "Bad\r\nLabel", 1, 2, Check: Green, CheckEnabled: true),
+            new FirstMatchStep(0, "f1", "Multi\nLine", new[] { new PointStep(0, "t1", "Cand\nLabel", 3, 4, Check: Green) })),
+            AhkVersion.V1);
+        Assert.Contains("; check: 'Bad Label' expects #8BE03A here (Ur Task only)", text);
+        Assert.Contains("; first match 'Multi Line': Ur Task presses the first candidate whose colour matches; exported as 'Cand Label'", text);
+    }
 }
