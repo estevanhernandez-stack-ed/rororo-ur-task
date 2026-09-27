@@ -28,7 +28,7 @@ public class MacroV3MigrationTests
     public void V2Macro_MigratesToV3_ScreenSpace()
     {
         var macro = MacroV1Migrator.LoadAndMigrate(V2MouseMacroJson);
-        Assert.Equal(3, macro.SchemaVersion);
+        Assert.Equal(Macro.CurrentSchemaVersion, macro.SchemaVersion);
         Assert.Equal(Macro.CoordSpaceScreen, macro.CoordSpace);
         Assert.False(macro.IsClientSpace);
         Assert.Null(macro.RecordedClientW);

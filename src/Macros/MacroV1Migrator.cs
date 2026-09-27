@@ -1,9 +1,10 @@
+using System.Linq;
 using System.Text.Json;
 
 namespace Labs626.UrTask.Macros;
 
 /// <summary>
-/// Pure migration function: reads any-version macro JSON and returns a v3 Macro.
+/// Pure migration function: reads any-version macro JSON and returns a current-schema Macro.
 /// v1 macros (SchemaVersion = 1) get their Bound* fields mapped to
 /// RecordedAgainst* metadata and RecordMode defaulted to "PerWindow".
 /// v2 macros are upgraded to v3.
@@ -14,11 +15,12 @@ public static class MacroV1Migrator
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        AllowOutOfOrderMetadataProperties = true,
     };
 
     /// <summary>
-    /// Parse macro JSON and return it as v3. The migration is sticky — re-save
-    /// the returned Macro and the on-disk file persists in v3 shape.
+    /// Parse macro JSON and return it as the current schema. The migration is sticky — re-save
+    /// the returned Macro and the on-disk file persists in current shape.
     /// </summary>
     public static Macro LoadAndMigrate(string json)
     {
@@ -44,6 +46,7 @@ public static class MacroV1Migrator
                 // NREs on that null instead of degrading to an empty (harmless,
                 // zero-event) macro.
                 Events = SanitizeTimestamps(m.Events ?? []),
+                Steps = m.Steps is null ? null : SanitizeSteps(m.Steps),
             };
         }
 
@@ -103,4 +106,9 @@ public static class MacroV1Migrator
         }
         return sanitized;
     }
+
+    /// <summary>Same defence as SanitizeTimestamps for v4 steps: a hand-edited negative delay
+    /// becomes 0 rather than reaching Task.Delay.</summary>
+    private static IReadOnlyList<Steps.MacroStep> SanitizeSteps(IReadOnlyList<Steps.MacroStep> steps)
+        => steps.Select(s => s.DelayMs < 0 ? s with { DelayMs = 0 } : s).ToList();
 }

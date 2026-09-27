@@ -1,0 +1,241 @@
+using System.IO;
+using Labs626.UrTask.Macros;
+using Labs626.UrTask.Macros.Steps;
+
+namespace Labs626.UrTask.Tests.Steps;
+
+public class MacroV4FileTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "urtask-v4-" + Guid.NewGuid().ToString("N"));
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    private static Macro Sample() => new(
+        SchemaVersion: Macro.CurrentSchemaVersion,
+        Id: Guid.NewGuid().ToString(),
+        Name: "v4 sample",
+        RecordMode: "PerWindow",
+        RecordedAgainstUserId: 1,
+        RecordedAgainstDisplayName: "fixture",
+        InterAltDelayMs: null,
+        RecordedAtUnixMs: 1,
+        Events: new[] { new MacroEvent(10, MacroEventKind.MouseDown, 0, 5, 6, 1, 0), new MacroEvent(90, MacroEventKind.MouseUp, 0, 5, 6, 1, 0) },
+        CoordSpace: Macro.CoordSpaceClient,
+        RecordedClientW: 800,
+        RecordedClientH: 599,
+        RecordedDisplayScale: 100,
+        Steps: new MacroStep[]
+        {
+            new KeyStep(0, 0x41, true),
+            new PointStep(1500, "p1", "Teleport opener", 42, 398,
+                Check: new ColorCheck(new CheckBox(), new Rgb(139, 224, 58), new Rgb(128, 128, 128)), CheckEnabled: true),
+            new FirstMatchStep(400, "f1", "Best mine", new[]
+            {
+                new PointStep(0, "f1a", "#8", 137, 390, Check: new ColorCheck(new CheckBox(), new Rgb(139, 224, 58), new Rgb(150, 150, 160))),
+                new PointStep(0, "f1b", "#7", 312, 390, Check: new ColorCheck(new CheckBox(), new Rgb(139, 224, 58), new Rgb(150, 150, 160))),
+            }, NoMatchAction.Skip),
+            new DragStep(0, 2, 400, 300, 0, 300, 400),
+            new WheelStep(0, 400, 300, -120),
+            new PointerMoveStep(0, 0, 200, 300),
+            new WaitStep(250),
+            new RawStep(0, new[] { new MacroEvent(0, MacroEventKind.MouseDown, 0, 1, 1, 1, 0) }, "test"),
+        });
+
+    [Fact]
+    public void Round_trips_every_step_kind_through_the_store()
+    {
+        var store = new MacroStore(_dir);
+        var m = Sample();
+        store.Save(m);
+        var loaded = Assert.Single(store.LoadAll().Macros);
+        Assert.Equal(4, loaded.SchemaVersion);
+        Assert.Equal(100, loaded.RecordedDisplayScale);
+        Assert.Equal(m.Steps!.Count, loaded.Steps!.Count);
+        var p = Assert.IsType<PointStep>(loaded.Steps[1]);
+        Assert.Equal("Teleport opener", p.Label);
+        Assert.True(p.CheckEnabled);
+        Assert.Equal(new Rgb(128, 128, 128), p.Check!.Other);
+        var fm = Assert.IsType<FirstMatchStep>(loaded.Steps[2]);
+        Assert.Equal(NoMatchAction.Skip, fm.OnNoMatch);
+        Assert.Equal(2, fm.Candidates.Count);
+        Assert.IsType<RawStep>(loaded.Steps[^1]);
+    }
+
+    [Fact]
+    public void V4_file_still_carries_the_original_events()
+    {
+        var store = new MacroStore(_dir);
+        var m = Sample();
+        store.Save(m);
+        var json = File.ReadAllText(Path.Combine(_dir, m.Id + ".json"));
+        Assert.Contains("\"events\"", json);
+        Assert.Contains("\"steps\"", json);
+        Assert.Contains("\"kind\": \"point\"", json);
+        Assert.Contains("\"onNoMatch\": \"skip\"", json); // spec casing, not the C# member name
+    }
+
+    [Fact]
+    public void A_check_without_a_box_loads_and_is_refused_with_a_sentence()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "point", "delayMs": 0, "id": "p1", "x": 10, "y": 20, "checkEnabled": true,
+                       "check": { "expect": { "r": 1, "g": 2, "b": 3 } } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal("Step 1 'p1' has a check with no box.", StepValidator.Validate(m.Steps!));
+    }
+
+    [Fact]
+    public void A_check_without_an_expected_colour_is_a_listed_failure()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "point", "delayMs": 0, "id": "p1", "x": 10, "y": 20,
+                       "check": { "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 } } } ] }
+        """);
+        var result = new MacroStore(_dir).LoadAll();
+        Assert.Empty(result.Macros);
+        Assert.Contains(result.Failures, f => f.Path.EndsWith(id + ".json") && f.Reason.Contains("expect"));
+    }
+
+    [Fact]
+    public void V3_file_loads_with_no_steps()
+    {
+        var store = new MacroStore(_dir);
+        var v3 = Sample() with { Steps = null, RecordedDisplayScale = null };
+        store.Save(v3);
+        var loaded = Assert.Single(store.LoadAll().Macros);
+        Assert.False(loaded.HasSteps);
+    }
+
+    [Fact]
+    public void Kind_does_not_have_to_come_first()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "name": "agent written", "recordedAtUnixMs": 1,
+          "events": [], "coordSpace": "client", "recordedClientW": 800, "recordedClientH": 599,
+          "steps": [ { "delayMs": 0, "id": "p1", "x": 10, "y": 20, "kind": "point" } ] }
+        """);
+        var result = new MacroStore(_dir).LoadAll();
+        Assert.Empty(result.Failures);
+        Assert.IsType<PointStep>(Assert.Single(result.Macros).Steps![0]);
+    }
+
+    [Fact]
+    public void Unknown_kind_is_a_listed_failure_not_a_crash()
+    {
+        var store = new MacroStore(_dir);
+        store.Save(Sample());
+        var bad = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, bad + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{bad}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "teleport", "delayMs": 0 } ] }
+        """);
+        var result = store.LoadAll();
+        Assert.Single(result.Macros);
+        Assert.Contains(result.Failures, f => f.Path.EndsWith(bad + ".json"));
+    }
+
+    [Fact]
+    public void Negative_delays_are_clamped_on_load()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "wait", "delayMs": -500 } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal(0, m.Steps![0].DelayMs);
+    }
+
+    [Fact]
+    public void Bundle_import_keeps_steps()
+    {
+        var json = MacroBundle.Serialize(new[] { Sample() }, 1);
+        var parsed = Assert.Single(MacroBundle.Parse(json).Macros);
+        var imported = MacroBundle.PrepareForImport(parsed, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        Assert.True(imported.HasSteps);
+        Assert.Equal(Macro.CurrentSchemaVersion, imported.SchemaVersion);
+    }
+
+    [Fact]
+    public void Validator_accepts_a_good_list() => Assert.Null(StepValidator.Validate(Sample().Steps!));
+
+    [Fact]
+    public void Validator_refuses_first_match_without_candidates()
+    {
+        var err = StepValidator.Validate(new MacroStep[] { new FirstMatchStep(0, "f1", "Best mine", Array.Empty<PointStep>()) });
+        Assert.Equal("Step 1 'Best mine' is a first match with no candidates.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_a_candidate_without_a_check()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "f1a", "#8", 1, 1) }),
+        });
+        Assert.Equal("Step 1 'Best mine': candidate '#8' has no colour to check.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_an_enabled_check_with_no_sample()
+    {
+        var err = StepValidator.Validate(new MacroStep[] { new PointStep(0, "p1", null, 1, 1, CheckEnabled: true) });
+        Assert.Equal("Step 1 'p1' has its check on but no colour sample.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_duplicate_point_ids()
+    {
+        var err = StepValidator.Validate(new MacroStep[] { new PointStep(0, "p1", null, 1, 1), new PointStep(0, "p1", null, 2, 2) });
+        Assert.Equal("Step 2 reuses point id 'p1'.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_an_oversized_box()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new PointStep(0, "p1", "Big", 1, 1, Check: new ColorCheck(new CheckBox(0, 0, 12, 12), new Rgb(0, 0, 0)), CheckEnabled: true),
+        });
+        Assert.Equal("Step 1 'Big' has a check box larger than 9x9.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_an_empty_box()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new PointStep(0, "p1", "Flat", 1, 1, Check: new ColorCheck(new CheckBox(0, 0, 0, 5), new Rgb(0, 0, 0)), CheckEnabled: true),
+        });
+        Assert.Equal("Step 1 'Flat' has an empty check box.", err);
+    }
+
+    [Fact]
+    public void Validator_refuses_a_point_with_no_id()
+    {
+        Assert.Equal("Step 1 has no point id.", StepValidator.Validate(new MacroStep[] { new PointStep(0, null!, null, 1, 1) }));
+        Assert.Equal("Step 1 'Best mine': a candidate has no point id.", StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, " ", "#8", 1, 1, Check: new ColorCheck(new CheckBox(), new Rgb(0, 0, 0))) }),
+        }));
+    }
+
+    [Fact]
+    public void Validator_refuses_a_candidate_check_with_no_box()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "f1a", "#8", 1, 1, Check: new ColorCheck(null!, new Rgb(0, 0, 0))) }),
+        });
+        Assert.Equal("Step 1 'Best mine': candidate '#8' has a check with no box.", err);
+    }
+}
