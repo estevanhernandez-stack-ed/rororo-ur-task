@@ -106,8 +106,10 @@ Runs when a recording is saved, and on "Convert to points" for an existing macro
   *Amended 2026-09-27, from 4 px:* the real "Mining Z8 Egg" recording has a click whose down
   (578, 420) and up (581, 426) are 6 px apart. At 4 px that click became a drag.
 - A down and up **far apart** becomes a `Drag`. A right-button drag is a camera turn, so it keeps
-  its direction and a distance with margin added, so that playback overshoots to the camera limit
-  (playbook: "Drive the camera to its limit, then count back").
+  its direction and adds margin to its vertical distance only, so that playback overshoots to the
+  camera's pitch limit (playbook: "Drive the camera to its limit, then count back").
+  *Amended 2026-09-27:* the margin is on the vertical component only. Yaw has no limit, so
+  overshooting it changes the heading, and in a walk macro the direction the character walks.
 - Moves while the pointer is locked become `PointerMove`.
 - The wheel becomes `Wheel`. Keys become `Key` with their real held duration; auto-repeat downs
   collapse. The egg recording's ninety repeated A downs are one A held for about 3 s.
