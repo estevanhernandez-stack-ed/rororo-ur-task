@@ -1,6 +1,6 @@
 # Point clicks and colour checks — design
 
-**Date:** 2026-09-27 · **Status:** design approved in conversation, spec awaiting review
+**Date:** 2026-09-27 · **Status:** spec approved by Este, 2026-09-27
 **Raised by:** Este, while building Space Mine macros on Dunder-MiffLan
 **Backlog entry:** "Expose and drag a macro's click points" (`docs/BACKLOG.md`)
 **Dashboard decision:** V0wW67imzbu077AQM0Ds
@@ -228,6 +228,28 @@ holds a lock while open; a write during that is refused with "Points overlay ope
 - **Bridge:** `GetPlayback` states and retention; existing replies unchanged byte for byte.
 - **Live pass on Dunder-MiffLan**, at 100% and then at 125%. This also answers test 4 of the
   2026-09-27 handoff.
+
+## Seen live, 2026-09-27
+
+Two network drops on Dunder-MiffLan, recovered through Ur MCP with four accounts, confirmed each
+part of this design against the real game:
+
+- **First match.** The four accounts had three different best mines (#8, #7, #6). Without the
+  step it took two hand-made macro copies and reading screenshots.
+- **Wait for the colour.** In the recorded route the tile click comes 2.5 s after the Teleport
+  window opens. Fast enough on the main, too early on slower alts, which clicked a window still
+  sliding in and stayed put.
+- **A toggle with a visible state.** The Auto Mine button's corner dot is red when off and green
+  when on, at about (55, 288) on every account. A check on it makes the toggle safe to press.
+- **`GetPlayback`.** Ur Task logs a playback's start and its refusals but not a clean finish, so
+  the only signal was the next account starting.
+- **Windows reopen stacked after a relaunch.** Playback still works, because the target is
+  brought to the front, but any check or capture sees only the top window. Checks bring the target
+  to the front first (section 2).
+
+Recovery itself (noticing the drop, pressing Roblox's Reconnect, falling back to following the
+main when Reconnect meets a captcha, arranging windows) is outside this spec. It is the "Ur Reset"
+idea in `docs/display-scale-findings.md` and gets its own spec.
 
 ## Out of scope
 
