@@ -118,9 +118,36 @@ Rules the AutoHotkey version already proved, worth keeping as they are:
   and the adjustments are a small thing a user can send back.
 - Tags are refused during playback, because a tag on a click point swallows the click.
 
-Open design question: a recorded click is a down and up pair plus the mouse moves that lead into
-it, so moving a click has to carry those moves with it. Recorded macros also have no names, so a
-tag would show a number and a timestamp, with an optional label the user types.
+~~Open design question: a recorded click is a down and up pair plus the mouse moves that lead into
+it, so moving a click has to carry those moves with it.~~ **Settled by Este, 2026-09-27: the path
+does not matter, only where it clicks.** A recording collapses to point clicks, the way the
+AutoHotkey script works: each click becomes one named point plus its timing, and the mouse moves
+between clicks are dropped. Playback jumps to the point and wiggles before pressing, which is what
+the playbook already says fresh Roblox windows need. Three kinds of movement do carry meaning and
+must survive the collapse, each as its own step:
+
+- A drag: a button held down while the mouse moves, as in turning the camera with the right button
+  or dragging an item. The camera case is usually "drag past the limit", so the step can store a
+  direction and a generous distance rather than the exact path.
+- The scroll wheel.
+- Mouse movement while Roblox holds the pointer: in first person, and with shift-lock, moving the
+  mouse turns the camera and no button is down. That movement is relative, not a point on screen.
+
+Recorded macros have no names, so a point shows a number and a timestamp, with an optional label
+the user types.
+
+**Check the UI before clicking (Este, 2026-09-27).** When the UI does not match, the draggable
+point is the manual fix; a colour check is the automatic one. Sample a small box of colour around
+each point when it is recorded. At playback, compare before pressing: match, click; no match, stop
+or search nearby rather than click blind. The same check branches on game state, for instance the
+Space Mine teleport window, where an unlocked mine's tile is green and a locked one is grey with
+"???", so one macro can take every alt to its own best mine. Auto hatch is the same shape: read the
+toggle, press only if it is off.
+
+Seen live 2026-09-27: "Mine Zone 8", recorded on estehernandez, played on CElCPapa from the spawn
+world. The left-column button that opens Teleport sits in a different place per account, because
+the column reflows around which icons an account has. The Teleport window itself is identical on
+every account. Only the opener needed moving.
 
 Ur OCR's version of the same idea: expose every trigger's region as a labelled box over the alt
 window, drag to move or resize, and show the live read, colour or text, while dragging.
