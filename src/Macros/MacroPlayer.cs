@@ -91,6 +91,8 @@ internal sealed class MacroPlayer : IMacroPlayer
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
+        var ended = Stopwatch.StartNew();
+        PlaybackResult? result = null; // stays null only if something throws; the log line says so
 
         var heldKeys = new HashSet<int>();      // VK codes currently down
         var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
@@ -124,7 +126,7 @@ internal sealed class MacroPlayer : IMacroPlayer
                 var fg = _foreground.ResolveForegroundAccount();
                 if (fg is null || fg.RobloxUserId != targetUserId)
                 {
-                    return PlaybackResult.Aborted(
+                    return result = PlaybackResult.Aborted(
                         $"Foreground shifted to {(fg?.DisplayName ?? "non-RoRoRo window")} at event {i + 1}/{macro.Events.Count}.");
                 }
 
@@ -135,22 +137,23 @@ internal sealed class MacroPlayer : IMacroPlayer
                     // Client → screen at inject time: mid-playback window moves stay correct.
                     var origin = _metrics.ClientOrigin(clientHwnd);
                     if (origin is null)
-                        return PlaybackResult.Aborted($"Target window vanished at event {i + 1}/{macro.Events.Count}.");
+                        return result = PlaybackResult.Aborted($"Target window vanished at event {i + 1}/{macro.Events.Count}.");
                     var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
                     toSend = evt with { X = sx, Y = sy };
                 }
                 SendMacroEvent(toSend);
                 TrackHeldState(toSend, heldKeys, heldButtons);
             }
-            return PlaybackResult.Completed();
+            return result = PlaybackResult.Completed();
         }
         catch (OperationCanceledException)
         {
-            return PlaybackResult.Aborted("Playback cancelled.");
+            return result = PlaybackResult.Aborted("Playback cancelled.");
         }
         finally
         {
             ReleaseHeldState(heldKeys, heldButtons);
+            Diagnostics.DiagLog.Write(PlaybackEndLog.Line(macro.Name, preflight.DisplayName, result, ended.Elapsed));
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -169,6 +172,8 @@ internal sealed class MacroPlayer : IMacroPlayer
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, BoundAccount: null, TargetUserId: 0));
+        var ended = Stopwatch.StartNew();
+        PlaybackResult? result = null;
 
         var heldKeys = new HashSet<int>();      // VK codes currently down
         var heldButtons = new HashSet<int>();   // mouse buttons currently down (1=L 2=R 3=M 4=X1 5=X2)
@@ -189,12 +194,13 @@ internal sealed class MacroPlayer : IMacroPlayer
                 SendMacroEvent(evt);
                 TrackHeldState(evt, heldKeys, heldButtons);
             }
-            return PlaybackResult.Completed();
+            return result = PlaybackResult.Completed();
         }
-        catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
+        catch (OperationCanceledException) { return result = PlaybackResult.Aborted("Playback cancelled."); }
         finally
         {
             ReleaseHeldState(heldKeys, heldButtons);
+            Diagnostics.DiagLog.Write(PlaybackEndLog.Line(macro.Name, "all windows", result, ended.Elapsed));
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -335,16 +341,19 @@ internal sealed class MacroPlayer : IMacroPlayer
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
+        var ended = Stopwatch.StartNew();
+        PlaybackResult? result = null;
         try
         {
             var ctx = new StepContext(preflight.DisplayName, targetUserId, macro.Id, (rw, rh), actual, scale,
                 pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
                 line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"));
             var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
-            return await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
+            return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
         finally
         {
+            Diagnostics.DiagLog.Write(PlaybackEndLog.Line(macro.Name, preflight.DisplayName, result, ended.Elapsed));
             Ended?.Invoke(this, new PlaybackEndedArgs(macro));
             _activeCts?.Dispose();
             _activeCts = null;

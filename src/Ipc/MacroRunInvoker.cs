@@ -30,6 +30,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _play;
     private readonly Func<bool> _abort;
     private readonly PlaybackRegistry _registry;
+    private readonly Action<string> _log;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
@@ -43,7 +44,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             resolveForegroundUserId: () => foreground.ResolveForegroundAccount()?.RobloxUserId,
             isBusy: () => player.IsRunning,
             playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),
-            abort: () => player.Abort())
+            abort: () => player.Abort(),
+            log: Diagnostics.DiagLog.Write)
     { }
 
     // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
@@ -54,8 +56,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool> isBusy,
         Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
         Func<bool>? abort = null,
-        PlaybackRegistry? registry = null)
+        PlaybackRegistry? registry = null,
+        Action<string>? log = null)
     {
+        // Tests leave it out, so a test run never writes to the real ur-task.log.
+        _log = log ?? (_ => { });
         _loadMacros = loadMacros;
         _snapshot = snapshot;
         _resolveForegroundUserId = resolveForegroundUserId;
@@ -187,6 +192,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         finally
         {
             _registry.Finished(playbackId, state, reason, detail, stepIndex);
+            // Same state string GetPlayback returns, and before the removal below, so anything
+            // waiting for the playback to leave the active set finds the line already written.
+            _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
             _playbacks.TryRemove(playbackId, out _);
             playbackCts.Dispose();
         }
