@@ -860,9 +860,9 @@ In `src/Macros/Steps/StepRunner.cs`, replace the whole `PlayHoldAsync` method (f
 
     /// <summary>Both outcomes are logged with the count, so the threshold can be tuned from real runs.</summary>
     private static void LogOutline(StepContext ctx, int index, string label, bool seen, int count, int need)
-        => ctx.Log(string.Create(CultureInfo.InvariantCulture, seen
-            ? $"step {index + 1} '{label}' outline seen ({count} near-white px, needs {need})"
-            : $"step {index + 1} '{label}' no outline, skipped ({count} near-white px, needs {need})"));
+        => ctx.Log(seen
+            ? string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' outline seen ({count} near-white px, needs {need})")
+            : string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' no outline, skipped ({count} near-white px, needs {need})"));
 
     /// <summary>A near-white count guarded like <see cref="SampleGuarded"/>. Null when the capture
     /// fails or comes back the wrong shape.</summary>
@@ -2136,7 +2136,7 @@ Open `docs/reference/events/macros/space-mine-ore-stop/macros/0e5a0000-0000-4000
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true --filter "FullyQualifiedName~OreStopExampleMacrosTests"`
-Expected: 8 passed.
+Expected: 7 passed.
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
 Expected: 499 passed, 0 failed.
@@ -2223,6 +2223,8 @@ git commit -m "chore(release): 0.11.0, reach checks and the pulse clear-spot mac
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+- [ ] **Merge gate (controller ruling F4):** 0.11.0 does not merge or release until the live pass in the Ur OCR plan's last task confirms (a) the game keeps drawing the white outline while the mouse button is held on a block, and (b) ring.reach is measured (measuredOn set). If (a) fails, the outline-gone release during a hold is disabled before merge; the pre-press check stays.
 
 - [ ] **Step 5: Report**
 
