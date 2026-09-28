@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 4,
+  "id": "0e5a0000-0000-4000-8000-000000000003",
+  "name": "Camera top-down",
+  "recordMode": "PerWindow",
+  "recordedAgainstUserId": null,
+  "recordedAgainstDisplayName": "agent",
+  "interAltDelayMs": null,
+  "recordedAtUnixMs": 1790467200000,
+  "events": [],
+  "coordSpace": "client",
+  "recordedClientW": 800,
+  "recordedClientH": 599,
+  "recordedMaximized": false,
+  "recordedPlaceId": 8737899170,
+  "allGames": false,
+  "recordedDisplayScale": 100,
+  "steps": [
+    {
+      "kind": "drag",
+      "delayMs": 0,
+      "button": 2,
+      "startX": 400,
+      "startY": 150,
+      "dx": 0,
+      "dy": 420,
+      "durationMs": 400
+    },
+    {
+      "kind": "drag",
+      "delayMs": 150,
+      "button": 2,
+      "startX": 400,
+      "startY": 570,
+      "dx": 0,
+      "dy": -40,
+      "durationMs": 200
+    }
+  ]
+}
