@@ -16,7 +16,10 @@ internal static class PlaybackEndLog
         var name = string.IsNullOrWhiteSpace(macroName) ? "(unnamed)" : macroName;
         var secs = elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture);
         if (result is null) return $"playback ended with an error: '{name}' on {account} after {secs} s.";
-        if (result.Outcome == PlaybackOutcome.Completed) return $"playback finished: '{name}' on {account} in {secs} s.";
+        if (result.Outcome == PlaybackOutcome.Completed)
+            return result.SkippedByReach
+                ? $"playback finished (skipped: no outline): '{name}' on {account} in {secs} s."
+                : $"playback finished: '{name}' on {account} in {secs} s.";
         var verb = result.Outcome switch
         {
             PlaybackOutcome.Refused => "refused",

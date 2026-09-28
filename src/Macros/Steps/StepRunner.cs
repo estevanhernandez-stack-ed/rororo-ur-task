@@ -41,11 +41,40 @@ internal static class StepRunner
         public bool SendFailed { get; } = sendFailed;
     }
 
+    /// <summary>What a run did, for <see cref="PlaybackResult.SkippedByReach"/>.</summary>
+    private sealed class RunTally
+    {
+        public bool Pressed;
+        public int ReachSkips;
+    }
+
+    /// <summary>Forwards everything to the real IO and notes any button or key going down, so a
+    /// press by any step kind (raw steps included) counts. Releases in RunAsync's finally are ups,
+    /// never downs.</summary>
+    private sealed class PressWatchIo(IStepIo inner, RunTally tally) : IStepIo
+    {
+        public bool Send(MacroEvent clientEvent)
+        {
+            if (clientEvent.Kind is MacroEventKind.MouseDown or MacroEventKind.KeyDown) tally.Pressed = true;
+            return inner.Send(clientEvent);
+        }
+        public bool ReleaseButton(int button) => inner.ReleaseButton(button);
+        public bool MoveRelative(int dx, int dy) => inner.MoveRelative(dx, dy);
+        public (int X, int Y)? CursorClient() => inner.CursorClient();
+        public (int W, int H)? ClientSize() => inner.ClientSize();
+        public PixelBlock? Capture(int clientX, int clientY, int w, int h) => inner.Capture(clientX, clientY, w, h);
+        public bool TargetInForeground() => inner.TargetInForeground();
+        public Task Delay(int ms, CancellationToken ct) => inner.Delay(ms, ct);
+        public long NowMs => inner.NowMs;
+    }
+
     public static async Task<PlaybackResult> RunAsync(IReadOnlyList<MacroStep> steps, StepContext ctx, IStepIo io, CancellationToken ct)
     {
         var invalid = StepValidator.Validate(steps);
         if (invalid is not null) return PlaybackResult.Refused(invalid);
 
+        var tally = new RunTally();
+        io = new PressWatchIo(io, tally);
         var heldKeys = new HashSet<int>();
         var heldButtons = new HashSet<int>();
         int i = 0;
@@ -65,13 +94,13 @@ internal static class StepRunner
                         if (k.Down) heldKeys.Add(k.VirtualKeyCode); else heldKeys.Remove(k.VirtualKeyCode);
                         break;
                     case PointStep p:
-                        await PlayPointAsync(p, i, ctx, io, heldButtons, ct);
+                        await PlayPointAsync(p, i, ctx, io, heldButtons, tally, ct);
                         break;
                     case FirstMatchStep f:
                         await PlayFirstMatchAsync(f, i, ctx, io, heldButtons, ct);
                         break;
                     case HoldStep h:
-                        await PlayHoldAsync(h, i, ctx, io, heldButtons, ct);
+                        await PlayHoldAsync(h, i, ctx, io, heldButtons, tally, ct);
                         break;
                     case DragStep d:
                         await PlayDragAsync(d, ctx, io, heldButtons, ct);
@@ -95,7 +124,7 @@ internal static class StepRunner
                         break;
                 }
             }
-            return PlaybackResult.Completed();
+            return tally.ReachSkips > 0 && !tally.Pressed ? PlaybackResult.CompletedSkippedByReach() : PlaybackResult.Completed();
         }
         catch (InputBlockedException b)
         {
@@ -124,7 +153,7 @@ internal static class StepRunner
 
     // ---------- points ----------
 
-    private static async Task PlayPointAsync(PointStep p, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task PlayPointAsync(PointStep p, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
     {
         var (recorded, check) = Resolve(p, ctx);
         var at = Place(ctx, recorded);
@@ -132,7 +161,7 @@ internal static class StepRunner
         if (p.Reach is not null)
         {
             // StepValidator refuses a reach check together with an enabled colour check.
-            await PlayReachedPointAsync(p, at, index, ctx, io, heldButtons, ct);
+            await PlayReachedPointAsync(p, at, index, ctx, io, heldButtons, tally, ct);
             return;
         }
 
@@ -189,7 +218,7 @@ internal static class StepRunner
 
     /// <summary>A point behind a reach check: wait its delay, move onto the point, and press only
     /// if the white outline shows there (ore-stop pulse spec). No outline skips the step.</summary>
-    private static async Task PlayReachedPointAsync(PointStep p, (int X, int Y) at, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task PlayReachedPointAsync(PointStep p, (int X, int Y) at, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
     {
         var label = p.Label ?? p.Id;
         var name = $"{ctx.AccountName}: step {index + 1} '{label}'";
@@ -200,7 +229,7 @@ internal static class StepRunner
         await JumpAsync(io, at, ct);
         var (seen, count) = await AwaitOutlineAsync(reach, io, name, index, ct);
         LogOutline(ctx, index, label, seen, count, reach.Need);
-        if (!seen) return;
+        if (!seen) { tally.ReachSkips++; return; }
         await ClickAsync(io, at, p.Button, heldButtons, ct); // already on the point: no second jump
     }
 
@@ -314,7 +343,7 @@ internal static class StepRunner
     /// outline gone for <see cref="StepTiming.HoldDriftPolls"/> polls running lets go: the block
     /// broke or is out of reach.</para>
     /// </summary>
-    private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
     {
         var label = h.Label ?? h.Id;
         var name = $"{ctx.AccountName}: step {index + 1} '{label}'";
@@ -332,7 +361,7 @@ internal static class StepRunner
         {
             var (seen0, count0) = await AwaitOutlineAsync(r0, io, name, index, ct);
             LogOutline(ctx, index, label, seen0, count0, r0.Need);
-            if (!seen0) return;
+            if (!seen0) { tally.ReachSkips++; return; }
         }
         var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
 

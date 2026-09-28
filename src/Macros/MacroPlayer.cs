@@ -698,6 +698,18 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
 
+    /// <summary>
+    /// A Completed run that pressed nothing because reach checks skipped: at least one step was
+    /// skipped by its reach check, and no mouse button and no key went down at all (no MouseDown
+    /// or KeyDown was sent by any step, raw steps included; pointer moves, waits and wheel notches
+    /// are not presses). Only StepRunner sets it. Not <see cref="PlaybackOutcome.Skipped"/>, which
+    /// means the sequence aborted before this alt. The bridge reports it as finished/skipped so
+    /// Ur OCR's pulse loop can tell a skipped Clear spot from a mined one.
+    /// </summary>
+    public bool SkippedByReach { get; init; }
+
+    public static PlaybackResult CompletedSkippedByReach() => new(PlaybackOutcome.Completed, null) { SkippedByReach = true };
+
     /// <summary>Stopped by a check: a colour that never showed, a window it could not see, or a
     /// box outside the window. Only check failures carry a StepIndex (0-based), so GetPlayback's
     /// failed/check-failed always means a check. Foreground loss and cancellation use

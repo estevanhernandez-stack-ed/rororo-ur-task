@@ -292,4 +292,27 @@ public class SequencePlayerTests
         var refused = Assert.Single(refusedEvents);
         Assert.Contains("Couldn't focus", refused.Reason);
     }
+
+    [Fact]
+    public async Task PlayAsync_CarriesTheReachSkipIntoEachAltOutcome()
+    {
+        var player = new FakePlayer();
+        player.Results.Enqueue(PlaybackResult.CompletedSkippedByReach());
+        player.Results.Enqueue(PlaybackResult.Completed());
+        var fg = new FakeForeground();
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+        var targets = new[] { Alt(1001, 47821334, "Goldnail8"), Alt(1002, 47821335, "ScrambledTen") };
+        long lastFocused = 0;
+        fg.Resolver = () => targets.FirstOrDefault(a => a.RobloxUserId == lastFocused);
+        sequence.Progress += (_, prog) =>
+        {
+            if (prog.Phase == SequencePhase.Focusing && prog.CurrentAlt is not null)
+                lastFocused = prog.CurrentAlt.RobloxUserId;
+        };
+
+        var result = await sequence.PlayAsync(NewMacro(), targets, interAltDelayMs: 0);
+
+        Assert.Equal(new[] { true, false }, result.PerAlt.Select(a => a.SkippedByReach));
+        Assert.All(result.PerAlt, a => Assert.Equal(PlaybackOutcome.Completed, a.Outcome));
+    }
 }

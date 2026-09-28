@@ -446,6 +446,52 @@ public class StepRunnerTests
         Assert.Empty(io.Sent);
     }
 
+    // ---------- a run that pressed nothing ----------
+
+    [Fact]
+    public async Task A_run_whose_every_press_was_skipped_by_reach_completes_as_skipped()
+    {
+        var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
+        var r = await StepRunner.RunAsync(new MacroStep[]
+        {
+            ReachHold(),
+            new PointStep(0, "p1", "Ore", 456, 300, Reach: Reach80),
+            new WaitStep(100),
+        }, Ctx(), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.True(r.SkippedByReach);
+        Assert.Null(r.Reason);
+        Assert.Empty(io.Downs);
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("point")]
+    [InlineData("mined")]
+    public async Task A_run_that_pressed_anything_is_a_plain_finish(string kind)
+    {
+        var io = new FakeIo { Screen = kind == "mined" ? Framed(400, 244) : (_, x, y) => LavaAt(x, y) };
+        var steps = kind switch
+        {
+            "key" => new MacroStep[] { ReachHold(), new KeyStep(0, 0x41, true), new KeyStep(0, 0x41, false) },
+            "point" => new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) },
+            _ => new MacroStep[] { ReachHold(maxMs: 500) },
+        };
+        var r = await StepRunner.RunAsync(steps, Ctx(), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach);
+    }
+
+    [Fact]
+    public async Task A_run_with_no_reach_skip_is_a_plain_finish_even_if_it_pressed_nothing()
+    {
+        var r = await StepRunner.RunAsync(new MacroStep[] { new WaitStep(100) }, Ctx(), new FakeIo(), default);
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach);
+    }
+
     // ---------- first match: skipIfOther ----------
 
     private static readonly Rgb DotGreen = new(125, 246, 13);
