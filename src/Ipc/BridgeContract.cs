@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Labs626.UrTask.Macros.Steps;
 
 namespace Labs626.UrTask.Ipc;
 
@@ -75,6 +76,33 @@ public sealed record GetPlaybackResponse(
     public static GetPlaybackResponse Refused(string reason, string? detail = null) => new(false, null, reason, detail, null);
 }
 
+/// <summary>The client size a ClearAt's points and outline box were measured in.</summary>
+public sealed record ClearAtClient(int W, int H);
+
+/// <summary>One ClearAt point in <see cref="ClearAtRequest.Client"/> pixels. A null or blank label
+/// plays and logs as "point N".</summary>
+public sealed record ClearAtPoint(int X, int Y, string? Label = null);
+
+/// <summary>The outline check every ClearAt point uses: a W x H box centred on the point, passing
+/// at MinCount or more pixels whose every channel is at least WhiteMin (see OutlineCheck).</summary>
+public sealed record ClearAtOutline(int W, int H, int MinCount, int WhiteMin = OutlineCheck.DefaultWhiteMin);
+
+/// <summary>
+/// Press where the caller points (bridge 1.x, additive; ore-stop pulse spec, "The ClearAt bridge
+/// call"). Each point, in order, plays as a reach hold on the target account, and the whole list
+/// is ONE playback: the answer is a <see cref="RunMacroResponse"/>, and GetPlayback, StopMacro and
+/// Esc treat it like any RunMacro playback. MaxMsPerPoint null means no time limit.
+/// </summary>
+public sealed record ClearAtRequest(
+    string ContractVersion,
+    string Method,
+    string? CallerPluginId,
+    string? Target,                    // decimal user id
+    ClearAtClient? Client,
+    IReadOnlyList<ClearAtPoint>? Points,
+    ClearAtOutline? Outline,
+    int? MaxMsPerPoint = null);
+
 internal static class BridgeContract
 {
     public const string Method = "RunMacro";          // back-compat alias
@@ -82,6 +110,7 @@ internal static class BridgeContract
     public const string MethodListMacros = "ListMacros";
     public const string MethodStopMacro = "StopMacro";
     public const string MethodGetPlayback = "GetPlayback";
+    public const string MethodClearAt = "ClearAt";
 
     public static readonly JsonSerializerOptions Json = new()
     {
