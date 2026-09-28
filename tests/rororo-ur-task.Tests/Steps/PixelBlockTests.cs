@@ -28,4 +28,24 @@ public class PixelBlockTests
     [Fact]
     public void Rejects_a_pixel_array_of_the_wrong_length()
         => Assert.Throws<ArgumentException>(() => new PixelBlock(0, 0, 3, 3, new uint[8]));
+
+    [Fact]
+    public void Counts_pixels_whose_every_channel_reaches_the_threshold()
+    {
+        // 4x1 at client (10,20): exactly at the threshold, one channel short, pure white, lava pink.
+        var px = new[] { Argb(225, 225, 225), Argb(224, 255, 255), Argb(255, 255, 255), Argb(255, 120, 200) };
+        var block = new PixelBlock(10, 20, 4, 1, px);
+        Assert.Equal(2, block.CountNearWhite(10, 20, 4, 1, 225));
+        Assert.Equal(1, block.CountNearWhite(10, 20, 4, 1, 226));
+        Assert.Equal(1, block.CountNearWhite(12, 20, 2, 1, 225));
+    }
+
+    [Fact]
+    public void A_count_box_outside_the_block_is_null()
+    {
+        var block = new PixelBlock(10, 20, 4, 2, new uint[8]);
+        Assert.Null(block.CountNearWhite(9, 20, 2, 2, 225));
+        Assert.Null(block.CountNearWhite(13, 20, 2, 2, 225));
+        Assert.Null(block.CountNearWhite(10, 20, 0, 2, 225));
+    }
 }

@@ -39,6 +39,25 @@ public static class PointMath
     public static (int X, int Y, int W, int H) BoxRect((int X, int Y) point, CheckBox box)
         => (point.X + box.OffsetX, point.Y + box.OffsetY, box.W, box.H);
 
+    /// <summary>A box placed at an already-placed point, with its offset and size scaled from
+    /// the recorded client to the actual one, the same factors <see cref="Place"/> uses. For the
+    /// block-sized reach box; the 5x5 colour boxes stay unscaled as before.</summary>
+    public static (int X, int Y, int W, int H) ScaledRect((int X, int Y) point, CheckBox box, (int W, int H) recordedClient, (int W, int H) actualClient)
+    {
+        double sx = actualClient.W / (double)recordedClient.W, sy = actualClient.H / (double)recordedClient.H;
+        return (point.X + (int)Math.Round(box.OffsetX * sx), point.Y + (int)Math.Round(box.OffsetY * sy),
+                Math.Max(1, (int)Math.Round(box.W * sx)), Math.Max(1, (int)Math.Round(box.H * sy)));
+    }
+
+    /// <summary>A reach threshold scaled with the window: linear in the smaller factor, rounded
+    /// down, never below 1. An outline's pixel count grows at least linearly with its size (its
+    /// length does; its thickness may too), so linear is the safe side when growing.</summary>
+    public static int ScaledCount(int count, (int W, int H) recordedClient, (int W, int H) actualClient)
+    {
+        var s = Math.Min(actualClient.W / (double)recordedClient.W, actualClient.H / (double)recordedClient.H);
+        return Math.Max(1, (int)Math.Floor(count * s));
+    }
+
     public static bool InsideClient((int X, int Y, int W, int H) r, (int W, int H) client)
         => r.X >= 0 && r.Y >= 0 && r.X + r.W <= client.W && r.Y + r.H <= client.H;
 

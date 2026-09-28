@@ -88,4 +88,16 @@ public class AutoHotkeyStepExportTests
         Assert.Contains("; hold: 'Two Lines' stays down until its colour changes or 2500 ms pass (Ur Task only); exported as a 2500 ms hold", v2);
         Assert.Contains("Click \"400 244 Right Down\"\r\nSleep 2500\r\nClick \"400 244 Right Up\"", v2);
     }
+
+    [Fact]
+    public void Reach_exports_as_a_comment_on_holds_and_points()
+    {
+        var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
+        var text = AutoHotkeyExporter.Export(M(
+            new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach),
+            new PointStep(0, "p1", "Two\nLines", 456, 300, Reach: reach)), AhkVersion.V1);
+
+        Assert.Contains("; reach: 'Spot N' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\n; hold: 'Spot N'", text);
+        Assert.Contains("; reach: 'Two Lines' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\nClick, 456, 300, Left", text);
+    }
 }
