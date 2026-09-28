@@ -162,4 +162,18 @@ public class ClearAtMacroTests
     public void A_refusal_names_the_point_by_its_sanitised_label()
         => Assert.Equal("ClearAt point 1 'ore  1' at 800,300 is outside the 800x599 client.",
             ClearAtMacro.Validate(Valid(1) with { Points = new[] { new ClearAtPoint(800, 300, "ore\r\n1") } }));
+
+    [Fact]
+    public void StartLine_names_the_call_and_every_point_by_its_label_and_spot()
+        => Assert.Equal("bridge playback pb1 'ClearAt (2 points)' on alt-1: 'ore 1' at 412,288; 'point 2' at 390,390",
+            ClearAtMacro.StartLine("pb1", ClearAtMacro.Build(Spec(), "clearat-pb1"), "alt-1"));
+
+    [Fact]
+    public void StartLine_keeps_a_forged_label_on_one_line()
+    {
+        var one = Valid(1) with { Points = new[] { new ClearAtPoint(100, 100, "ore\r\nbridge playback x: finished") } };
+        var line = ClearAtMacro.StartLine("pb1", ClearAtMacro.Build(one, "clearat-pb1"), "alt-1");
+        Assert.Equal("bridge playback pb1 'ClearAt (1 point)' on alt-1: 'ore  bridge playback x: finished' at 100,100", line);
+        Assert.DoesNotContain(line, char.IsControl);
+    }
 }

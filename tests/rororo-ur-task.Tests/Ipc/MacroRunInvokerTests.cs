@@ -1,6 +1,8 @@
 // tests/rororo-ur-task.Tests/Ipc/MacroRunInvokerTests.cs
+using System.IO;
 using Labs626.UrTask.Ipc;
 using Labs626.UrTask.Macros;
+using Labs626.UrTask.Macros.Steps;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Tests.Ipc;
@@ -445,5 +447,158 @@ public class MacroRunInvokerTests
 
         Assert.Equal($"bridge playback {run.PlaybackId} 'Mine spot N': failed (check-failed). alt-123: step 2 'Spot N' could not see the window.",
             Assert.Single(lines));
+    }
+
+    // ---------- ClearAt ----------
+
+    private static ClearAtRequest ClearAt(string target = "123", int points = 2) => new(
+        "1.0", "ClearAt", "626labs.ur-ocr", target, new ClearAtClient(800, 599),
+        Enumerable.Range(0, points).Select(i => new ClearAtPoint(400 + i * 50, 300, $"ore {i + 1}")).ToList(),
+        new ClearAtOutline(50, 50, 60));
+
+    private static MacroRunInvoker ClearAtInvoker(
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> play,
+        bool busy = false, IReadOnlyList<Macro>? saved = null, List<string>? log = null,
+        Func<IReadOnlyList<Macro>>? loadMacros = null)
+        => new MacroRunInvoker(
+            loadMacros: loadMacros ?? (() => saved ?? Array.Empty<Macro>()),
+            snapshot: () => new[] { Alt(123), Alt(456) },
+            resolveForegroundUserId: () => 123L,
+            isBusy: () => busy,
+            playWithResult: play,
+            log: log is null ? null : new Action<string>(log.Add));
+
+    private static GetPlaybackResponse Status(MacroRunInvoker inv, string? id)
+        => inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", id, "626labs.ur-ocr"));
+
+    [Fact]
+    public async Task ClearAt_refuses_a_malformed_call_before_the_busy_check()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), busy: true);
+        var r = await inv.ClearAtAsync(ClearAt(points: 0), default);
+        Assert.Equal((false, "refused", "ClearAt takes 1 to 64 points; got 0."), (r.Ok, r.Reason, r.Detail));
+    }
+
+    [Fact]
+    public async Task ClearAt_refuses_while_busy()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), busy: true);
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        Assert.Equal((false, "busy"), (r.Ok, r.Reason));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+    }
+
+    [Fact]
+    public async Task ClearAt_refuses_an_account_that_is_not_running()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null));
+        var r = await inv.ClearAtAsync(ClearAt(target: "999"), default);
+        Assert.Equal((false, "no-targets-resolved", "Account 999 is not running."), (r.Ok, r.Reason, r.Detail));
+    }
+
+    [Fact]
+    public async Task ClearAt_plays_one_unsaved_macro_of_reach_holds_on_the_target()
+    {
+        Macro? played = null;
+        IReadOnlyList<AccountRegistry.AccountInfo>? on = null;
+        var inv = ClearAtInvoker(
+            (m, t, _, _) => { played = m; on = t; return Task.FromResult<SequenceResult?>(null); },
+            saved: new[] { NewMacro("saved", "Farm") });
+
+        var r = await inv.ClearAtAsync(ClearAt(target: "456"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.True(r.Ok);
+        Assert.Equal(new long[] { 456 }, on!.Select(a => a.RobloxUserId));
+        Assert.Equal(("ClearAt (2 points)", ClearAtMacro.IdPrefix + r.PlaybackId), (played!.Name, played.Id));
+        Assert.Equal(new[] { "ore 1", "ore 2" }, played.Steps!.Cast<HoldStep>().Select(h => h.Label));
+        Assert.Equal(new[] { "saved" }, inv.ListMacros().Select(m => m.Id)); // never saved, never listed
+        Assert.Equal("finished", Status(inv, r.PlaybackId).State);
+    }
+
+    [Fact]
+    public async Task ClearAt_never_writes_to_the_macro_store_or_shows_in_ListMacros()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "urtask-clearat-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new MacroStore(dir);
+            var savedId = Guid.NewGuid().ToString();
+            store.Save(NewMacro(savedId, "Farm"));
+            var before = Directory.GetFiles(dir).Select(Path.GetFileName).OrderBy(n => n).ToList();
+            var gate = new TaskCompletionSource();
+            var inv = ClearAtInvoker(async (_, _, _, _) => { await gate.Task; return null; },
+                loadMacros: () => store.LoadAll().Macros);
+
+            var r = await inv.ClearAtAsync(ClearAt(), default);
+            Assert.True(r.Ok);
+            Assert.Equal(new[] { savedId }, inv.ListMacros().Select(m => m.Id)); // not listed while it plays
+            gate.TrySetResult();
+            await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+            Assert.Equal(new[] { savedId }, inv.ListMacros().Select(m => m.Id)); // nor after it ends
+            Assert.Equal(before, Directory.GetFiles(dir).Select(Path.GetFileName).OrderBy(n => n).ToList());
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public async Task ClearAt_reads_finished_skipped_when_every_point_was_skipped()
+    {
+        var alt = Alt(123);
+        var skipped = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, SkippedByReach: true) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(skipped));
+
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, r.PlaybackId);
+        Assert.Equal(("finished", "skipped"), (status.State, status.Reason));
+    }
+
+    [Fact]
+    public async Task ClearAt_is_stopped_by_StopMacro_like_any_playback()
+    {
+        var inv = ClearAtInvoker(async (_, _, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return null; });
+
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        Assert.Equal("running", Status(inv, r.PlaybackId).State);
+        inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", r.PlaybackId, null, "626labs.ur-ocr"));
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal("stopped", Status(inv, r.PlaybackId).State);
+    }
+
+    [Fact]
+    public async Task ClearAt_and_RunMacro_share_the_single_flight_rule()
+    {
+        var gate = new TaskCompletionSource();
+        var inv = ClearAtInvoker(async (_, _, _, _) => { await gate.Task; return null; }, saved: new[] { NewMacro("m1", "Farm") });
+
+        var clear = await inv.ClearAtAsync(ClearAt(), default);
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", "m1", new[] { "123" }, null, "626labs.ur-mcp"), default);
+        var again = await inv.ClearAtAsync(ClearAt(), default);
+
+        Assert.True(clear.Ok);
+        Assert.Equal(("busy", "busy"), (run.Reason, again.Reason));
+        Assert.Equal(1, inv.ActivePlaybackCount);
+        gate.TrySetResult();
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+    }
+
+    [Fact]
+    public async Task ClearAt_logs_its_points_by_label_and_how_it_ended()
+    {
+        var lines = new List<string>();
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), log: lines);
+
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal(new[]
+        {
+            $"bridge playback {r.PlaybackId} 'ClearAt (2 points)' on alt-123: 'ore 1' at 400,300; 'ore 2' at 450,300",
+            $"bridge playback {r.PlaybackId} 'ClearAt (2 points)': finished",
+        }, lines);
     }
 }
