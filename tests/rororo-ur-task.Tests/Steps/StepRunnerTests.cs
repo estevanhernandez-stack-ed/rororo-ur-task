@@ -503,7 +503,7 @@ public class StepRunnerTests
         // 3025 near-white px is far over minCount 60, but all of it is baseline: out of reach, no press.
         var log = new List<string>();
         var io = QuartzBlock(outlined: false);
-        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 10_000) }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
         Assert.True(r.SkippedByReach);
