@@ -306,7 +306,7 @@ public class StepRunnerTests
     {
         var log = new List<string>();
         var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
-        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 10_000), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome); // a skip, never a failure
         var down = Assert.Single(io.Downs);
@@ -334,7 +334,7 @@ public class StepRunnerTests
         // block behind it is not breakable). Polls at 1250 and 1350 miss it: release at 1350.
         var log = new List<string>();
         var io = new FakeIo { Screen = Framed(400, 244, shown: t => t < 1200) };
-        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 10_000) }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
         Assert.Equal(1350, Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp).TimestampMs);
@@ -403,6 +403,47 @@ public class StepRunnerTests
         Assert.Contains((450, 255, 100, 100), io.CaptureRects);
         Assert.Equal((500, 305), (io.Downs.Single().X, io.Downs.Single().Y));
         Assert.Contains("step 1 'Spot N' outline seen (280 near-white px, needs 75)", log);
+    }
+
+    [Fact]
+    public async Task A_point_with_an_outline_presses_once_without_a_second_jump()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = Framed(400, 244) };
+        var r = await StepRunner.RunAsync(new MacroStep[] { new PointStep(0, "p1", "Ore", 400, 244, Reach: Reach80) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((400, 244, 150L), (down.X, down.Y, down.TimestampMs));
+        Assert.Equal(150 + StepTiming.PressHoldMs, Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp).TimestampMs);
+        Assert.Equal(3, io.Sent.Count(e => e.Kind == MacroEventKind.MouseMove)); // one jump, not two
+        Assert.Contains("step 1 'Ore' outline seen (224 near-white px, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task A_point_without_an_outline_is_skipped()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
+        var r = await StepRunner.RunAsync(new MacroStep[]
+        {
+            new PointStep(0, "p1", "Ore", 400, 244, Reach: Reach80),
+            new PointStep(0, "p9", null, 5, 5),
+        }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal((5, 5), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.Contains("step 1 'Ore' no outline, skipped (0 near-white px, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task A_point_reach_box_outside_the_window_refuses_before_any_input()
+    {
+        var io = new FakeIo();
+        var r = await StepRunner.RunAsync(new MacroStep[] { new PointStep(0, "p1", "Ore", 400, 30, Reach: Reach80) }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Ore' checks a reach box outside the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Sent);
     }
 
     // ---------- first match: skipIfOther ----------

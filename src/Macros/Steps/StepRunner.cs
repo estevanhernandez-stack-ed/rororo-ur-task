@@ -129,6 +129,13 @@ internal static class StepRunner
         var (recorded, check) = Resolve(p, ctx);
         var at = Place(ctx, recorded);
 
+        if (p.Reach is not null)
+        {
+            // StepValidator refuses a reach check together with an enabled colour check.
+            await PlayReachedPointAsync(p, at, index, ctx, io, heldButtons, ct);
+            return;
+        }
+
         if (!p.CheckEnabled || check is null)
         {
             await io.Delay(p.DelayMs, ct);
@@ -178,6 +185,23 @@ internal static class StepRunner
         var secs = (io.NowMs - start) / 1000.0;
         throw new StopException(string.Create(CultureInfo.InvariantCulture,
             $"{name} expected {ColorNamer.Describe(check.Expect)}, saw {ColorNamer.Describe(seen)} (distance {d:F0}) after {secs:F1} s at {ctx.DisplayScale}%."), index);
+    }
+
+    /// <summary>A point behind a reach check: wait its delay, move onto the point, and press only
+    /// if the white outline shows there (ore-stop pulse spec). No outline skips the step.</summary>
+    private static async Task PlayReachedPointAsync(PointStep p, (int X, int Y) at, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    {
+        var label = p.Label ?? p.Id;
+        var name = $"{ctx.AccountName}: step {index + 1} '{label}'";
+        var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
+        var reach = ReachFor(p.Reach, at, client, ctx, name, index)!.Value;
+
+        await io.Delay(p.DelayMs, ct);
+        await JumpAsync(io, at, ct);
+        var (seen, count) = await AwaitOutlineAsync(reach, io, name, index, ct);
+        LogOutline(ctx, index, label, seen, count, reach.Need);
+        if (!seen) return;
+        await ClickAsync(io, at, p.Button, heldButtons, ct); // already on the point: no second jump
     }
 
     private static (int X, int Y)? Search(IStepIo io, (int X, int Y) at, ColorCheck check, (int W, int H) client, StepContext ctx)
@@ -435,6 +459,12 @@ internal static class StepRunner
     private static async Task PressAsync(IStepIo io, (int X, int Y) at, int button, HashSet<int> heldButtons, CancellationToken ct)
     {
         await JumpAsync(io, at, ct);
+        await ClickAsync(io, at, button, heldButtons, ct);
+    }
+
+    /// <summary>Down, <see cref="StepTiming.PressHoldMs"/>, up, with the pointer already on the point.</summary>
+    private static async Task ClickAsync(IStepIo io, (int X, int Y) at, int button, HashSet<int> heldButtons, CancellationToken ct)
+    {
         SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, button, 0));
         heldButtons.Add(button);
         await io.Delay(StepTiming.PressHoldMs, ct);
