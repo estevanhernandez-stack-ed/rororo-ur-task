@@ -141,6 +141,23 @@ shots 15:02 and 15:03, and the 14:47 capture). The character stays near the fram
   near-white pixels or more.
 - Ore finding is by colour and does not change.
 
+### The layer is read by colour share, not 8 spots (approved by Este 2026-09-28)
+
+Found live (17:08): the 8-spot vote read the Mine #8 top layer as the bottom one twice. The top layer's
+dark base (#080920, indigo #0D0764) sits within 5 RGB of the bottom layer's near-black (#0A0A1C) and
+dark grid line (#0E0A67), so any spot landing on base rock votes wrong. What does separate the layers
+is the mix: the top layer has hot magenta, purple and orange veins, the middle is periwinkle stone,
+the bottom is near-black with bright blue lines and no red.
+
+- Each layer's `rock` list keeps only the colours that layer alone has. Colours shared between
+  layers are left out of every list, so they count for nobody.
+- On the calm frame, the pulse reads a disc around the character, radius 3 blocks (from that
+  pass's block size), with the HUD masked. Each pixel goes to the nearest listed rock colour
+  within tolerance, and ore colours count for nobody. The layer with the largest share wins when
+  its share is at least `minShare` of the disc and at least `lead` times the runner-up. Otherwise
+  it's no layer, and the pulse rides a burst, as today.
+- The 8-spot ring stays for the old ring triggers. Only the pulse's layer read changes.
+
 ### The ClearAt bridge call (Ur Task bridge 1.x, additive)
 
 One call carries a whole ordered list of points and plays as ONE playback, so it rides the existing
