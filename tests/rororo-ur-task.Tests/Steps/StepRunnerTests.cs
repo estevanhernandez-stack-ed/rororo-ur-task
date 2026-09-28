@@ -297,6 +297,24 @@ public class StepRunnerTests
     private static HoldStep ReachHold(int? maxMs = null, int x = 400, int y = 244)
         => Hold(maxMs, x: x, y: y) with { Reach = Reach80 };
 
+    /// <summary>A shaft-sized box (cap raised 120 -> 240, "Block size is read every pass"): still
+    /// just a bigger frame, counted the same way.</summary>
+    private static readonly OutlineCheck Reach200 = new(new CheckBox(-100, -100, 200, 200), 60);
+
+    [Fact]
+    public async Task A_200x200_reach_box_counts_a_thin_white_frame_at_the_larger_size()
+    {
+        var log = new List<string>();
+        var io = new FakeIo();
+        io.Screen = Framed(400, 244, half: 85, shown: _ => Hovered(io, 400, 244, half: 85));
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) with { Reach = Reach200 } }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((400, 244, 150L), (down.X, down.Y, down.TimestampMs));
+        Assert.Contains("step 1 'Spot N' outline seen (680 near-white px over a baseline of 0, needs 60)", log);
+    }
+
     [Theory]
     [InlineData(1, 224)]
     [InlineData(2, 440)]

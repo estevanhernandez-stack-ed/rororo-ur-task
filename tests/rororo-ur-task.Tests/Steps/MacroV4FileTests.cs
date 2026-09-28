@@ -407,10 +407,10 @@ public class MacroV4FileTests : IDisposable
         var box = new CheckBox(-40, -40, 80, 80);
 
         Assert.Null(V(H(new OutlineCheck(box, 60))));
-        Assert.Null(V(H(new OutlineCheck(new CheckBox(-60, -60, 120, 120), 14400, 1))));
+        Assert.Null(V(H(new OutlineCheck(new CheckBox(-120, -120, 240, 240), 57600, 1))));
         Assert.Equal("Step 1 'Spot N' has a reach check with no box.", V(H(new OutlineCheck(null!, 60))));
         Assert.Equal("Step 1 'Spot N' has an empty reach box.", V(H(new OutlineCheck(new CheckBox(0, 0, 0, 80), 60))));
-        Assert.Equal("Step 1 'Spot N' has a reach box larger than 120x120.", V(H(new OutlineCheck(new CheckBox(0, 0, 121, 80), 60))));
+        Assert.Equal("Step 1 'Spot N' has a reach box larger than 240x240.", V(H(new OutlineCheck(new CheckBox(0, 0, 241, 80), 60))));
         Assert.Equal("Step 1 'Spot N' has a reach minCount below 1.", V(H(new OutlineCheck(box, 0))));
         Assert.Equal("Step 1 'Spot N' has a reach minCount larger than its box, so it can never pass.", V(H(new OutlineCheck(new CheckBox(0, 0, 4, 4), 17))));
         Assert.Equal("Step 1 'Spot N' has a reach whiteMin outside 1 to 255.", V(H(new OutlineCheck(box, 60, 256))));
