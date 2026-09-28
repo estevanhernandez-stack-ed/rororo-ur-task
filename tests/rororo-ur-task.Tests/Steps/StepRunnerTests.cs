@@ -469,6 +469,8 @@ public class StepRunnerTests
     [InlineData("key")]
     [InlineData("point")]
     [InlineData("mined")]
+    [InlineData("raw")]
+    [InlineData("drag")]
     public async Task A_run_that_pressed_anything_is_a_plain_finish(string kind)
     {
         var io = new FakeIo { Screen = kind == "mined" ? Framed(400, 244) : (_, x, y) => LavaAt(x, y) };
@@ -476,6 +478,16 @@ public class StepRunnerTests
         {
             "key" => new MacroStep[] { ReachHold(), new KeyStep(0, 0x41, true), new KeyStep(0, 0x41, false) },
             "point" => new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) },
+            // RawStep and DragStep press through the same PressWatchIo wrapper as every other
+            // step kind (Send/ReleaseButton), with no per-kind bookkeeping in the "pressed
+            // anything" theory. Both come after a reach skip, on the lava screen, so the only
+            // press in the run is the raw/drag one (I2, controller ruling 2026-09-28).
+            "raw" => new MacroStep[] { ReachHold(), new RawStep(0, new[]
+            {
+                new MacroEvent(0, MacroEventKind.KeyDown, 0x41, 0, 0, 0, 0),
+                new MacroEvent(50, MacroEventKind.KeyUp, 0x41, 0, 0, 0, 0),
+            }, "test") },
+            "drag" => new MacroStep[] { ReachHold(), new DragStep(0, 1, 5, 5, 10, 0, 50) },
             _ => new MacroStep[] { ReachHold(maxMs: 500) },
         };
         var r = await StepRunner.RunAsync(steps, Ctx(), io, default);
