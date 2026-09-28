@@ -10,8 +10,14 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   counts the near-white pixels (every channel at 225 or more) in a block-sized box around it and
   needs at least `minCount`. That is the white outline the game draws on a block your pickaxe can
   break. No outline within 300 ms: the step is skipped, not failed, and the log says
-  "no outline, skipped" with the count. During a hold, the outline gone for two polls running lets
-  go ("outline gone"). The box and the count scale with the window like points.
+  "no outline, skipped" with the count. The box and the count scale with the window like points.
+- **Reach holds play as hold-release-look beats.** The game hides the outline while the button
+  is down, so a hold behind a reach check presses for a 1 s beat, lets go, and looks. Still
+  outlined: another beat. No outline: the block broke or went out of reach, and the log says
+  "held N s over K beat(s), released: outline gone after release". A `maxMs` bounds the pressed
+  time across beats (the last beat is cut short); with none, ore is never abandoned for time.
+- **Turn on Hide My Pets in Roblox Settings before running a pulse.** Pets sit over the character
+  and the ring spots, and cover the outline.
 - **Clear spot macros** for ore stop v1 (pulse) in `docs/reference/events/macros/space-mine-ore-stop/`:
   `Clear spot N` through `Clear spot NW`, each one hold behind a reach check and nothing else,
   because the Ur OCR loop owns Auto Mine in pulse mode.
@@ -31,6 +37,9 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   `RunMacro` loses the race for the in-flight `SequencePlayer` (nothing ran that pass),
   `GetPlayback` reports state `failed`, reason `refused`, detail "Another playback took the
   sequence.", and a repeat stops spinning on it instead of reading it as `finished`.
+- **Pulse holds no longer end on colour change.** A hit darkens the block, which made a weaker
+  account let go before the block broke. Holds with a reach check ignore colour drift; holds
+  without one behave as before.
 - The reach values in `measured.json` are provisional until the live outline measurement.
 
 ## 0.10.0 — unreleased
