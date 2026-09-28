@@ -70,7 +70,7 @@
 | `tests/rororo-ur-task.Tests/Steps/OreStopExampleMacrosTests.cs` | replace | examples incl. Clear spot and reach, held to `measured.json` |
 | `rororo-ur-task.csproj`, `manifest.json`, `CHANGELOG.md` | modify | 0.11.0 |
 
-Running test totals (fast suite): 464 → Task 1: 473 → Task 2: 483 → Task 3: 486 → Task 4: 498 → Task 5: 499 → Task 6: 499.
+Running test totals (fast suite): 464 → Task 1: 473 → Task 2: 483 → Task 3: 486 → Task 4: 499 → Task 5: 500 → Task 6: 500.
 
 ---
 
@@ -1078,6 +1078,7 @@ Controller ruling (2026-09-28, resolving the Ur OCR plan's question): a bridge p
   - `PlaybackResult.SkippedByReach : bool` (init-only, default false) and `public static PlaybackResult CompletedSkippedByReach()`. **Definition:** true only on a `Completed` run of a step macro in which at least one step was skipped by its reach check AND no mouse button and no key went down at all (no `MouseDown` or `KeyDown` event was sent, by any step kind, raw steps included). Pointer moves, waits and wheel notches do not count as presses. A run with no reach skip is never `SkippedByReach`, even if it pressed nothing (a wait-only macro is a plain finish). The existing `PlaybackOutcome.Skipped` ("sequence aborted before this alt") is a different thing and is untouched.
   - `AltOutcome(AccountInfo Alt, PlaybackOutcome Outcome, string? Reason, int? StepIndex = null, bool SkippedByReach = false)`.
   - GetPlayback for a bridge playback: `state` `finished`, `reason` `skipped` when the last pass's `PerAlt` is non-empty and every entry is `Completed` with `SkippedByReach`; otherwise a finished run keeps `reason` null.
+  - GetPlayback `state` `stopped` (reason, detail and stepIndex null) when any entry of the pass's `PerAlt` has `Outcome == PlaybackOutcome.Skipped` (the sequence was aborted before that alt, e.g. Esc during the focus delay; not the `SkippedByReach` flag). It is checked before the failure branch and ends a repeat (controller ruling, 2026-09-28).
   - Log lines: `playback finished (skipped: no outline): '<name>' on <account> in <secs> s.` per account; `bridge playback <id> '<name>': finished (skipped)` per bridge playback.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1244,6 +1245,27 @@ with:
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
 
         Assert.Equal($"bridge playback {run.PlaybackId} 'Clear spot N': finished (skipped)", Assert.Single(lines));
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_stopped_when_the_sequence_was_aborted_before_an_alt()
+    {
+        // Esc during the focus delay: SequencePlayer ends that alt as PlaybackOutcome.Skipped
+        // ("Sequence aborted."), not SkippedByReach. It never played, so Ur OCR must not read it
+        // as a cleared spot (controller ruling, 2026-09-28). A repeat ends there too.
+        var m = NewMacro(Guid.NewGuid().ToString(), "Clear spot N");
+        var alt = Alt(123);
+        int passes = 0;
+        var aborted = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Skipped, "Sequence aborted.") }, 0, 0, 1, TimeSpan.FromSeconds(1));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => { passes++; return Task.FromResult<SequenceResult?>(aborted); });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr", Repeat: true), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-ocr"));
+        Assert.True(status.Ok);
+        Assert.Equal(("stopped", (string?)null, (string?)null, (int?)null), (status.State, status.Reason, status.Detail, status.StepIndex));
+        Assert.Equal(1, passes);
     }
 
     [Fact]
@@ -1564,6 +1586,15 @@ with:
 ```csharp
                 var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
                            ?? last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
+                // The sequence was aborted before an alt played (Esc, including during the focus
+                // delay): PlaybackOutcome.Skipped, not SkippedByReach. That alt never ran, so the
+                // pass reads stopped, never finished, and a repeat ends here (controller ruling,
+                // 2026-09-28). Checked before the failure below, so it wins over it.
+                if (last?.PerAlt.Any(a => a.Outcome == PlaybackOutcome.Skipped) == true)
+                {
+                    state = PlaybackState.Stopped;
+                    break;
+                }
                 // Pressed nothing on any alt because reach checks skipped: finished/skipped, so Ur
                 // OCR's pulse loop can tell a skipped Clear spot from a mined one (controller
                 // ruling, 2026-09-28). Additive: a finished run carried no reason before.
@@ -1597,7 +1628,7 @@ Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:Stan
 Expected: all PASS.
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
-Expected: 498 passed, 0 failed.
+Expected: 499 passed, 0 failed.
 
 - [ ] **Step 7: Commit**
 
@@ -2139,7 +2170,7 @@ Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:Stan
 Expected: 7 passed.
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
-Expected: 499 passed, 0 failed.
+Expected: 500 passed, 0 failed.
 
 - [ ] **Step 7: Commit**
 
@@ -2213,7 +2244,7 @@ Run: `dotnet build rororo-ur-task.csproj`
 Expected: `Build succeeded`, 0 errors.
 
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
-Expected: 499 passed, 0 failed, `VersionConsistencyTests` included. If the count differs from 499 but nothing fails, record the real number in the commit body; the running total assumes every earlier task added exactly the tests it lists.
+Expected: 500 passed, 0 failed, `VersionConsistencyTests` included. If the count differs from 500 but nothing fails, record the real number in the commit body; the running total assumes every earlier task added exactly the tests it lists.
 
 - [ ] **Step 4: Commit**
 
@@ -2243,7 +2274,7 @@ Report the branch (`feat/ore-stop-pulse`), the final test count, and what the li
 - Reach on a point step (caller scope): Task 3.
 - Testing, Ur Task line: "a thin white frame passes, averaged lava does not; the hold's before and during use": Task 2.
 - Measured values per spot, provisional: Task 5 (`ring.reach`, per-spot override, generator warning).
-- Controller ruling, finished/skipped on the bridge for a playback that pressed nothing: Task 4 (`PlaybackResult.SkippedByReach`, `AltOutcome.SkippedByReach`, `MacroRunInvoker` reason, log lines), pinned through the registry (`GetPlayback_reports_finished_skipped_when_every_alt_was_skipped_by_reach`) and the pipe (`GetPlayback_over_the_pipe_reports_a_skip_and_a_clean_finish_without_a_reason`), with a normal finish still reasonless.
+- Controller ruling, finished/skipped on the bridge for a playback that pressed nothing: Task 4 (`PlaybackResult.SkippedByReach`, `AltOutcome.SkippedByReach`, `MacroRunInvoker` reason, log lines), pinned through the registry (`GetPlayback_reports_finished_skipped_when_every_alt_was_skipped_by_reach`) and the pipe (`GetPlayback_over_the_pipe_reports_a_skip_and_a_clean_finish_without_a_reason`), with a normal finish still reasonless. An alt the sequence aborted before it played (`PlaybackOutcome.Skipped`, Esc during the focus delay) reads `stopped`, never `finished` (controller ruling, 2026-09-28): `GetPlayback_reports_stopped_when_the_sequence_was_aborted_before_an_alt`.
 - Version and changelog: Task 6.
 - Not Ur Task, left to the Ur OCR plan: the ride, the layer vote on calm frames, per-account target layer, "top" or "one above", the ride burst, the rock cap, Go to Top past the target, the pause length, and choosing which Clear spot macros to run in which order.
 
