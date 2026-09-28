@@ -112,6 +112,35 @@ scope here.
   coordinates into the triggers. Then a live run: the loop stops for ore on each layer, mines it,
   resumes, and pushes to the top on the rock cap.
 
+## Amended after the first live frame (Este, 2026-09-27)
+
+The first reference frame and Este's notes changed three things. The build (Ur Task 0.10.0, Ur OCR
+0.5.0) predates this section; the reachability check below is follow-up work before the live run.
+
+- **The view is the digging angle, not straight down.** Straight top-down inside a shaft sees mostly
+  its own walls from above ("tight"), and the ore sits in those walls. The loop uses Este's normal
+  digging angle, looking down the shaft, at a fixed height and zoom. The camera macro reproduces that
+  view. The ring spots are fixed points on the wall faces touching the character in that view, not a
+  compass square. Stability beats reach: keep the ring tight even though the pickaxe reaches further.
+- **Reachability comes from the white outline.** When the mouse is over a block the character can
+  break, the block gets a white outline. The mine opens up as it is dug and enchant power-balls blow
+  big holes, so a fixed spot can look through a hole at ore out of reach. Without a check, the
+  no-time-limit hold would never end on that ore. So:
+  - "Mine spot N" moves the pointer onto the spot, then checks for the white outline (a colour check
+    on the outline edge, measured per spot in the sweep).
+  - Outline present: hold until the ore breaks, no time limit, as decision 5 says.
+  - No outline: do not press; turn Auto Mine back on.
+  - During the hold, if the outline disappears, let go.
+- **Mine #8's rock is multicoloured.** A navy base with magenta, pink and orange lava veins, which
+  vary block to block. The rock set per layer holds all of them. Watch the orange veins against
+  Sunstone's orange-gold; ring-fit's missed-ore and false-stop counts decide whether one ring works.
+- **Transient text** ("... vending machine is back in stock!") is drawn across the middle of the
+  screen, y 360-430 at 100%. Keep spots out of that band.
+
+First placement, from the 2026-09-27 reference frame (800x599 at 100%, not yet confirmed by Este):
+N (470,150), NE (570,170), E (610,270), SE (600,335), S (400,455), SW (230,335), W (215,260),
+NW (300,150). E and SE landed on lava veins, and S landed on the magenta floor.
+
 ## Out of scope
 
 - The bottom-layer bombing routine (piece 2).
