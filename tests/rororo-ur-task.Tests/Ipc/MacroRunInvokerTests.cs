@@ -318,4 +318,29 @@ public class MacroRunInvokerTests
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
         Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
     }
+
+    [Fact]
+    public async Task A_bridge_playback_logs_how_it_ended()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Mine spot N");
+        var alt = Alt(123);
+        var lines = new List<string>();
+        var failed = new SequenceResult(new[]
+        {
+            new AltOutcome(alt, PlaybackOutcome.Aborted, "alt-123: step 2 'Spot N' could not see the window.", 1),
+        }, 0, 1, 0, TimeSpan.FromSeconds(1));
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(failed),
+            log: lines.Add);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal($"bridge playback {run.PlaybackId} 'Mine spot N': failed (check-failed). alt-123: step 2 'Spot N' could not see the window.",
+            Assert.Single(lines));
+    }
 }
