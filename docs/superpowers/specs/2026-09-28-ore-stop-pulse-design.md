@@ -61,6 +61,27 @@ ride itself is timed, not read.
 - rock cap minutes (default 5);
 - pause before reading (default 1000 ms).
 
+## Found in the live run (2026-09-28)
+
+- **The white outline is hidden while the mouse button is held.** It shows only while hovering. A
+  hold on ItsJustEstePapa let go "outline gone" after 0.3 s while the block was still there, and the
+  outline came back on release. That fails merge gate F4, so the outline-gone release during a hold
+  must not ship as built.
+- **Colour drift is too eager to end a hold.** The hit darkens a block (pink #A80B55 to #6C0224), so
+  a weaker account let go after 0.3 s without breaking the block. The main breaks blocks in 0.3 s,
+  which hid this.
+- **Outline counts:** 385 to 460 near-white pixels in a 120x120 box on an outlined block's edge,
+  against 0 to 7 on plain rock. A threshold of 60 has a wide margin.
+- **Next design, hold-release-look:** hover and check the outline (none means skip); press for one
+  beat (about 1 s); release and check again. If it's still outlined, the block is still there, so
+  hold another beat. If there's no outline, it broke, so move on. There's no time limit on ore, per
+  decision 5. Colour drift no longer ends a hold. This replaces the outline-gone and colour-drift
+  releases for pulse clears.
+- **Hide My Pets.** Pets sit over the character and the ring spots. Required now: the pulse setup and
+  README tell the user to turn on Hide My Pets (in Settings) before running the pulse loop. Planned: a
+  checked macro opens Settings, reads the toggle (green "On" or red "Off"), remembers the user's
+  setting, turns it On when the loop starts, and restores it when the loop stops.
+
 ## Not in v1 (v2: the bomb grid)
 
 At the target layer: walk to the middle of a 3x3 area, drop a bomb from its hotbar key, walk 3 blocks to
