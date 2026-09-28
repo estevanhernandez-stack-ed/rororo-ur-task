@@ -100,4 +100,18 @@ public class AutoHotkeyStepExportTests
         Assert.Contains("; reach: 'Spot N' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\n; hold: 'Spot N'", text);
         Assert.Contains("; reach: 'Two Lines' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\nClick, 456, 300, Left", text);
     }
+
+    [Fact]
+    public void A_reach_hold_notes_its_beats()
+    {
+        var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
+        var hold = new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach);
+
+        var open = AutoHotkeyExporter.Export(M(hold), AhkVersion.V1);
+        Assert.Contains("; hold: 'Spot N' presses in 1000 ms beats and looks for the outline after each release, until it is gone (Ur Task only); exported as a 1000 ms hold\r\n", open);
+        Assert.DoesNotContain("colour changes", open);
+
+        var capped = AutoHotkeyExporter.Export(M(hold with { MaxMs = 2500 }), AhkVersion.V1);
+        Assert.Contains("; hold: 'Spot N' presses in 1000 ms beats and looks for the outline after each release, until it is gone or 2500 ms pressed (Ur Task only); exported as a 2500 ms hold\r\n", capped);
+    }
 }
