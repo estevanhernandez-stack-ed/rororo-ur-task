@@ -28,6 +28,12 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 
 ### Changed
 
+- **Reach holds look for the outline over a baseline.** Before the pointer moves onto the spot,
+  the hold counts the box's near-white pixels with the pointer elsewhere (moving it one box-width
+  away first if it is already inside), and the outline counts only when the count rises at least
+  `minCount` over that. White quartz is bright enough to pass the raw count with no hover, so an
+  out-of-reach quartz block read as outlined and was pressed with no time limit. The log reads
+  "outline seen (N near-white px over a baseline of B, needs M)". Reach points are unchanged.
 - **Mine spot macros check reach too.** A spot looking through a hole at ore out of reach no
   longer holds forever: no outline, no press, and Auto Mine goes back on.
 - **Esc during the focus delay now reads `stopped`, not `finished`.** The sequence never played
