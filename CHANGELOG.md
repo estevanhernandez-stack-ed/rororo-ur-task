@@ -43,6 +43,10 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   `minCount` over that. White quartz is bright enough to pass the raw count with no hover, so an
   out-of-reach quartz block read as outlined and was pressed with no time limit. The log reads
   "outline seen (N near-white px over a baseline of B, needs M)". Reach points are unchanged.
+- **The outline box can be up to 240 px a side, up from 120.** The camera pops in to the first
+  wall in its way, so a block in a narrow shaft measures around 170 px; the old 120 cap refused
+  real shaft blocks. Reach checks and `ClearAt` both read the same `OutlineCheck.MaxSide`, so
+  both are covered.
 - **Mine spot macros check reach too.** A spot looking through a hole at ore out of reach no
   longer holds forever: no outline, no press, and Auto Mine goes back on.
 - **Esc during the focus delay now reads `stopped`, not `finished`.** The sequence never played

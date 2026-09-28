@@ -83,6 +83,19 @@ public class ClearAtMacroTests
         Assert.Null(ClearAtMacro.Validate(Valid(64)));
     }
 
+    /// <summary>A one-block shaft reads about 170 px (spec, "Block size is read every pass"), so
+    /// the box cap has to clear that comfortably: 240 accepted, 241 refused.</summary>
+    [Fact]
+    public void Validate_accepts_an_outline_box_at_the_240_cap()
+    {
+        var ok = Valid(1) with
+        {
+            Points = new[] { new ClearAtPoint(400, 300, "ore 1") },
+            Outline = new ClearAtOutline(240, 240, 60),
+        };
+        Assert.Null(ClearAtMacro.Validate(ok));
+    }
+
     [Theory]
     [InlineData("no-target", "ClearAt needs a target account.")]
     [InlineData("foreground-target", "ClearAt needs a decimal user id; got an invalid target.")]
@@ -98,7 +111,7 @@ public class ClearAtMacroTests
     [InlineData("box-outside", "ClearAt point 2 'ore 2' has an outline box outside the 800x599 client.")]
     [InlineData("no-outline", "ClearAt needs an outline box.")]
     [InlineData("empty-box", "ClearAt has an empty outline box.")]
-    [InlineData("big-box", "ClearAt has an outline box larger than 120x120.")]
+    [InlineData("big-box", "ClearAt has an outline box larger than 240x240.")]
     [InlineData("minCount-0", "ClearAt has an outline minCount below 1.")]
     [InlineData("minCount-over-box", "ClearAt has an outline minCount larger than its box, so it can never pass.")]
     [InlineData("whiteMin-0", "ClearAt has an outline whiteMin outside 1 to 255.")]
@@ -124,7 +137,7 @@ public class ClearAtMacroTests
             "box-outside" => ok with { Points = new[] { p[0], new ClearAtPoint(790, 300, "ore 2") } },
             "no-outline" => ok with { Outline = null },
             "empty-box" => ok with { Outline = new ClearAtOutline(0, 50, 1) },
-            "big-box" => ok with { Outline = new ClearAtOutline(121, 50, 60) },
+            "big-box" => ok with { Outline = new ClearAtOutline(241, 50, 60) },
             "minCount-0" => ok with { Outline = new ClearAtOutline(50, 50, 0) },
             "minCount-over-box" => ok with { Outline = new ClearAtOutline(10, 10, 101) },
             "whiteMin-0" => ok with { Outline = new ClearAtOutline(50, 50, 60, 0) },
