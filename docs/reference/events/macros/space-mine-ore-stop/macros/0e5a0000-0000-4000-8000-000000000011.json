@@ -69,6 +69,16 @@
           "h": 5
         },
         "tolerance": 15
+      },
+      "reach": {
+        "box": {
+          "offsetX": -40,
+          "offsetY": -40,
+          "w": 80,
+          "h": 80
+        },
+        "minCount": 60,
+        "whiteMin": 225
       }
     },
     {

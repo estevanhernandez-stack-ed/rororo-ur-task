@@ -1,5 +1,5 @@
 {
-  "about": "Ore-stop macro inputs: client-space pixels in an 800x599 client at 100% display scale. Edit, then run generate.ps1. A group whose measuredOn is null is provisional; the Ur OCR capture sweep measures it.",
+  "about": "Ore-stop macro inputs: client-space pixels in an 800x599 client at 100% display scale. Edit, then run generate.ps1. A group whose measuredOn is null is provisional; the Ur OCR capture sweep measures ring and camera, and the live outline measurement (pointer on and off a breakable block) measures ring.reach. ring.reach is the shared default for every spot; a spot may carry its own reach { minCount, whiteMin, w, h }, which replaces the default wholesale.",
   "recordedAtUnixMs": 1790467200000,
   "client": { "w": 800, "h": 599, "displayScale": 100 },
   "game": { "placeId": 8737899170 },
@@ -17,6 +17,7 @@
     "holdDelayMs": 300,
     "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 },
     "tolerance": 15,
+    "reach": { "measuredOn": null, "minCount": 60, "whiteMin": 225, "w": 80, "h": 80 },
     "spots": [
       { "name": "N",  "x": 400, "y": 244 },
       { "name": "NE", "x": 456, "y": 244 },
