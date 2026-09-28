@@ -52,6 +52,9 @@ foreach ($group in 'autoMine', 'goToTop', 'ring', 'camera') {
         Write-Warning "$group is provisional (measuredOn is null). The Ur OCR capture sweep measures it; regenerate after."
     }
 }
+if ($null -eq $m.goToTop.check) {
+    Write-Warning "goToTop.check is null: the Go to Top press is unchecked until the Ur OCR capture sweep measures it; regenerate after."
+}
 
 function Rgb($c) { [ordered]@{ r = [int]$c.r; g = [int]$c.g; b = [int]$c.b } }
 function Box($b) { [ordered]@{ offsetX = [int]$b.offsetX; offsetY = [int]$b.offsetY; w = [int]$b.w; h = [int]$b.h } }
