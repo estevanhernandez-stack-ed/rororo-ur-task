@@ -219,9 +219,16 @@ public static class AutoHotkeyExporter
                     var holdMs = h.MaxMs ?? HoldExportMs;
                     var holdLabel = SanitizeComment(h.Label ?? h.Id);
                     if (h.Reach is { } hr) sb.Append(ReachComment(h.Label ?? h.Id, hr)).Append(Nl);
-                    sb.Append(h.MaxMs is null
-                        ? FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold")
-                        : FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold")).Append(Nl);
+                    // A reach hold plays as hold-release-look beats in Ur Task; colour plays no part.
+                    var beats = FormattableString.Invariant($"presses in {StepTiming.HoldBeatMs} ms beats and looks for the outline after each release, until it is gone");
+                    var holdNote = (h.Reach is not null, h.MaxMs is not null) switch
+                    {
+                        (true, false) => FormattableString.Invariant($"; hold: '{holdLabel}' {beats} (Ur Task only); exported as a {holdMs} ms hold"),
+                        (true, true) => FormattableString.Invariant($"; hold: '{holdLabel}' {beats} or {holdMs} ms pressed (Ur Task only); exported as a {holdMs} ms hold"),
+                        (false, false) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold"),
+                        (false, true) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold"),
+                    };
+                    sb.Append(holdNote).Append(Nl);
                     sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseDown, 0, h.X, h.Y, h.Button, 0), isDown: true, version)).Append(Nl);
                     sb.Append(Sleep(holdMs, version)).Append(Nl);
                     sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseUp, 0, h.X, h.Y, h.Button, 0), isDown: false, version)).Append(Nl);
