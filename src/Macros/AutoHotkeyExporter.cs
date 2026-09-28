@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Labs626.UrTask.Macros.Steps;
 
 namespace Labs626.UrTask.Macros;
 
@@ -30,7 +31,8 @@ public static class AutoHotkeyExporter
         var sb = new StringBuilder();
         AppendHeader(sb, macro);
         AppendDirectives(sb, macro, version);
-        AppendEvents(sb, macro, version);
+        if (macro.HasSteps) AppendSteps(sb, macro, version);
+        else AppendEvents(sb, macro, version);
         return sb.ToString();
     }
 
@@ -38,7 +40,7 @@ public static class AutoHotkeyExporter
 
     private static void AppendHeader(StringBuilder sb, Macro macro)
     {
-        var name = (macro.Name ?? "(unnamed)").Replace("\r", "").Replace("\n", " ");
+        var name = SanitizeComment(macro.Name ?? "(unnamed)");
         sb.Append($"; Exported from RoRoRo Ur Task — macro \"{name}\"").Append(Nl);
         sb.Append("; Best-effort port — original event timing is preserved via Sleep calls.").Append(Nl);
         sb.Append("; Caveats: plays on the ACTIVE window only (no per-window targeting); can't").Append(Nl);
@@ -53,6 +55,9 @@ public static class AutoHotkeyExporter
             sb.Append("; (the size it was recorded at) for clicks to land.").Append(Nl);
         }
 
+        if (macro.HasSteps)
+            sb.Append("; Exported from point steps. Colour checks and first-match choices run in Ur Task only and appear as comments.").Append(Nl);
+
         sb.Append(Nl);
     }
 
@@ -60,7 +65,7 @@ public static class AutoHotkeyExporter
 
     private static void AppendDirectives(StringBuilder sb, Macro macro, AhkVersion version)
     {
-        var hasMouseEvent = macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
+        var hasMouseEvent = macro.HasSteps || macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
             or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel);
         var useClientCoords = hasMouseEvent && macro.IsClientSpace;
 
@@ -176,4 +181,74 @@ public static class AutoHotkeyExporter
         5 => "X2",
         _ => "Left",
     };
+
+    // ---------- Steps (v4) ----------
+
+    private static void AppendSteps(StringBuilder sb, Macro macro, AhkVersion version)
+    {
+        foreach (var step in macro.Steps!)
+        {
+            if (step.DelayMs > 0) sb.Append(Sleep(step.DelayMs, version)).Append(Nl);
+            switch (step)
+            {
+                case KeyStep k:
+                    sb.Append(FormatKey(k.VirtualKeyCode, k.Down, version)).Append(Nl);
+                    break;
+                case PointStep p:
+                    if (p.CheckEnabled && p.Check is { } c)
+                        sb.Append($"; check: '{SanitizeComment(p.Label ?? p.Id)}' expects {c.Expect.Hex} here (Ur Task only)").Append(Nl);
+                    sb.Append(ClickAt(p.X, p.Y, p.Button, version)).Append(Nl);
+                    break;
+                case FirstMatchStep f:
+                    if (f.Candidates is not { Count: > 0 })
+                    {
+                        sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}' has no candidates — nothing exported here").Append(Nl);
+                        break;
+                    }
+                    var first = f.Candidates[0];
+                    sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}': Ur Task presses the first candidate whose colour matches; exported as '{SanitizeComment(first.Label ?? first.Id)}'").Append(Nl);
+                    sb.Append(ClickAt(first.X, first.Y, first.Button, version)).Append(Nl);
+                    break;
+                case DragStep d:
+                    var btn = ButtonName(d.Button);
+                    sb.Append(version == AhkVersion.V1
+                        ? FormattableString.Invariant($"MouseClickDrag, {btn}, {d.StartX}, {d.StartY}, {d.StartX + d.Dx}, {d.StartY + d.Dy}")
+                        : FormattableString.Invariant($"MouseClickDrag \"{btn}\", {d.StartX}, {d.StartY}, {d.StartX + d.Dx}, {d.StartY + d.Dy}")).Append(Nl);
+                    break;
+                case WheelStep w:
+                    sb.Append(version == AhkVersion.V1
+                        ? FormattableString.Invariant($"MouseMove, {w.X}, {w.Y}")
+                        : FormattableString.Invariant($"MouseMove {w.X}, {w.Y}")).Append(Nl);
+                    sb.Append(FormatWheel(new MacroEvent(0, MacroEventKind.MouseWheel, 0, w.X, w.Y, 0, w.Delta), version)).Append(Nl);
+                    break;
+                case PointerMoveStep m:
+                    sb.Append(FormattableString.Invariant($"DllCall(\"mouse_event\", \"UInt\", 1, \"Int\", {m.Dx}, \"Int\", {m.Dy}, \"UInt\", 0, \"UPtr\", 0)")).Append(Nl);
+                    break;
+                case RawStep r:
+                    for (int i = 0; i < r.Events.Count; i++)
+                    {
+                        if (i > 0 && r.Events[i].TimestampMs > r.Events[i - 1].TimestampMs)
+                            sb.Append(Sleep(r.Events[i].TimestampMs - r.Events[i - 1].TimestampMs, version)).Append(Nl);
+                        AppendEvent(sb, r.Events[i], version);
+                    }
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Strips CR/LF from label text before it lands in a `;` comment line — a raw
+    /// newline would push the rest of the label past the comment onto its own, uncommented
+    /// line. Same treatment <see cref="AppendHeader"/> gives the macro name.</summary>
+    private static string SanitizeComment(string s) => s.Replace("\r", "").Replace("\n", " ");
+
+    private static string Sleep(long ms, AhkVersion version)
+        => version == AhkVersion.V1 ? FormattableString.Invariant($"Sleep, {ms}") : FormattableString.Invariant($"Sleep {ms}");
+
+    private static string ClickAt(int x, int y, int button, AhkVersion version)
+    {
+        var btn = ButtonName(button);
+        return version == AhkVersion.V1
+            ? FormattableString.Invariant($"Click, {x}, {y}, {btn}")
+            : FormattableString.Invariant($"Click \"{x} {y} {btn}\"");
+    }
 }

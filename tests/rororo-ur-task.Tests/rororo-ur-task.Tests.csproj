@@ -57,6 +57,14 @@
       <Link>fixtures\macro-v1.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\fixtures\mine-zone-8.json">
+      <Link>fixtures\mine-zone-8.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\fixtures\mining-z8-egg.json">
+      <Link>fixtures\mining-z8-egg.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <!-- NO XAML is copied to the test output on purpose. Copying the dialogs next to the test binary

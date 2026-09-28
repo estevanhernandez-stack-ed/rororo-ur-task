@@ -23,6 +23,7 @@ public sealed class MacroStore
         // to repeat the converter setup. The migrator's converter accepts both string
         // and integer forms, so v0.1 macros (integer enums) still load fine.
         Converters = { new JsonStringEnumConverter() },
+        AllowOutOfOrderMetadataProperties = true,
     };
 
     private readonly string _directory;

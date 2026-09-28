@@ -55,12 +55,31 @@ public sealed record StopMacroResponse(
     public static StopMacroResponse Refused(string reason, string? detail = null) => new(false, 0, reason, detail);
 }
 
+public sealed record GetPlaybackRequest(
+    string ContractVersion,
+    string Method,
+    string? PlaybackId,
+    string? CallerPluginId);
+
+/// <summary>State is running | finished | stopped | failed. On failed, Reason is a short code
+/// (check-failed, refused, aborted, error) and Detail is the sentence Claude shows.</summary>
+public sealed record GetPlaybackResponse(
+    bool Ok,
+    string? State,
+    string? Reason,
+    string? Detail,
+    int? StepIndex)
+{
+    public static GetPlaybackResponse Refused(string reason, string? detail = null) => new(false, null, reason, detail, null);
+}
+
 internal static class BridgeContract
 {
     public const string Method = "RunMacro";          // back-compat alias
     public const string MethodRunMacro = "RunMacro";
     public const string MethodListMacros = "ListMacros";
     public const string MethodStopMacro = "StopMacro";
+    public const string MethodGetPlayback = "GetPlayback";
 
     public static readonly JsonSerializerOptions Json = new()
     {

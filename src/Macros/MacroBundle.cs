@@ -18,6 +18,7 @@ public static class MacroBundle
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        AllowOutOfOrderMetadataProperties = true,
     };
 
     public static string Serialize(IReadOnlyList<Macro> macros, long exportedAtUnixMs)
