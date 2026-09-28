@@ -16,6 +16,13 @@ public class MacroRunnerServerTests
         public IReadOnlyList<MacroSummary> Macros { get; set; } = Array.Empty<MacroSummary>();
         public StopMacroResponse StopResult { get; set; } = StopMacroResponse.Done(0);
         public StopMacroRequest? SeenStop { get; private set; }
+        public ClearAtRequest? SeenClearAt { get; private set; }
+
+        public Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct)
+        {
+            SeenClearAt = request;
+            return Task.FromResult(Next);
+        }
 
         public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
         {

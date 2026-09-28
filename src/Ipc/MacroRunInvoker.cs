@@ -96,17 +96,49 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         if (targets.Count == 0)
             return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", "None of the requested targets are running."));
 
-        // Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not
-        // block the caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in
-        // the detached playback are swallowed here — they surface on the Ur Task playback side.
-        // The playback registers under its id with a CTS linked to the bridge token, so
-        // StopMacro can end it and bridge shutdown still tears it down.
+        return Task.FromResult(Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct));
+    }
+
+    /// <summary>
+    /// The ClearAt bridge call (ore-stop pulse spec): the points become an in-memory macro of reach
+    /// holds, played through <see cref="Start"/> exactly like a saved macro, so the single-flight
+    /// rule, GetPlayback, StopMacro and Esc need nothing new. It is never written to the store, so
+    /// ListMacros never shows it. Order: malformed → busy → account not running → play.
+    /// </summary>
+    public Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct)
+    {
+        // Shape first: a malformed call is refused as malformed even while something is playing.
+        if (ClearAtMacro.Validate(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+        if (_isBusy() || !_playbacks.IsEmpty)
+            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+
+        var targets = ResolveTargets(new[] { request.Target! });
+        if (targets.Count == 0)
+            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+
         var playbackId = Guid.NewGuid().ToString("N");
+        var macro = ClearAtMacro.Build(request, ClearAtMacro.IdPrefix + playbackId);
+        _log(ClearAtMacro.StartLine(playbackId, macro, targets[0].DisplayName));
+        return Task.FromResult(Start(playbackId, macro, targets, interAltDelayMs: null, repeat: false, ct));
+    }
+
+    /// <summary>
+    /// Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not block the
+    /// caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in the detached playback
+    /// are swallowed here — they surface on the Ur Task playback side. The playback registers under
+    /// its id with a CTS linked to the bridge token, so StopMacro can end it and bridge shutdown
+    /// still tears it down.
+    /// </summary>
+    private RunMacroResponse Start(
+        string playbackId, Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets,
+        int? interAltDelayMs, bool repeat, CancellationToken ct)
+    {
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
         _registry.Started(playbackId);
-        _ = ObservePlaybackAsync(playbackId, macro, targets, request.InterAltDelayMs, request.Repeat, playbackCts);
-        return Task.FromResult(RunMacroResponse.Accepted(playbackId));
+        _ = ObservePlaybackAsync(playbackId, macro, targets, interAltDelayMs, repeat, playbackCts);
+        return RunMacroResponse.Accepted(playbackId);
     }
 
     public IReadOnlyList<MacroSummary> ListMacros()
