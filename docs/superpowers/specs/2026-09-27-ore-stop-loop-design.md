@@ -28,7 +28,7 @@ layer reading and the ring below.
 | 4 | How ore is mined | Hold the left mouse button on it (Este: hold works once Auto Mine is off; some ore takes 20+ hits). |
 | 5 | Give-up on ore | None on time. The hold continues while the spot still shows its starting ore colour; it ends when the spot turns to rock or empty, or to something that is neither (a misread). Ore is never abandoned for taking long. |
 | 6 | Give-up on rock | A per-loop setting, default 5 minutes on one layer, then Go to Top. Under-powered accounts get pushed back to easier rock. |
-| 7 | Telling Este an account is under-powered | No notifications. A line in Ur Task's log and in `GetPlayback` ("Went to top: 5 minutes on the bottom layer") that an agent session can read. |
+| 7 | Telling Este an account is under-powered | No notifications. Ur OCR, which decides, logs the reason ("Went to top: 5 minutes on the bottom layer") in `ur-ocr.log`; Ur Task logs the Go to Top playback and its ending in `ur-task.log`, readable through `GetPlayback`. An agent session reads both. *Amended 2026-09-27 during planning:* the bridge contract is frozen (decision 9), so Ur Task cannot know why a macro ran. |
 | 8 | Screen geometry | The loop first drives the camera top-down (to the pitch limit, then count back). With the camera fixed, the character and the ring sit at steady game-area spots. |
 | 9 | Split | Ur OCR watches the ring and fires; Ur Task runs fixed macros. RunMacro by name, so the bridge contract does not change. |
 
