@@ -259,6 +259,152 @@ public class StepRunnerTests
         finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
     }
 
+    // ---------- reach (the white outline) ----------
+
+    private static readonly Rgb White = new(245, 245, 245);
+    private static readonly OutlineCheck Reach80 = new(new CheckBox(-40, -40, 80, 80), 60);
+
+    /// <summary>Mine #8 rock and lava: navy, hot magenta, orange, pink, and a warm near-white whose
+    /// blue sits under 225. None of them has every channel at 225 or more.</summary>
+    private static readonly Rgb[] Lava = { new(8, 9, 19), new(235, 9, 116), new(255, 140, 30), new(255, 120, 200), new(250, 230, 180) };
+    private static Rgb LavaAt(int x, int y) => Lava[(x * 7 + y * 13) % Lava.Length];
+
+    /// <summary>A block face centred on (cx, cy): ore inside, a white frame <paramref name="thick"/>
+    /// px wide at <paramref name="half"/> px out, rock beyond. The ring at distance k holds 8k
+    /// pixels, so a 1 px frame at 28 is 224 pixels and a 2 px frame is 224 + 216 = 440.
+    /// <paramref name="shown"/> turns the outline off (rock instead of white) at chosen times.</summary>
+    private static Func<long, int, int, Rgb> Framed(int cx, int cy, int half = 28, int thick = 1, Func<long, bool>? shown = null)
+        => (t, x, y) =>
+        {
+            var m = Math.Max(Math.Abs(x - cx), Math.Abs(y - cy));
+            if (m > half) return Rock;
+            if (m > half - thick) return shown is null || shown(t) ? White : Rock;
+            return Ore;
+        };
+
+    private static HoldStep ReachHold(int? maxMs = null, int x = 400, int y = 244)
+        => Hold(maxMs, x: x, y: y) with { Reach = Reach80 };
+
+    [Theory]
+    [InlineData(1, 224)]
+    [InlineData(2, 440)]
+    public async Task A_thin_white_frame_lets_the_hold_press(int thick, int count)
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = Framed(400, 244, thick: thick) };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((400, 244, 150L), (down.X, down.Y, down.TimestampMs)); // no grace spent: the outline was there
+        Assert.Contains($"step 1 'Spot N' outline seen ({count} near-white px, needs 60)", log);
+        Assert.Contains("step 1 'Spot N' held 0.5 s, released: reached its 500 ms limit", log);
+    }
+
+    [Fact]
+    public async Task Lava_without_a_white_frame_skips_the_hold_and_the_next_step_runs()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome); // a skip, never a failure
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((5, 5), (down.X, down.Y));
+        Assert.Contains("step 1 'Spot N' no outline, skipped (0 near-white px, needs 60)", log);
+        Assert.DoesNotContain(log, l => l.Contains("held"));
+    }
+
+    [Fact]
+    public async Task Reach_waits_its_grace_for_the_outline_to_draw()
+    {
+        // The pointer lands at 100 ms; the game draws the outline at 300. Checks run at 150, 250, 350.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = Framed(400, 244, shown: t => t >= 300) };
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log), io, default);
+
+        Assert.Equal(350, Assert.Single(io.Downs).TimestampMs);
+        Assert.Contains("step 1 'Spot N' outline seen (224 near-white px, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task A_hold_lets_go_when_the_outline_is_gone_for_two_polls()
+    {
+        // The ore stays under the colour box, but the outline goes at 1200 (out of reach, or the
+        // block behind it is not breakable). Polls at 1250 and 1350 miss it: release at 1350.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = Framed(400, 244, shown: t => t < 1200) };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(1350, Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp).TimestampMs);
+        Assert.Contains("step 1 'Spot N' held 1.2 s, released: outline gone (0 near-white px, needs 60)", log);
+        Assert.Empty(io.Released);
+    }
+
+    [Fact]
+    public async Task One_poll_without_the_outline_does_not_end_a_hold()
+    {
+        // The pickaxe swing crosses the frame for exactly one poll (1050).
+        var log = new List<string>();
+        var io = new FakeIo { Screen = Framed(400, 244, shown: t => t != 1050) };
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 3000) }, Ctx(log), io, default);
+        Assert.Contains("step 1 'Spot N' held 3.0 s, released: reached its 3000 ms limit", log);
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_during_the_reach_check_aborts_rather_than_skips()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
+        io.OnDelay = () => { if (io.NowMs >= 150) io.Foreground = false; }; // right after the jump
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/2.", r.Reason);
+        Assert.Null(r.StepIndex);
+        Assert.Empty(io.Downs);
+        Assert.DoesNotContain(log, l => l.Contains("skipped"));
+    }
+
+    [Fact]
+    public async Task A_reach_check_that_cannot_see_the_window_stops_instead_of_skipping()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { CaptureWorks = false };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
+
+        Assert.Equal("CElCPapa: step 1 'Spot N' could not see the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Downs);
+        Assert.DoesNotContain(log, l => l.Contains("skipped"));
+    }
+
+    [Fact]
+    public async Task A_reach_box_outside_the_window_refuses_before_any_input()
+    {
+        // The colour box at (398,28) fits; the 80x80 reach box would start at y = -10.
+        var io = new FakeIo();
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(x: 400, y: 30) }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Spot N' checks a reach box outside the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Sent);
+    }
+
+    [Fact]
+    public async Task Reach_scales_with_the_window()
+    {
+        // (400,244) in 800x599 lands at (500,305) in 1000x749; the box grows to 100x100 and the
+        // threshold to 75. The frame is drawn at the scaled size (35 px out, 280 px).
+        var log = new List<string>();
+        var io = new FakeIo { Client = (1000, 749), Screen = Framed(500, 305, half: 35) };
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log, actual: (1000, 749)), io, default);
+
+        Assert.Contains((450, 255, 100, 100), io.CaptureRects);
+        Assert.Equal((500, 305), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.Contains("step 1 'Spot N' outline seen (280 near-white px, needs 75)", log);
+    }
+
     // ---------- first match: skipIfOther ----------
 
     private static readonly Rgb DotGreen = new(125, 246, 13);

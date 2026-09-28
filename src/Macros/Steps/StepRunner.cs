@@ -285,6 +285,10 @@ internal static class StepRunner
     /// tint is already in it. Lets go when the colour has moved for
     /// <see cref="StepTiming.HoldDriftPolls"/> polls in a row, or at MaxMs. With no MaxMs there is
     /// no time limit: ore is never abandoned for taking long (ore-stop spec, decision 5).
+    /// <para>With a reach check (ore-stop pulse spec): after the jump, no white outline within
+    /// <see cref="StepTiming.ReachGraceMs"/> skips the step without pressing. During the hold, the
+    /// outline gone for <see cref="StepTiming.HoldDriftPolls"/> polls running lets go: the block
+    /// broke or is out of reach.</para>
     /// </summary>
     private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
     {
@@ -296,9 +300,16 @@ internal static class StepRunner
         var box = PointMath.BoxRect(at, check.Box);
         var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
         if (!PointMath.InsideClient(box, client)) throw new StopException($"{name} checks a box outside the window.", index);
+        var reach = ReachFor(h.Reach, at, client, ctx, name, index);
 
         await io.Delay(h.DelayMs, ct);
         await JumpAsync(io, at, ct);
+        if (reach is { } r0)
+        {
+            var (seen0, count0) = await AwaitOutlineAsync(r0, io, name, index, ct);
+            LogOutline(ctx, index, label, seen0, count0, r0.Need);
+            if (!seen0) return;
+        }
         var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
 
         SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
@@ -308,7 +319,7 @@ internal static class StepRunner
         string why;
         try
         {
-            int drifted = 0;
+            int drifted = 0, gone = 0;
             while (true)
             {
                 var elapsed = io.NowMs - pressedAt;
@@ -317,11 +328,23 @@ internal static class StepRunner
                 if (io.NowMs - pressedAt >= limit) continue; // the limit lets go at the top, without another sample
                 var seen = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
                 var d = seen.DistanceTo(start);
-                if (d <= check.Tolerance) { drifted = 0; continue; }
-                if (++drifted < StepTiming.HoldDriftPolls) continue;
-                why = string.Create(CultureInfo.InvariantCulture,
-                    $"colour moved from {ColorNamer.Describe(start)} to {ColorNamer.Describe(seen)} (distance {d:F0})");
-                break;
+                drifted = d <= check.Tolerance ? 0 : drifted + 1;
+                if (drifted >= StepTiming.HoldDriftPolls)
+                {
+                    why = string.Create(CultureInfo.InvariantCulture,
+                        $"colour moved from {ColorNamer.Describe(start)} to {ColorNamer.Describe(seen)} (distance {d:F0})");
+                    break;
+                }
+                if (reach is { } r)
+                {
+                    var count = CountGuarded(io, r.Rect, r.WhiteMin) ?? throw new StopException($"{name} could not see the window.", index);
+                    gone = count >= r.Need ? 0 : gone + 1;
+                    if (gone >= StepTiming.HoldDriftPolls)
+                    {
+                        why = string.Create(CultureInfo.InvariantCulture, $"outline gone ({count} near-white px, needs {r.Need})");
+                        break;
+                    }
+                }
             }
             SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, h.Button, 0));
             heldButtons.Remove(h.Button);
@@ -337,6 +360,51 @@ internal static class StepRunner
         }
         ctx.Log(string.Create(CultureInfo.InvariantCulture,
             $"step {index + 1} '{label}' held {(io.NowMs - pressedAt) / 1000.0:F1} s, released: {why}"));
+    }
+
+    // ---------- reach (the white outline) ----------
+
+    /// <summary>A reach check placed in the actual window: the box, the scaled threshold, and the
+    /// white floor.</summary>
+    private readonly record struct ReachPlan((int X, int Y, int W, int H) Rect, int Need, int WhiteMin);
+
+    /// <summary>Null when the step has no reach check. The box scales like the point; one that
+    /// leaves the window stops the step before any input, like a colour box does.</summary>
+    private static ReachPlan? ReachFor(OutlineCheck? reach, (int X, int Y) at, (int W, int H) client, StepContext ctx, string name, int index)
+    {
+        if (reach is null) return null;
+        var rect = PointMath.ScaledRect(at, reach.Box, ctx.RecordedClient, ctx.ActualClient);
+        if (!PointMath.InsideClient(rect, client)) throw new StopException($"{name} checks a reach box outside the window.", index);
+        return new ReachPlan(rect, PointMath.ScaledCount(reach.MinCount, ctx.RecordedClient, ctx.ActualClient), reach.WhiteMin);
+    }
+
+    /// <summary>With the pointer already on the spot: count until the outline shows, for at most
+    /// <see cref="StepTiming.ReachGraceMs"/>. A lost foreground aborts and a failed capture stops
+    /// the step; neither ever reads as "no outline".</summary>
+    private static async Task<(bool Seen, int Count)> AwaitOutlineAsync(ReachPlan r, IStepIo io, string name, int index, CancellationToken ct)
+    {
+        var start = io.NowMs;
+        while (true)
+        {
+            var count = CountGuarded(io, r.Rect, r.WhiteMin) ?? throw new StopException($"{name} could not see the window.", index);
+            if (count >= r.Need) return (true, count);
+            if (io.NowMs - start >= StepTiming.ReachGraceMs) return (false, count);
+            await io.Delay(StepTiming.PollMs, ct);
+        }
+    }
+
+    /// <summary>Both outcomes are logged with the count, so the threshold can be tuned from real runs.</summary>
+    private static void LogOutline(StepContext ctx, int index, string label, bool seen, int count, int need)
+        => ctx.Log(seen
+            ? string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' outline seen ({count} near-white px, needs {need})")
+            : string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' no outline, skipped ({count} near-white px, needs {need})"));
+
+    /// <summary>A near-white count guarded like <see cref="SampleGuarded"/>. Null when the capture
+    /// fails or comes back the wrong shape.</summary>
+    private static int? CountGuarded(IStepIo io, (int X, int Y, int W, int H) r, int whiteMin)
+    {
+        GuardForeground(io);
+        return io.Capture(r.X, r.Y, r.W, r.H)?.CountNearWhite(r.X, r.Y, r.W, r.H, whiteMin);
     }
 
     /// <summary>A capture guarded like a send: another window in front covers the target, so a
