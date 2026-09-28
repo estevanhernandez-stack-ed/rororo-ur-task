@@ -70,6 +70,9 @@ internal static class StepRunner
                     case FirstMatchStep f:
                         await PlayFirstMatchAsync(f, i, ctx, io, heldButtons, ct);
                         break;
+                    case HoldStep h:
+                        await PlayHoldAsync(h, i, ctx, io, heldButtons, ct);
+                        break;
                     case DragStep d:
                         await PlayDragAsync(d, ctx, io, heldButtons, ct);
                         break;
@@ -271,6 +274,77 @@ internal static class StepRunner
         for (int k = 0; k < firstMatch; k++)
             if (!ColorMatcher.ShowsOther(seen[k], cands[k].Check)) return false;
         return true;
+    }
+
+    // ---------- hold ----------
+
+    /// <summary>
+    /// Press and keep holding while the box stays within tolerance of the colour it showed just
+    /// before the press. The starting sample is taken after the jump, so the pointer's own hover
+    /// tint is already in it. Lets go when the colour has moved for
+    /// <see cref="StepTiming.HoldDriftPolls"/> polls in a row, or at MaxMs. With no MaxMs there is
+    /// no time limit: ore is never abandoned for taking long (ore-stop spec, decision 5).
+    /// </summary>
+    private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    {
+        var label = h.Label ?? h.Id;
+        var name = $"{ctx.AccountName}: step {index + 1} '{label}'";
+        var adj = ctx.Adjust(h.Id);
+        var at = Place(ctx, adj is null ? (h.X, h.Y) : (adj.X, adj.Y));
+        var check = h.Check!; // StepValidator refuses a hold without one
+        var box = PointMath.BoxRect(at, check.Box);
+        var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
+        if (!PointMath.InsideClient(box, client)) throw new StopException($"{name} checks a box outside the window.", index);
+
+        await io.Delay(h.DelayMs, ct);
+        await JumpAsync(io, at, ct);
+        var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
+
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
+        heldButtons.Add(h.Button);
+        var pressedAt = io.NowMs;
+        long? limit = h.MaxMs;
+        string why;
+        try
+        {
+            int drifted = 0;
+            while (true)
+            {
+                var elapsed = io.NowMs - pressedAt;
+                if (elapsed >= limit) { why = $"reached its {limit} ms limit"; break; }
+                await io.Delay((int)Math.Min(StepTiming.PollMs, (limit ?? long.MaxValue) - elapsed), ct);
+                if (io.NowMs - pressedAt >= limit) continue; // the limit lets go at the top, without another sample
+                var seen = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
+                var d = seen.DistanceTo(start);
+                if (d <= check.Tolerance) { drifted = 0; continue; }
+                if (++drifted < StepTiming.HoldDriftPolls) continue;
+                why = string.Create(CultureInfo.InvariantCulture,
+                    $"colour moved from {ColorNamer.Describe(start)} to {ColorNamer.Describe(seen)} (distance {d:F0})");
+                break;
+            }
+            SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, h.Button, 0));
+            heldButtons.Remove(h.Button);
+        }
+        catch
+        {
+            // Esc, StopMacro, a focus change or a window it can no longer see. RunAsync's finally
+            // releases the button, which is still in heldButtons. The log still says how long it
+            // held, so an ore that never broke is visible in ur-task.log.
+            ctx.Log(string.Create(CultureInfo.InvariantCulture,
+                $"step {index + 1} '{label}' held {(io.NowMs - pressedAt) / 1000.0:F1} s, then the playback ended"));
+            throw;
+        }
+        ctx.Log(string.Create(CultureInfo.InvariantCulture,
+            $"step {index + 1} '{label}' held {(io.NowMs - pressedAt) / 1000.0:F1} s, released: {why}"));
+    }
+
+    /// <summary>A capture guarded like a send: another window in front covers the target, so a
+    /// lost foreground is a foreground abort, never a colour change. Null when the capture fails
+    /// or comes back the wrong shape.</summary>
+    private static Rgb? SampleGuarded(IStepIo io, (int X, int Y, int W, int H) box)
+    {
+        GuardForeground(io);
+        return io.Capture(box.X, box.Y, box.W, box.H)?.AverageBox(box.X, box.Y, box.W, box.H);
     }
 
     // ---------- movement ----------

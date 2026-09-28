@@ -22,6 +22,7 @@ public class StepRunnerTests
         public (int X, int Y) Cursor = (0, 0);
         public int Captures;
         public List<(int X, int Y, int W, int H)> CaptureRects = new();
+        public List<long> CaptureTimes = new();
         public Action? OnDelay;
         public bool SendWorks = true;
         public bool WrongGeometry; // returns a block one pixel off from the rect asked for
@@ -51,6 +52,7 @@ public class StepRunnerTests
         {
             Captures++;
             CaptureRects.Add((x, y, w, h));
+            CaptureTimes.Add(NowMs);
             if (!CaptureWorks) return null;
             var px = new uint[w * h];
             for (int r = 0; r < h; r++)
@@ -78,6 +80,172 @@ public class StepRunnerTests
             adjust ?? (_ => null), s => log?.Add(s));
 
     private static ColorCheck GreenCheck(Rgb? other = null) => new(new CheckBox(), Green, other);
+
+    // ---------- hold ----------
+
+    private static readonly Rgb Ore = new(240, 170, 40);   // Sunstone orange
+    private static readonly Rgb Rock = new(30, 35, 80);    // navy top-layer rock
+
+    private static HoldStep Hold(int? maxMs = null, int button = 1, int x = 400, int y = 244, string label = "Spot N")
+        => new(0, "spot-N", label, x, y, button, new HoldCheck(new CheckBox()), maxMs);
+
+    [Fact]
+    public async Task A_hold_keeps_the_button_down_until_the_colour_moves()
+    {
+        var log = new List<string>();
+        // Press lands at 150 ms (after the jump). The block turns to rock at 1500 ms.
+        var io = new FakeIo { Screen = (t, _, _) => t >= 1500 ? Rock : Ore };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        var up = Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp);
+        Assert.Equal((400, 244, 1), (down.X, down.Y, down.MouseButton));
+        Assert.Equal(150, down.TimestampMs);
+        Assert.InRange(up.TimestampMs, 1500, 1500 + StepTiming.HoldDriftPolls * StepTiming.PollMs);
+        Assert.Empty(io.Released); // the step let go itself; the finally had nothing to do
+        Assert.Contains(log, l => l.StartsWith("step 1 'Spot N' held 1.5 s, released: colour moved from ") && l.Contains("(distance "));
+    }
+
+    [Fact]
+    public async Task A_hold_stays_down_while_the_colour_holds_and_lets_go_at_maxMs()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Ore };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 5000, button: 2) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        var up = Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp);
+        Assert.Equal((2, 2), (down.MouseButton, up.MouseButton));
+        Assert.Equal(5000, up.TimestampMs - down.TimestampMs);
+        Assert.Contains("step 1 'Spot N' held 5.0 s, released: reached its 5000 ms limit", log);
+    }
+
+    [Fact]
+    public async Task One_frame_past_the_tolerance_does_not_end_a_hold()
+    {
+        var log = new List<string>();
+        // Polls fall at 250, 350, ... ms. Exactly one of them (1050) sees rock: a hit particle.
+        var io = new FakeIo { Screen = (t, _, _) => t == 1050 ? Rock : Ore };
+        await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 3000) }, Ctx(log), io, default);
+        Assert.Contains("step 1 'Spot N' held 3.0 s, released: reached its 3000 ms limit", log);
+    }
+
+    [Fact]
+    public async Task Drift_within_tolerance_keeps_holding()
+    {
+        var log = new List<string>();
+        var shimmer = new Rgb(Ore.R + 6, Ore.G + 6, Ore.B + 6); // distance ~10, under the default 15
+        var io = new FakeIo { Screen = (t, _, _) => (t / 100) % 2 == 0 ? Ore : shimmer };
+        await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 2000) }, Ctx(log), io, default);
+        Assert.Contains("step 1 'Spot N' held 2.0 s, released: reached its 2000 ms limit", log);
+    }
+
+    [Fact]
+    public async Task A_hold_samples_its_starting_colour_after_the_jump()
+    {
+        // Hover tints the block the moment the pointer arrives (100 ms, the jump's last move).
+        // Sampled before the jump, the start would be the untinted colour, and the press itself
+        // would read as the colour moving.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (t, _, _) => t < 100 ? Rock : Ore };
+        await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 1000) }, Ctx(log), io, default);
+
+        var down = Assert.Single(io.Downs);
+        Assert.Equal(down.TimestampMs, io.CaptureTimes[0]);
+        Assert.Contains(io.Sent, e => e.Kind == MacroEventKind.MouseMove && (e.X, e.Y) == (400, 244) && e.TimestampMs <= io.CaptureTimes[0]);
+        Assert.Contains("step 1 'Spot N' held 1.0 s, released: reached its 1000 ms limit", log);
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_mid_hold_releases_and_aborts()
+    {
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Ore };
+        io.OnDelay = () => { if (io.NowMs >= 1000) io.Foreground = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
+        Assert.Null(r.StepIndex); // a focus change, never a check failure
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Contains(log, l => l.StartsWith("step 1 'Spot N' held ") && l.EndsWith(" s, then the playback ended"));
+    }
+
+    [Fact]
+    public async Task Cancelling_a_hold_releases_its_button_and_logs_the_time()
+    {
+        // Ore that never breaks: Esc or StopMacro is the way out (spec, failure cases).
+        using var cts = new CancellationTokenSource();
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Ore };
+        io.OnDelay = () => { if (io.NowMs >= 2000) cts.Cancel(); };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold() }, Ctx(log), io, cts.Token);
+
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Null(r.StepIndex);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Contains(log, l => l.StartsWith("step 1 'Spot N' held 1.9 s") || l.StartsWith("step 1 'Spot N' held 2.0 s"));
+    }
+
+    [Fact]
+    public async Task A_window_that_closes_mid_hold_still_gets_its_button_released()
+    {
+        using var cts = new CancellationTokenSource();
+        var io = new FakeIo { Screen = (_, _, _) => Ore };
+        io.OnDelay = () => { if (io.Downs.Any() && io.NowMs >= 1000 && !io.WindowGone) { io.WindowGone = true; cts.Cancel(); } };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold() }, Ctx(), io, cts.Token);
+
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp); // the screen-space release only
+    }
+
+    [Fact]
+    public async Task A_hold_scales_to_the_window_and_takes_its_adjustment()
+    {
+        var io = new FakeIo { Client = (1000, 749), Screen = (_, _, _) => Ore };
+        await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 500) },
+            Ctx(adjust: id => id == "spot-N" ? new PointAdjustment(48, 401) : null, actual: (1000, 749)), io, default);
+        // (48, 401) recorded in 800x599, placed in 1000x749.
+        Assert.Equal((60, 501), (io.Downs.Single().X, io.Downs.Single().Y));
+    }
+
+    [Fact]
+    public async Task A_hold_box_outside_the_window_refuses_before_any_input()
+    {
+        var io = new FakeIo();
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold(x: 799, y: 598, label: "Edge") }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Edge' checks a box outside the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Sent);
+    }
+
+    [Fact]
+    public async Task A_hold_that_cannot_see_the_window_stops_before_pressing()
+    {
+        var io = new FakeIo { CaptureWorks = false };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Hold() }, Ctx(), io, default);
+        Assert.Equal("CElCPapa: step 1 'Spot N' could not see the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Empty(io.Downs);
+    }
+
+    [Fact]
+    public async Task Hold_log_lines_use_invariant_numbers()
+    {
+        var prev = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+        try
+        {
+            var log = new List<string>();
+            var io = new FakeIo { Screen = (_, _, _) => Ore };
+            await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 1500) }, Ctx(log), io, default);
+            Assert.Contains("step 1 'Spot N' held 1.5 s, released: reached its 1500 ms limit", log);
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
+    }
 
     [Fact]
     public async Task Unchecked_point_waits_its_delay_then_presses()
