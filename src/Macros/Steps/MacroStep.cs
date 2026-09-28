@@ -48,6 +48,10 @@ public enum NoMatchAction
 {
     [JsonStringEnumMemberName("skip")] Skip,
     [JsonStringEnumMemberName("stopAndReport")] StopAndReport,
+    /// <summary>Skip only when every candidate shows its other state (the red dot of an Auto
+    /// Mine that is already off). Anything else, such as a popup or captcha over the screen,
+    /// stops and reports.</summary>
+    [JsonStringEnumMemberName("skipIfOther")] SkipIfOther,
 }
 
 /// <summary>Candidates are checked in order; the first that matches is pressed.</summary>
@@ -119,6 +123,8 @@ public static class StepValidator
                         if (!ids.Add(c.Id)) return $"{name} reuses point id '{c.Id}'.";
                         if (c.Check is null) return $"{name}: candidate '{c.Label ?? c.Id}' has no colour to check.";
                         if (BoxProblem(c.Check, $"{name}: candidate '{c.Label ?? c.Id}'") is { } err) return err;
+                        if (f.OnNoMatch == NoMatchAction.SkipIfOther && c.Check.Other is null)
+                            return $"{name}: candidate '{c.Label ?? c.Id}' has no other colour, so skipIfOther can never skip.";
                     }
                     break;
                 }

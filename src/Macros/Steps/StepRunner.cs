@@ -229,6 +229,7 @@ internal static class StepRunner
         var start = io.NowMs;
         var ceiling = f.DelayMs + StepTiming.CheckGraceMs;
         var seen = new Rgb[cands.Count];
+        bool allOther = false; // every candidate settled on its other state, none matched
         while (true)
         {
             if (!io.TargetInForeground()) throw new StopException($"{name} could not see the window.", index);
@@ -250,11 +251,11 @@ internal static class StepRunner
                 await PressAsync(io, cands[firstMatch].At, cands[firstMatch].Step.Button, heldButtons, ct);
                 return;
             }
-            if (expired || (allResolved && firstMatch < 0)) break;
+            if (expired || (allResolved && firstMatch < 0)) { allOther = allResolved && firstMatch < 0; break; }
             await io.Delay(StepTiming.PollMs, ct);
         }
 
-        if (f.OnNoMatch == NoMatchAction.Skip)
+        if (f.OnNoMatch == NoMatchAction.Skip || (f.OnNoMatch == NoMatchAction.SkipIfOther && allOther))
         {
             ctx.Log($"step {index + 1} '{f.Label ?? f.Id}' found no match and skipped");
             return;
