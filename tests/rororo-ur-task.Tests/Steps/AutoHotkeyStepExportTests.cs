@@ -74,4 +74,18 @@ public class AutoHotkeyStepExportTests
         Assert.Contains("; check: 'Bad Label' expects #8BE03A here (Ur Task only)", text);
         Assert.Contains("; first match 'Multi Line': Ur Task presses the first candidate whose colour matches; exported as 'Cand Label'", text);
     }
+
+    [Fact]
+    public void A_hold_exports_as_a_button_down_a_sleep_and_an_up_with_a_note()
+    {
+        var hold = new HoldStep(300, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()));
+
+        var v1 = AutoHotkeyExporter.Export(M(hold), AhkVersion.V1);
+        Assert.Contains("Sleep, 300\r\n; hold: 'Spot N' stays down until its colour changes (Ur Task only); exported as a 1000 ms hold\r\n", v1);
+        Assert.Contains("Click, 400, 244, Left, , D\r\nSleep, 1000\r\nClick, 400, 244, Left, , U", v1);
+
+        var v2 = AutoHotkeyExporter.Export(M(hold with { MaxMs = 2500, Button = 2, Label = "Two\nLines" }), AhkVersion.V2);
+        Assert.Contains("; hold: 'Two Lines' stays down until its colour changes or 2500 ms pass (Ur Task only); exported as a 2500 ms hold", v2);
+        Assert.Contains("Click \"400 244 Right Down\"\r\nSleep 2500\r\nClick \"400 244 Right Up\"", v2);
+    }
 }

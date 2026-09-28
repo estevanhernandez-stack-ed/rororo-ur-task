@@ -24,6 +24,10 @@ public static class AutoHotkeyExporter
 {
     private const string Nl = "\r\n";
 
+    /// <summary>How long an open hold (no maxMs) is held in an export. AutoHotkey cannot watch the
+    /// colour, so the script holds for a fixed time and the comment says so.</summary>
+    private const int HoldExportMs = 1000;
+
     public static string Export(Macro macro, AhkVersion version)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
@@ -209,6 +213,18 @@ public static class AutoHotkeyExporter
                     sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}': Ur Task presses the first candidate whose colour matches; exported as '{SanitizeComment(first.Label ?? first.Id)}'").Append(Nl);
                     sb.Append(ClickAt(first.X, first.Y, first.Button, version)).Append(Nl);
                     break;
+                case HoldStep h:
+                {
+                    var holdMs = h.MaxMs ?? HoldExportMs;
+                    var holdLabel = SanitizeComment(h.Label ?? h.Id);
+                    sb.Append(h.MaxMs is null
+                        ? FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold")
+                        : FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold")).Append(Nl);
+                    sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseDown, 0, h.X, h.Y, h.Button, 0), isDown: true, version)).Append(Nl);
+                    sb.Append(Sleep(holdMs, version)).Append(Nl);
+                    sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseUp, 0, h.X, h.Y, h.Button, 0), isDown: false, version)).Append(Nl);
+                    break;
+                }
                 case DragStep d:
                     var btn = ButtonName(d.Button);
                     sb.Append(version == AhkVersion.V1
