@@ -105,6 +105,13 @@ Auto Mine as travel, ore as the score. Ur OCR spots ore, the macro stops Auto Mi
 ore block it can reach from there, then turns Auto Mine back on. That is the stop-for-gem flow
 widened to the whole vein.
 
+## Patched in league week (Este, 2026-09-27)
+
+- **Bottom-layer bombing no longer works.** Week 1's clan loop was: get to the bottom layer, walk
+  across breaking the easy blocks, then place 3x3 bombs to clear the most. Big Games patched it out
+  for week 2. The event ends this week and is expected to return. When it does, test the bombing
+  again before building it (piece 2 of `docs/superpowers/specs/2026-09-27-ore-stop-loop-design.md`).
+
 ## What this means for the macros
 
 - **Week 1 shape.** Transport to the bottom layer, or Core Charge down, then bombs and automine.
