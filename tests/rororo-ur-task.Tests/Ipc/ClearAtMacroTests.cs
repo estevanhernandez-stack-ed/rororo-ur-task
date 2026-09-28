@@ -85,7 +85,10 @@ public class ClearAtMacroTests
 
     [Theory]
     [InlineData("no-target", "ClearAt needs a target account.")]
-    [InlineData("foreground-target", "ClearAt target 'foreground' is not a decimal user id.")]
+    [InlineData("foreground-target", "ClearAt needs a decimal user id; got an invalid target.")]
+    [InlineData("newline-target", "ClearAt needs a decimal user id; got an invalid target.")]
+    [InlineData("zero-target", "ClearAt target '0' is not a decimal user id.")]
+    [InlineData("21-digit-target", "ClearAt needs a decimal user id; got an invalid target.")]
     [InlineData("no-client", "ClearAt needs the client size the points were measured in.")]
     [InlineData("zero-client", "ClearAt needs the client size the points were measured in.")]
     [InlineData("no-points", "ClearAt takes 1 to 64 points; got 0.")]
@@ -109,6 +112,9 @@ public class ClearAtMacroTests
         {
             "no-target" => ok with { Target = null },
             "foreground-target" => ok with { Target = "foreground" },
+            "newline-target" => ok with { Target = "123456789\r\n2026-09-28 fake line" },
+            "zero-target" => ok with { Target = "0" },
+            "21-digit-target" => ok with { Target = new string('9', 21) },
             "no-client" => ok with { Client = null },
             "zero-client" => ok with { Client = new ClearAtClient(0, 599) },
             "no-points" => ok with { Points = Array.Empty<ClearAtPoint>() },
@@ -128,4 +134,32 @@ public class ClearAtMacroTests
         };
         Assert.Equal(sentence, ClearAtMacro.Validate(r));
     }
+
+    /// <summary>The label a one-point call's hold plays and logs under.</summary>
+    private static string LabelOf(string? label)
+        => ((HoldStep)ClearAtMacro.Build(Valid(1) with { Points = new[] { new ClearAtPoint(100, 100, label) } }, "clearat-x").Steps![0]).Label!;
+
+    [Fact]
+    public void A_label_cannot_forge_a_log_line()
+    {
+        var label = LabelOf("ore 1\r\n2026-09-28 fake line");
+        Assert.Equal("ore 1  2026-09-28 fake line", label);
+        Assert.DoesNotContain(label, char.IsControl);
+    }
+
+    [Fact]
+    public void A_long_label_is_capped_at_40_chars()
+        => Assert.Equal(new string('a', 40), LabelOf(new string('a', 200)));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("\r\n\t ")]
+    public void A_label_with_nothing_left_plays_as_point_N(string? label)
+        => Assert.Equal("point 1", LabelOf(label));
+
+    [Fact]
+    public void A_refusal_names_the_point_by_its_sanitised_label()
+        => Assert.Equal("ClearAt point 1 'ore  1' at 800,300 is outside the 800x599 client.",
+            ClearAtMacro.Validate(Valid(1) with { Points = new[] { new ClearAtPoint(800, 300, "ore\r\n1") } }));
 }
