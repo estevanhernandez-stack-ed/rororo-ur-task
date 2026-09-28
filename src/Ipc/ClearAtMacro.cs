@@ -18,6 +18,13 @@ internal static class ClearAtMacro
     /// saved macro or a saved point adjustment.</summary>
     public const string IdPrefix = "clearat-";
 
+    /// <summary>A caller's label is cut to this many chars before it plays or reaches the log.</summary>
+    public const int MaxLabelLength = 40;
+
+    /// <summary>A refused target is echoed only when it is all digits and at most this long;
+    /// anything else could carry a forged log line.</summary>
+    private const int MaxEchoedTargetLength = 20;
+
     /// <summary>
     /// StepValidator refuses a hold without a colour check, and StepRunner places that box inside
     /// the window before any input. A reach hold never reads it (beats ignore colour drift), so the
@@ -33,7 +40,9 @@ internal static class ClearAtMacro
     {
         if (string.IsNullOrWhiteSpace(r.Target)) return "ClearAt needs a target account.";
         if (!long.TryParse(r.Target, NumberStyles.None, CultureInfo.InvariantCulture, out var userId) || userId <= 0)
-            return $"ClearAt target '{r.Target}' is not a decimal user id.";
+            return r.Target.Length <= MaxEchoedTargetLength && r.Target.All(char.IsAsciiDigit)
+                ? $"ClearAt target '{r.Target}' is not a decimal user id."
+                : "ClearAt needs a decimal user id; got an invalid target.";
         if (r.Client is not { W: >= 1, H: >= 1 } client) return "ClearAt needs the client size the points were measured in.";
         var count = r.Points?.Count ?? 0;
         if (count is < 1 or > MaxPoints) return Inv($"ClearAt takes 1 to {MaxPoints} points; got {count}.");
@@ -88,8 +97,17 @@ internal static class ClearAtMacro
 
     private static CheckBox BoxFor(ClearAtOutline o) => new(-(o.W / 2), -(o.H / 2), o.W, o.H);
 
+    /// <summary>
+    /// The caller's label as it plays and logs: control characters (CR, LF, tab and the rest) become
+    /// spaces so a label can never start a forged ur-task.log line, then it is trimmed and capped at
+    /// <see cref="MaxLabelLength"/>. Nothing left means "point N".
+    /// </summary>
     private static string LabelFor(ClearAtPoint p, int index)
-        => string.IsNullOrWhiteSpace(p.Label) ? Inv($"point {index + 1}") : p.Label;
+    {
+        var clean = new string((p.Label ?? "").Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+        if (clean.Length > MaxLabelLength) clean = clean[..MaxLabelLength].TrimEnd();
+        return clean.Length == 0 ? Inv($"point {index + 1}") : clean;
+    }
 
     private static string Inv(FormattableString s) => FormattableString.Invariant(s);
 }
