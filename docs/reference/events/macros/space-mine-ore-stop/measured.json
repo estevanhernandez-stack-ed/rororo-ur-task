@@ -1,0 +1,39 @@
+{
+  "about": "Ore-stop macro inputs: client-space pixels in an 800x599 client at 100% display scale. Edit, then run generate.ps1. A group whose measuredOn is null is provisional; the Ur OCR capture sweep measures it.",
+  "recordedAtUnixMs": 1790467200000,
+  "client": { "w": 800, "h": 599, "displayScale": 100 },
+  "game": { "placeId": 8737899170 },
+  "autoMine": {
+    "measuredOn": "2026-09-27",
+    "pickaxe": { "x": 40, "y": 300 },
+    "dotBox": { "offsetX": 15, "offsetY": -11, "w": 3, "h": 3 },
+    "red": { "r": 255, "g": 19, "b": 90 },
+    "green": { "r": 125, "g": 246, "b": 13 },
+    "tolerance": 15
+  },
+  "goToTop": { "measuredOn": "2026-09-27", "x": 400, "y": 50, "settleMs": 3000, "check": null },
+  "ring": {
+    "measuredOn": null,
+    "holdDelayMs": 300,
+    "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 },
+    "tolerance": 15,
+    "spots": [
+      { "name": "N",  "x": 400, "y": 244 },
+      { "name": "NE", "x": 456, "y": 244 },
+      { "name": "E",  "x": 456, "y": 300 },
+      { "name": "SE", "x": 456, "y": 356 },
+      { "name": "S",  "x": 400, "y": 356 },
+      { "name": "SW", "x": 344, "y": 356 },
+      { "name": "W",  "x": 344, "y": 300 },
+      { "name": "NW", "x": 344, "y": 244 }
+    ]
+  },
+  "camera": {
+    "measuredOn": null,
+    "start": { "x": 400, "y": 150 },
+    "pitchTravelPx": 280,
+    "dragMs": 400,
+    "countBackPx": 40,
+    "countBackMs": 200
+  }
+}

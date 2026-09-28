@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 4,
+  "id": "0e5a0000-0000-4000-8000-000000000015",
+  "name": "Mine spot S",
+  "recordMode": "PerWindow",
+  "recordedAgainstUserId": null,
+  "recordedAgainstDisplayName": "agent",
+  "interAltDelayMs": null,
+  "recordedAtUnixMs": 1790467200000,
+  "events": [],
+  "coordSpace": "client",
+  "recordedClientW": 800,
+  "recordedClientH": 599,
+  "recordedMaximized": false,
+  "recordedPlaceId": 8737899170,
+  "allGames": false,
+  "recordedDisplayScale": 100,
+  "steps": [
+    {
+      "kind": "firstMatch",
+      "delayMs": 0,
+      "id": "am-off",
+      "label": "Auto Mine off",
+      "candidates": [
+        {
+          "delayMs": 0,
+          "id": "am-off-dot",
+          "label": "Auto Mine is on (green dot)",
+          "x": 40,
+          "y": 300,
+          "button": 1,
+          "check": {
+            "box": {
+              "offsetX": 15,
+              "offsetY": -11,
+              "w": 3,
+              "h": 3
+            },
+            "expect": {
+              "r": 125,
+              "g": 246,
+              "b": 13
+            },
+            "other": {
+              "r": 255,
+              "g": 19,
+              "b": 90
+            },
+            "tolerance": 15
+          },
+          "checkEnabled": false
+        }
+      ],
+      "onNoMatch": "skipIfOther"
+    },
+    {
+      "kind": "hold",
+      "delayMs": 300,
+      "id": "spot-S",
+      "label": "Spot S",
+      "x": 400,
+      "y": 356,
+      "button": 1,
+      "check": {
+        "box": {
+          "offsetX": -2,
+          "offsetY": -2,
+          "w": 5,
+          "h": 5
+        },
+        "tolerance": 15
+      }
+    },
+    {
+      "kind": "firstMatch",
+      "delayMs": 0,
+      "id": "am-on",
+      "label": "Auto Mine on",
+      "candidates": [
+        {
+          "delayMs": 0,
+          "id": "am-on-dot",
+          "label": "Auto Mine is off (red dot)",
+          "x": 40,
+          "y": 300,
+          "button": 1,
+          "check": {
+            "box": {
+              "offsetX": 15,
+              "offsetY": -11,
+              "w": 3,
+              "h": 3
+            },
+            "expect": {
+              "r": 255,
+              "g": 19,
+              "b": 90
+            },
+            "other": {
+              "r": 125,
+              "g": 246,
+              "b": 13
+            },
+            "tolerance": 15
+          },
+          "checkEnabled": false
+        }
+      ],
+      "onNoMatch": "skipIfOther"
+    }
+  ]
+}
