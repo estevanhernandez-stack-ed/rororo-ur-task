@@ -37,6 +37,29 @@ public class OreStopExampleMacrosTests
     private static Rgb Colour(JsonElement e) => new(e.GetProperty("r").GetInt32(), e.GetProperty("g").GetInt32(), e.GetProperty("b").GetInt32());
     private static CheckBox BoxOf(JsonElement e) => new(e.GetProperty("offsetX").GetInt32(), e.GetProperty("offsetY").GetInt32(), e.GetProperty("w").GetInt32(), e.GetProperty("h").GetInt32());
 
+    /// <summary>The spot's own reach when it has one, else the ring's shared default; the box is
+    /// centred on the spot (generate.ps1's rule).</summary>
+    private static OutlineCheck ReachOf(JsonElement ring, JsonElement spot)
+    {
+        var r = spot.TryGetProperty("reach", out var own) && own.ValueKind != JsonValueKind.Null ? own : ring.GetProperty("reach");
+        int w = r.GetProperty("w").GetInt32(), h = r.GetProperty("h").GetInt32();
+        return new OutlineCheck(new CheckBox(-(w / 2), -(h / 2), w, h), r.GetProperty("minCount").GetInt32(), r.GetProperty("whiteMin").GetInt32());
+    }
+
+    /// <summary>A ring hold: on the spot, the ring's colour box and tolerance, no time limit
+    /// (spec decision 5), and the outline check.</summary>
+    private static void AssertSpotHold(HoldStep hold, JsonElement ring, JsonElement spot)
+    {
+        var n = spot.GetProperty("name").GetString();
+        Assert.Equal($"spot-{n}", hold.Id);
+        Assert.Equal(Xy(spot), (hold.X, hold.Y));
+        Assert.Equal(1, hold.Button);
+        Assert.Null(hold.MaxMs);
+        Assert.Equal(BoxOf(ring.GetProperty("box")), hold.Check!.Box);
+        Assert.Equal(ring.GetProperty("tolerance").GetInt32(), hold.Check.Tolerance);
+        Assert.Equal(ReachOf(ring, spot), hold.Reach);
+    }
+
     /// <summary>The pickaxe press, gated on the dot: skipped only when the dot shows the other
     /// state, so a screen covered by a popup or captcha stops the macro before it presses.</summary>
     private static void AssertDot(FirstMatchStep f, JsonElement am, bool expectGreen)
@@ -58,6 +81,7 @@ public class OreStopExampleMacrosTests
         var (macros, m) = Load();
         var expected = new[] { "Auto Mine off (checked)", "Auto Mine on (checked)", "Camera top-down", "Go to Top" }
             .Concat(RingNames.Select(n => $"Mine spot {n}"))
+            .Concat(RingNames.Select(n => $"Clear spot {n}"))
             .OrderBy(s => s, StringComparer.Ordinal);
         Assert.Equal(expected, macros.Select(x => x.Name!).OrderBy(s => s, StringComparer.Ordinal));
 
@@ -87,13 +111,30 @@ public class OreStopExampleMacrosTests
             Assert.Equal(3, macro.Steps!.Count);
             AssertDot(Assert.IsType<FirstMatchStep>(macro.Steps[0]), am, expectGreen: true);
             var hold = Assert.IsType<HoldStep>(macro.Steps[1]);
-            Assert.Equal(Xy(spot), (hold.X, hold.Y));
-            Assert.Equal(1, hold.Button);
-            Assert.Null(hold.MaxMs); // ore is never abandoned for taking long (spec, decision 5)
-            Assert.Equal(BoxOf(ring.GetProperty("box")), hold.Check!.Box);
-            Assert.Equal(ring.GetProperty("tolerance").GetInt32(), hold.Check.Tolerance);
+            AssertSpotHold(hold, ring, spot);
             Assert.Equal(ring.GetProperty("holdDelayMs").GetInt32(), hold.DelayMs);
             AssertDot(Assert.IsType<FirstMatchStep>(macro.Steps[2]), am, expectGreen: false);
+        }
+    }
+
+    [Fact]
+    public void Each_clear_spot_holds_its_ring_spot_behind_the_outline_and_leaves_Auto_Mine_alone()
+    {
+        // Pulse mode (ore stop v1): the Ur OCR loop owns Auto Mine, so a clear macro is the hold
+        // and nothing else. Ids are fixed so Ur OCR and point adjustments survive a regenerate.
+        var (macros, m) = Load();
+        var ring = m.GetProperty("ring");
+        var k = 0;
+        foreach (var spot in ring.GetProperty("spots").EnumerateArray())
+        {
+            var n = spot.GetProperty("name").GetString();
+            Assert.Equal(RingNames[k], n);
+            var macro = Assert.Single(macros, x => x.Name == $"Clear spot {n}");
+            Assert.Equal($"0e5a0000-0000-4000-8000-0000000000{21 + k}", macro.Id);
+            var hold = Assert.IsType<HoldStep>(Assert.Single(macro.Steps!));
+            AssertSpotHold(hold, ring, spot);
+            Assert.Equal(0, hold.DelayMs); // the loop has already paused for effects to settle
+            k++;
         }
     }
 

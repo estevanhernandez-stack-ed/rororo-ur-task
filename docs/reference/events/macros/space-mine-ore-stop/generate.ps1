@@ -8,8 +8,16 @@
 
       pwsh -NoProfile -File docs/reference/events/macros/space-mine-ore-stop/generate.ps1
 
-  The Ur OCR capture sweep fills the "ring" and "camera" groups and sets their "measuredOn".
-  A group whose measuredOn is null is provisional: the script warns and writes it anyway.
+  The Ur OCR capture sweep fills the "ring" and "camera" groups and sets their "measuredOn"; the
+  live outline measurement fills "ring.reach". A group whose measuredOn is null is provisional:
+  the script warns and writes it anyway.
+
+  Two families of ring macros, one per spot:
+    - "Mine spot <name>": Auto Mine off, hold the spot, Auto Mine on (watch-while-riding).
+    - "Clear spot <name>": hold the spot and nothing else (ore stop v1, pulse). The Ur OCR loop
+      owns Auto Mine in pulse mode, so these never touch the pickaxe.
+  Every ring hold carries a reach check: with the pointer on the spot, no white outline means no
+  press, and the outline gone mid-hold lets go.
 
   Install: copy macros\*.json into %LOCALAPPDATA%\626Labs\RoRoRoUrTask\macros, then restart
   Ur Task. Each file is named <id>.json, the store's own convention, so deleting a macro from the
@@ -45,6 +53,14 @@ $Ids = @{
     'Mine spot SW'            = '0e5a0000-0000-4000-8000-000000000016'
     'Mine spot W'             = '0e5a0000-0000-4000-8000-000000000017'
     'Mine spot NW'            = '0e5a0000-0000-4000-8000-000000000018'
+    'Clear spot N'            = '0e5a0000-0000-4000-8000-000000000021'
+    'Clear spot NE'           = '0e5a0000-0000-4000-8000-000000000022'
+    'Clear spot E'            = '0e5a0000-0000-4000-8000-000000000023'
+    'Clear spot SE'           = '0e5a0000-0000-4000-8000-000000000024'
+    'Clear spot S'            = '0e5a0000-0000-4000-8000-000000000025'
+    'Clear spot SW'           = '0e5a0000-0000-4000-8000-000000000026'
+    'Clear spot W'            = '0e5a0000-0000-4000-8000-000000000027'
+    'Clear spot NW'           = '0e5a0000-0000-4000-8000-000000000028'
 }
 
 foreach ($group in 'autoMine', 'goToTop', 'ring', 'camera') {
@@ -52,12 +68,47 @@ foreach ($group in 'autoMine', 'goToTop', 'ring', 'camera') {
         Write-Warning "$group is provisional (measuredOn is null). The Ur OCR capture sweep measures it; regenerate after."
     }
 }
+if ($null -eq $m.ring.reach.measuredOn) {
+    Write-Warning "ring.reach is provisional (measuredOn is null). Measure the outline live with the pointer on and off a breakable block; regenerate after."
+}
 if ($null -eq $m.goToTop.check) {
     Write-Warning "goToTop.check is null: the Go to Top press is unchecked until the Ur OCR capture sweep measures it; regenerate after."
 }
 
 function Rgb($c) { [ordered]@{ r = [int]$c.r; g = [int]$c.g; b = [int]$c.b } }
 function Box($b) { [ordered]@{ offsetX = [int]$b.offsetX; offsetY = [int]$b.offsetY; w = [int]$b.w; h = [int]$b.h } }
+
+# The outline check for one spot: the spot's own reach if it has one, else the ring's shared
+# default, replaced wholesale. The box is centred on the spot.
+function Reach($spot) {
+    $r = $m.ring.reach
+    $own = $spot.PSObject.Properties['reach']
+    if ($null -ne $own -and $null -ne $own.Value) { $r = $own.Value }
+    $w = [int]$r.w
+    $h = [int]$r.h
+    [ordered]@{
+        box      = [ordered]@{ offsetX = 0 - [int][math]::Floor($w / 2); offsetY = 0 - [int][math]::Floor($h / 2); w = $w; h = $h }
+        minCount = [int]$r.minCount
+        whiteMin = [int]$r.whiteMin
+    }
+}
+
+# A ring hold: press on the spot while its colour holds, behind the outline check. No maxMs: ore
+# is never abandoned for taking long (spec decision 5); the outline going is the way out.
+function SpotHold($spot, [int]$delayMs) {
+    $ring = $m.ring
+    [ordered]@{
+        kind    = 'hold'
+        delayMs = $delayMs
+        id      = "spot-$($spot.name)"
+        label   = "Spot $($spot.name)"
+        x       = [int]$spot.x
+        y       = [int]$spot.y
+        button  = 1
+        check   = [ordered]@{ box = (Box $ring.box); tolerance = [int]$ring.tolerance }
+        reach   = (Reach $spot)
+    }
+}
 
 # The pickaxe press, gated on the dot. skipIfOther: skip when the dot already shows the other
 # state; stop with a report when it shows neither (a popup or captcha over the screen).
@@ -122,24 +173,22 @@ function Write-Macro($macro) {
 Write-Macro (Macro 'Auto Mine off (checked)' @(DotCheck 'am-off' 'Auto Mine off' 'green'))
 Write-Macro (Macro 'Auto Mine on (checked)' @(DotCheck 'am-on' 'Auto Mine on' 'red'))
 
-# ---- Mine spot N .. NW: Auto Mine off, hold the spot until its colour moves, Auto Mine on ----
+# ---- The ring ----
 $ring = $m.ring
 $names = @($ring.spots | ForEach-Object { $_.name })
 if ($names.Count -ne 8 -or @(Compare-Object $names $RingNames).Count -ne 0) {
     throw "measured.json ring.spots must name each of N, NE, E, SE, S, SW, W, NW once; it names: $($names -join ', ')."
 }
+
+# Mine spot N .. NW: Auto Mine off, hold the spot, Auto Mine on.
 foreach ($spot in $ring.spots) {
-    $hold = [ordered]@{
-        kind    = 'hold'
-        delayMs = [int]$ring.holdDelayMs
-        id      = "spot-$($spot.name)"
-        label   = "Spot $($spot.name)"
-        x       = [int]$spot.x
-        y       = [int]$spot.y
-        button  = 1
-        check   = [ordered]@{ box = (Box $ring.box); tolerance = [int]$ring.tolerance }
-    }
-    Write-Macro (Macro "Mine spot $($spot.name)" @((DotCheck 'am-off' 'Auto Mine off' 'green'), $hold, (DotCheck 'am-on' 'Auto Mine on' 'red')))
+    Write-Macro (Macro "Mine spot $($spot.name)" @((DotCheck 'am-off' 'Auto Mine off' 'green'), (SpotHold $spot ([int]$ring.holdDelayMs)), (DotCheck 'am-on' 'Auto Mine on' 'red')))
+}
+
+# Clear spot N .. NW: the hold alone, no delay. The pulse loop has already stopped Auto Mine and
+# paused for effects to settle before it calls these.
+foreach ($spot in $ring.spots) {
+    Write-Macro (Macro "Clear spot $($spot.name)" @(SpotHold $spot 0))
 }
 
 # ---- Camera top-down: right-drag down past the pitch limit, then count back ----
