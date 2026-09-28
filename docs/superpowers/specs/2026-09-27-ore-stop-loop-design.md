@@ -1,6 +1,6 @@
 # Ore stop: Auto Mine that stops for every ore
 
-**Status:** design approved in conversation by Este, 2026-09-27; spec awaiting review
+**Status:** spec approved by Este, 2026-09-27
 **Products:** Ur OCR (watches and decides) and Ur Task (acts). No change to the RoRoRo host.
 **Builds on:** Ur Task 0.9.0 point steps and colour checks (`2026-09-27-point-clicks-and-checks-design.md`)
 **Event:** PS99 Space Mine league week (`docs/reference/events/2026-09-space-mine-brief.md`)
@@ -14,7 +14,9 @@ not tell ores apart. If Auto Mine spends too long on one layer, the loop sends t
 the top so it restarts on easier rock.
 
 This is piece 1 of 2. Piece 2, the bottom-layer routine (walk across the easy blocks, then place 3x3
-bombs where each clears the most), gets its own spec and reuses the layer reading and ring below.
+bombs where each clears the most), is shelved. Big Games patched the bottom-layer bombing out in
+league week (Este, 2026-09-27). Try it again when the mining event comes back; it would reuse the
+layer reading and the ring below.
 
 ## Decisions
 
