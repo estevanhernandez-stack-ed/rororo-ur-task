@@ -133,6 +133,18 @@ public class StepRunnerTests
     }
 
     [Fact]
+    public async Task Two_isolated_drift_polls_with_a_clean_one_between_do_not_end_a_hold()
+    {
+        var log = new List<string>();
+        // Two drifted polls (1050, 1450), not adjacent, with a clean poll at 1150 between them.
+        // The drift counter must reset on the clean poll, or these two isolated hits add up to
+        // HoldDriftPolls and end the hold early on the second drift instead of at maxMs.
+        var io = new FakeIo { Screen = (t, _, _) => t is 1050 or 1450 ? Rock : Ore };
+        await StepRunner.RunAsync(new MacroStep[] { Hold(maxMs: 3000) }, Ctx(log), io, default);
+        Assert.Contains("step 1 'Spot N' held 3.0 s, released: reached its 3000 ms limit", log);
+    }
+
+    [Fact]
     public async Task Drift_within_tolerance_keeps_holding()
     {
         var log = new List<string>();
