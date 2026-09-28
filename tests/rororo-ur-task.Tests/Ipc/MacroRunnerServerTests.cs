@@ -231,4 +231,35 @@ public class MacroRunnerServerTests
         Assert.Equal("{\"ok\":true,\"state\":\"finished\",\"reason\":\"skipped\"}", await RunAndReadAsync());
         Assert.Equal("{\"ok\":true,\"state\":\"finished\"}", await RunAndReadAsync());
     }
+
+    // Pin for Ur OCR: a lost single-flight claim (SequencePlayer.PlayAsync's empty-PerAlt refusal)
+    // must not read as a plain finish on the wire, or a Clear spot that never ran counts as mined
+    // (controller ruling, 2026-09-28).
+    [Fact]
+    public async Task GetPlayback_over_the_pipe_reports_a_lost_claim_as_failed_refused()
+    {
+        var alt = new AccountRegistry.AccountInfo(1123, 123, "alt-123", "acct-123");
+        var macro = new Macro(SchemaVersion: 2, Id: Guid.NewGuid().ToString(), Name: "Clear spot N", RecordMode: "PerWindow",
+            RecordedAgainstUserId: null, RecordedAgainstDisplayName: null, InterAltDelayMs: null, RecordedAtUnixMs: 0,
+            Events: new List<MacroEvent>());
+        var invoker = new MacroRunInvoker(
+            loadMacros: () => new[] { macro },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(
+                new SequenceResult(Array.Empty<AltOutcome>(), 0, 0, 0, TimeSpan.Zero)));
+        var server = new MacroRunnerServer(invoker);
+
+        var run = await invoker.RunAsync(new RunMacroRequest("1.0", "RunMacro", macro.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+        for (int i = 0; i < 200 && invoker.ActivePlaybackCount > 0; i++) await Task.Delay(10);
+        Assert.Equal(0, invoker.ActivePlaybackCount);
+
+        var respJson = await RoundTripJsonAsync(server,
+            $"{{\"contractVersion\":\"1.0\",\"method\":\"GetPlayback\",\"playbackId\":\"{run.PlaybackId}\",\"callerPluginId\":\"626labs.ur-ocr\"}}");
+
+        Assert.Equal(
+            "{\"ok\":true,\"state\":\"failed\",\"reason\":\"refused\",\"detail\":\"Another playback took the sequence.\"}",
+            respJson);
+    }
 }

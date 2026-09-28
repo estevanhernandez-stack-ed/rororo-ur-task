@@ -398,6 +398,31 @@ public class MacroRunInvokerTests
     }
 
     [Fact]
+    public async Task A_lost_single_flight_claim_reads_failed_refused_not_a_clean_finish()
+    {
+        // SequencePlayer.PlayAsync answers a lost CompareExchange claim with an empty PerAlt on a
+        // non-null result. That must not read as a plain "finished" — Ur OCR's MacroCall maps plain
+        // finished on a Clear spot to Done ("cleared"), and a clear that never ran would count as
+        // mined (controller ruling, 2026-09-28).
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var lost = new SequenceResult(Array.Empty<AltOutcome>(), 0, 0, 0, TimeSpan.Zero);
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => { Interlocked.Increment(ref passes); return Task.FromResult<SequenceResult?>(lost); });
+
+        var run = await inv.RunAsync(
+            new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr", Repeat: true), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-ocr"));
+        Assert.Equal(("failed", "refused", "Another playback took the sequence.", (int?)null),
+            (status.State, status.Reason, status.Detail, status.StepIndex));
+        // The break kills the hot spin: a repeat with a losing PlayAsync that completes
+        // synchronously must not spin — exactly one pass.
+        Assert.Equal(1, passes);
+    }
+
+    [Fact]
     public async Task A_bridge_playback_logs_how_it_ended()
     {
         var m = NewMacro(Guid.NewGuid().ToString(), "Mine spot N");
