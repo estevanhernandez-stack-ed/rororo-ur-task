@@ -19,18 +19,24 @@ public abstract record MacroStep(int DelayMs);
 public sealed record KeyStep(int DelayMs, int VirtualKeyCode, bool Down) : MacroStep(DelayMs);
 
 /// <summary>A click at a client-space point. Id is short and stable (not a list position) so
-/// adjustments and candidates survive steps being added or reordered.</summary>
+/// adjustments and candidates survive steps being added or reordered.
+/// <para><see cref="Reach"/>: when set, the pointer moves onto the point and the step presses only
+/// if the white outline shows there; otherwise it is skipped, not failed. It cannot be combined
+/// with an enabled colour check (the colour check parks the pointer away, the outline needs it on).</para></summary>
 public sealed record PointStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
-    ColorCheck? Check = null, bool CheckEnabled = false) : MacroStep(DelayMs);
+    ColorCheck? Check = null, bool CheckEnabled = false, OutlineCheck? Reach = null) : MacroStep(DelayMs);
 
 /// <summary>Press a mouse button at a client-space point and keep it down while the check box
 /// still shows the colour it had just before the press. Releases when the colour moves past the
 /// tolerance, or at <see cref="MaxMs"/> when one is set; with no MaxMs there is no time limit
-/// (ore-stop spec, decision 5). Id, adjustments and scaling work exactly as for a point.</summary>
+/// (ore-stop spec, decision 5). Id, adjustments and scaling work exactly as for a point.
+/// <para><see cref="Reach"/>: when set, the hold presses only if the white outline shows with the
+/// pointer on the spot (else the step is skipped), and lets go when the outline is gone
+/// (ore-stop pulse spec).</para></summary>
 public sealed record HoldStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
-    HoldCheck? Check = null, int? MaxMs = null) : MacroStep(DelayMs);
+    HoldCheck? Check = null, int? MaxMs = null, OutlineCheck? Reach = null) : MacroStep(DelayMs);
 
 /// <summary>Button held while the mouse moves by (Dx, Dy) from the start point.</summary>
 public sealed record DragStep(int DelayMs, int Button, int StartX, int StartY, int Dx, int Dy, int DurationMs) : MacroStep(DelayMs);
@@ -74,6 +80,11 @@ public static class StepTiming
     /// frame of hit particles or pickaxe swing over the box does not end it early.</summary>
     public const int HoldDriftPolls = 2;
 
+    /// <summary>How long a reach check keeps looking for the outline after the pointer lands,
+    /// before it skips the step. The game draws the outline on hover, which can take a frame or
+    /// two; a pass ends the wait at once, so only a skip pays it.</summary>
+    public const int ReachGraceMs = 300;
+
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
     {
@@ -109,6 +120,8 @@ public static class StepValidator
                     var name = $"Step {n} '{p.Label ?? p.Id}'";
                     if (p.CheckEnabled && p.Check is null) return $"{name} has its check on but no colour sample.";
                     if (p.Check is { } pc && BoxProblem(pc, name) is { } err) return err;
+                    if (p.Reach is not null && p.CheckEnabled) return $"{name} has both a colour check and a reach check; use one.";
+                    if (ReachProblem(p.Reach, name) is { } rerr) return rerr;
                     break;
                 }
                 case FirstMatchStep f:
@@ -122,6 +135,7 @@ public static class StepValidator
                         if (string.IsNullOrWhiteSpace(c.Id)) return $"{name}: a candidate has no point id.";
                         if (!ids.Add(c.Id)) return $"{name} reuses point id '{c.Id}'.";
                         if (c.Check is null) return $"{name}: candidate '{c.Label ?? c.Id}' has no colour to check.";
+                        if (c.Reach is not null) return $"{name}: candidate '{c.Label ?? c.Id}' has a reach check, which a first match does not use.";
                         if (BoxProblem(c.Check, $"{name}: candidate '{c.Label ?? c.Id}'") is { } err) return err;
                         if (f.OnNoMatch == NoMatchAction.SkipIfOther && c.Check.Other is null)
                             return $"{name}: candidate '{c.Label ?? c.Id}' has no other colour, so skipIfOther can never skip.";
@@ -137,6 +151,7 @@ public static class StepValidator
                     if (BoxProblem(h.Check.Box, name) is { } err) return err;
                     if (h.Check.Tolerance < 1) return $"{name} has a hold tolerance below 1.";
                     if (h.MaxMs is < 1) return $"{name} has a maxMs below 1.";
+                    if (ReachProblem(h.Reach, name) is { } rerr) return rerr;
                     break;
                 }
             }
@@ -153,6 +168,21 @@ public static class StepValidator
         if (box is null) return $"{who} has a check with no box.";
         if (box.W < 1 || box.H < 1) return $"{who} has an empty check box.";
         if (box.W > CheckBox.MaxSide || box.H > CheckBox.MaxSide) return $"{who} has a check box larger than 9x9.";
+        return null;
+    }
+
+    /// <summary>Null when there is no reach check or it can play. A minCount larger than the box
+    /// could never pass, so every step would silently skip; that is refused too.</summary>
+    private static string? ReachProblem(OutlineCheck? reach, string who)
+    {
+        if (reach is null) return null;
+        if (reach.Box is null) return $"{who} has a reach check with no box.";
+        if (reach.Box.W < 1 || reach.Box.H < 1) return $"{who} has an empty reach box.";
+        if (reach.Box.W > OutlineCheck.MaxSide || reach.Box.H > OutlineCheck.MaxSide)
+            return $"{who} has a reach box larger than {OutlineCheck.MaxSide}x{OutlineCheck.MaxSide}.";
+        if (reach.MinCount < 1) return $"{who} has a reach minCount below 1.";
+        if (reach.MinCount > reach.Box.W * reach.Box.H) return $"{who} has a reach minCount larger than its box, so it can never pass.";
+        if (reach.WhiteMin is < 1 or > 255) return $"{who} has a reach whiteMin outside 1 to 255.";
         return null;
     }
 }

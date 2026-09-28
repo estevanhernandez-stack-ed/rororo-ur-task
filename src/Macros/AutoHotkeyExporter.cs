@@ -201,6 +201,7 @@ public static class AutoHotkeyExporter
                 case PointStep p:
                     if (p.CheckEnabled && p.Check is { } c)
                         sb.Append($"; check: '{SanitizeComment(p.Label ?? p.Id)}' expects {c.Expect.Hex} here (Ur Task only)").Append(Nl);
+                    if (p.Reach is { } pr) sb.Append(ReachComment(p.Label ?? p.Id, pr)).Append(Nl);
                     sb.Append(ClickAt(p.X, p.Y, p.Button, version)).Append(Nl);
                     break;
                 case FirstMatchStep f:
@@ -217,6 +218,7 @@ public static class AutoHotkeyExporter
                 {
                     var holdMs = h.MaxMs ?? HoldExportMs;
                     var holdLabel = SanitizeComment(h.Label ?? h.Id);
+                    if (h.Reach is { } hr) sb.Append(ReachComment(h.Label ?? h.Id, hr)).Append(Nl);
                     sb.Append(h.MaxMs is null
                         ? FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold")
                         : FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold")).Append(Nl);
@@ -256,6 +258,14 @@ public static class AutoHotkeyExporter
     /// newline would push the rest of the label past the comment onto its own, uncommented
     /// line. Same treatment <see cref="AppendHeader"/> gives the macro name.</summary>
     private static string SanitizeComment(string s) => s.Replace("\r", "").Replace("\n", " ");
+
+    /// <summary>AutoHotkey cannot see the outline, so the export presses unconditionally and says so.</summary>
+    private static string ReachComment(string label, OutlineCheck r)
+    {
+        var size = r.Box is { } b ? FormattableString.Invariant($"{b.W}x{b.H}") : "no box";
+        return FormattableString.Invariant(
+            $"; reach: '{SanitizeComment(label)}' needs a white outline here ({r.MinCount} near-white px in {size}); Ur Task skips the step without one (Ur Task only)");
+    }
 
     private static string Sleep(long ms, AhkVersion version)
         => version == AhkVersion.V1 ? FormattableString.Invariant($"Sleep, {ms}") : FormattableString.Invariant($"Sleep {ms}");
