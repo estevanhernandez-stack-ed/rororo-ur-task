@@ -991,6 +991,9 @@ with:
 Run: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true --filter "FullyQualifiedName~AutoHotkeyStepExportTests"`
 Expected: all pass.
 
+Then the full suite: `dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj -p:StandaloneTestsOnly=true`
+Expected: 446 passed.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1688,7 +1691,7 @@ Values measured live 2026-09-27 at 100% on the main: pickaxe, dot box, red, gree
 ```json
 {
   "about": "Ore-stop macro inputs: client-space pixels in an 800x599 client at 100% display scale. Edit, then run generate.ps1. A group whose measuredOn is null is provisional; the Ur OCR capture sweep measures it.",
-  "recordedAtUnixMs": 1790553600000,
+  "recordedAtUnixMs": 1790467200000,
   "client": { "w": 800, "h": 599, "displayScale": 100 },
   "game": { "placeId": 8737899170 },
   "autoMine": {
