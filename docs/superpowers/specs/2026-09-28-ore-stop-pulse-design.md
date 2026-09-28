@@ -144,6 +144,10 @@ Request, camelCase JSON like every other method:
   120 px, a minCount larger than the box.
 - Each point plays as a reach hold: hover, outline check (grace 300 ms), no outline means skip,
   otherwise hold-release-look beats until the outline is gone (or maxMsPerPoint).
+- Baseline (ruling 2026-09-28, every reach hold, ClearAt and recorded spots alike): before the pointer
+  moves onto the point, the outline box is captured once with the pointer elsewhere (moved one box-width
+  outside first if it is inside); the outline shows when count minus that baseline is at least minCount,
+  for the pre-press check and every beat look. White quartz passes the raw count with no hover.
 - Foreground rule as macros: it acts only while the target's window is in front; a lost foreground
   aborts the playback.
 - Response is RunMacroResponse (ok + playbackId, or refused with reason). Refusals: bad version,
