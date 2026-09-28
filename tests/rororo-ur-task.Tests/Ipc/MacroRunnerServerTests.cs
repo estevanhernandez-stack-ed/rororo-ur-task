@@ -269,4 +269,70 @@ public class MacroRunnerServerTests
             "{\"ok\":true,\"state\":\"failed\",\"reason\":\"refused\",\"detail\":\"Another playback took the sequence.\"}",
             respJson);
     }
+
+    // ---------- ClearAt ----------
+
+    private const string ClearAtJson =
+        "{\"contractVersion\":\"1.0\",\"method\":\"ClearAt\",\"callerPluginId\":\"626labs.ur-ocr\",\"target\":\"123\"," +
+        "\"client\":{\"w\":800,\"h\":599},\"points\":[{\"x\":412,\"y\":288,\"label\":\"ore 1\"}]," +
+        "\"outline\":{\"w\":50,\"h\":50,\"minCount\":60,\"whiteMin\":225},\"maxMsPerPoint\":null}";
+
+    [Fact]
+    public async Task ClearAt_Dispatches_AndReturnsAck()
+    {
+        var invoker = new FakeInvoker { Next = RunMacroResponse.Accepted("01CLR") };
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker), ClearAtJson);
+
+        Assert.Equal("{\"ok\":true,\"playbackId\":\"01CLR\",\"queued\":false}", respJson);
+        Assert.Equal("123", invoker.SeenClearAt!.Target);
+        Assert.Equal("ore 1", Assert.Single(invoker.SeenClearAt.Points!).Label);
+        Assert.Null(invoker.Seen); // not routed as a RunMacro
+    }
+
+    [Fact]
+    public async Task ClearAt_MissingCallerPluginId_RefusedWithoutDispatch()
+    {
+        var invoker = new FakeInvoker();
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker),
+            ClearAtJson.Replace("\"callerPluginId\":\"626labs.ur-ocr\",", ""));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "refused", "Missing callerPluginId."), (resp.Ok, resp.Reason, resp.Detail));
+        Assert.Null(invoker.SeenClearAt);
+    }
+
+    [Fact]
+    public async Task ClearAt_UnsupportedVersion_RefusedVersionMismatch()
+    {
+        var invoker = new FakeInvoker();
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker), ClearAtJson.Replace("\"1.0\"", "\"2.0\""));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "version-mismatch"), (resp.Ok, resp.Reason));
+        Assert.Null(invoker.SeenClearAt);
+    }
+
+    // End to end with the real invoker: a bad call is refused on the wire with the sentence Ur OCR
+    // shows, and nothing starts.
+    [Fact]
+    public async Task ClearAt_over_the_pipe_refuses_a_point_outside_the_client()
+    {
+        var alt = new AccountRegistry.AccountInfo(1123, 123, "alt-123", "acct-123");
+        var invoker = new MacroRunInvoker(
+            loadMacros: Array.Empty<Macro>,
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(null));
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker), ClearAtJson.Replace("\"x\":412", "\"x\":900"));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "refused", "ClearAt point 1 'ore 1' at 900,288 is outside the 800x599 client."),
+            (resp.Ok, resp.Reason, resp.Detail));
+        Assert.Equal(0, invoker.ActivePlaybackCount);
+    }
 }

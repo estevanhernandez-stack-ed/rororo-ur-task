@@ -25,6 +25,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   went down, `ur-task.log` reads "playback finished (skipped: no outline)", and a bridge playback
   reports `GetPlayback` state `finished` with reason `skipped`. A normal finish has no reason, as
   before.
+- **ClearAt, a bridge call that presses where the caller points.** Ur OCR sends one account, the
+  client size it measured in, 1 to 64 points in order and one outline box, and Ur Task plays them
+  as ONE playback: each point is a reach hold (hover, outline check, hold-release-look beats until
+  the outline is gone, measured over the box's no-hover baseline), skipped when no outline shows.
+  The window is sized to the client it was measured in first, as for a macro. It rides the same single-flight rule, playback id, `GetPlayback`, `StopMacro` and
+  Esc as `RunMacro`, is never saved or listed, and logs as "ClearAt (N points)" with each point by
+  its label. Additive on bridge contract 1.0.
 
 ### Changed
 
