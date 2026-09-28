@@ -1,5 +1,6 @@
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.Macros.Steps;
+using Labs626.UrTask.Ipc;
 
 namespace Labs626.UrTask.Tests.Steps;
 
@@ -1071,5 +1072,56 @@ public class StepRunnerTests
         var r = await StepRunner.RunAsync(new MacroStep[] { new FirstMatchStep(0, "f1", "Best mine", Array.Empty<PointStep>()) }, Ctx(), io, default);
         Assert.Equal(PlaybackOutcome.Refused, r.Outcome);
         Assert.Empty(io.Sent);
+    }
+
+    // ---------- ClearAt (the bridge call's synthetic reach holds) ----------
+
+    private static IReadOnlyList<MacroStep> ClearAtSteps(int? maxMsPerPoint, params (int X, int Y, string Label)[] points)
+        => ClearAtMacro.Build(new ClearAtRequest(
+            "1.0", "ClearAt", "626labs.ur-ocr", "123456789", new ClearAtClient(800, 599),
+            points.Select(p => new ClearAtPoint(p.X, p.Y, p.Label)).ToList(),
+            new ClearAtOutline(80, 80, 60), maxMsPerPoint), "clearat-test").Steps!;
+
+    [Fact]
+    public async Task ClearAt_steps_mine_an_outlined_point_and_skip_one_out_of_reach()
+    {
+        var log = new List<string>();
+        var io = LiveBlock(breaksAfter: 2); // an outlined block at 400,244; rock everywhere else
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (400, 244, "ore 1"), (150, 150, "stone 2")), Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach); // one point mined: a plain finish
+        Assert.Equal(2, io.Downs.Count());
+        Assert.All(io.Downs, d => Assert.Equal((400, 244), (d.X, d.Y)));
+        Assert.Contains("step 1 'ore 1' held 2.0 s over 2 beat(s), released: outline gone after release", log);
+        Assert.Contains("step 2 'stone 2' no outline, skipped (0 near-white px over a baseline of 0, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task ClearAt_steps_that_all_miss_the_outline_read_skipped_by_reach()
+    {
+        var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (400, 244, "ore 1"), (500, 300, "stone 2")), Ctx(), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.True(r.SkippedByReach);
+        Assert.Empty(io.Downs);
+    }
+
+    [Fact]
+    public async Task ClearAt_points_and_box_scale_from_the_measured_client_to_the_live_one()
+    {
+        // Display-scale slack: measured at 800x599, played at 1000x749. 400,244 lands at 500,305,
+        // the 80 px box grows to 100 and the threshold to 75. The frame is drawn at the scaled size
+        // (35 px out) and only on hover, so the baseline is 0.
+        var log = new List<string>();
+        var io = new FakeIo { Client = (1000, 749) };
+        io.Screen = Framed(500, 305, half: 35, shown: _ => Hovered(io, 500, 305, 35));
+        var r = await StepRunner.RunAsync(ClearAtSteps(500, (400, 244, "ore 1")), Ctx(log, actual: (1000, 749)), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Contains((450, 255, 100, 100), io.CaptureRects);
+        Assert.Equal((500, 305), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.Contains("step 1 'ore 1' outline seen (280 near-white px over a baseline of 0, needs 75)", log);
     }
 }
