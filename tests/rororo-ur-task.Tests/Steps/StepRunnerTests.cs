@@ -30,17 +30,22 @@ public class StepRunnerTests
         // the cursor has no client position. Keys and screen-space releases still work.
         public bool WindowGone;
         public List<int> Released = new();
+        // Whether a mouse button is down right now: the game hides the white outline while one is.
+        public bool ButtonDown;
 
         public bool Send(MacroEvent e)
         {
             Sent.Add(e with { TimestampMs = NowMs });
             if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y);
+            if (e.Kind == MacroEventKind.MouseDown) ButtonDown = true;
+            if (e.Kind == MacroEventKind.MouseUp) ButtonDown = false;
             if (WindowGone && e.Kind is not (MacroEventKind.KeyDown or MacroEventKind.KeyUp)) return false;
             return SendWorks;
         }
         public bool ReleaseButton(int button)
         {
             Released.Add(button);
+            ButtonDown = false;
             Sent.Add(new MacroEvent(NowMs, MacroEventKind.MouseUp, 0, Cursor.X, Cursor.Y, button, 0));
             return true;
         }
@@ -72,6 +77,7 @@ public class StepRunnerTests
             return Task.CompletedTask;
         }
         public IEnumerable<MacroEvent> Downs => Sent.Where(e => e.Kind == MacroEventKind.MouseDown);
+        public IEnumerable<MacroEvent> Ups => Sent.Where(e => e.Kind == MacroEventKind.MouseUp);
     }
 
     private static StepContext Ctx(List<string>? log = null, Func<string, PointAdjustment?>? adjust = null,
@@ -298,7 +304,7 @@ public class StepRunnerTests
         var down = Assert.Single(io.Downs);
         Assert.Equal((400, 244, 150L), (down.X, down.Y, down.TimestampMs)); // no grace spent: the outline was there
         Assert.Contains($"step 1 'Spot N' outline seen ({count} near-white px, needs 60)", log);
-        Assert.Contains("step 1 'Spot N' held 0.5 s, released: reached its 500 ms limit", log);
+        Assert.Contains("step 1 'Spot N' held 0.5 s over 1 beat(s), released: reached its limit", log);
     }
 
     [Fact]
@@ -327,29 +333,112 @@ public class StepRunnerTests
         Assert.Contains("step 1 'Spot N' outline seen (224 near-white px, needs 60)", log);
     }
 
-    [Fact]
-    public async Task A_hold_lets_go_when_the_outline_is_gone_for_two_polls()
+    /// <summary>The game as the live run found it: the outline shows only while no button is held,
+    /// and the block breaks after <paramref name="breaksAfter"/> beats (no outline on release from
+    /// then on). Null never breaks.</summary>
+    private static FakeIo LiveBlock(int? breaksAfter = null, Func<FakeIo, Rgb>? inside = null)
     {
-        // The ore stays under the colour box, but the outline goes at 1200 (out of reach, or the
-        // block behind it is not breakable). Polls at 1250 and 1350 miss it: release at 1350.
-        var log = new List<string>();
-        var io = new FakeIo { Screen = Framed(400, 244, shown: t => t < 1200) };
-        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 10_000) }, Ctx(log), io, default);
-
-        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
-        Assert.Equal(1350, Assert.Single(io.Sent, e => e.Kind == MacroEventKind.MouseUp).TimestampMs);
-        Assert.Contains("step 1 'Spot N' held 1.2 s, released: outline gone (0 near-white px, needs 60)", log);
-        Assert.Empty(io.Released);
+        var io = new FakeIo();
+        var framed = Framed(400, 244, shown: _ => !io.ButtonDown && (breaksAfter is null || io.Ups.Count() < breaksAfter));
+        io.Screen = (t, x, y) =>
+        {
+            var c = framed(t, x, y);
+            return c == Ore && inside is not null ? inside(io) : c;
+        };
+        return io;
     }
 
     [Fact]
-    public async Task One_poll_without_the_outline_does_not_end_a_hold()
+    public async Task A_reach_hold_beats_until_the_outline_is_gone_after_a_release()
     {
-        // The pickaxe swing crosses the frame for exactly one poll (1050).
         var log = new List<string>();
-        var io = new FakeIo { Screen = Framed(400, 244, shown: t => t != 1050) };
-        await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 3000) }, Ctx(log), io, default);
-        Assert.Contains("step 1 'Spot N' held 3.0 s, released: reached its 3000 ms limit", log);
+        var io = LiveBlock(breaksAfter: 3);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach); // it mined: a plain finish
+        Assert.Equal(3, io.Downs.Count());
+        Assert.Equal(3, io.Ups.Count());
+        Assert.Empty(io.Released); // every beat let go itself
+        Assert.Equal(new long[] { 150, 1300, 2450 }, io.Downs.Select(d => d.TimestampMs));
+        Assert.Contains("step 1 'Spot N' held 3.0 s over 3 beat(s), released: outline gone after release", log);
+        Assert.Single(log, l => l.Contains("outline seen")); // the pre-press check only, no line per look
+    }
+
+    [Fact]
+    public async Task A_reach_hold_does_not_let_go_while_the_outline_is_hidden_by_the_press()
+    {
+        // The live bug: the outline vanishes the moment the button goes down, and the hold let go
+        // "outline gone" after 0.3 s with the block still there. Every beat must run its full length.
+        var io = LiveBlock(breaksAfter: 2);
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(), io, default);
+
+        var downs = io.Downs.ToList();
+        var ups = io.Ups.ToList();
+        Assert.Equal(2, downs.Count);
+        for (int k = 0; k < downs.Count; k++)
+            Assert.Equal(StepTiming.HoldBeatMs, ups[k].TimestampMs - downs[k].TimestampMs);
+    }
+
+    [Fact]
+    public async Task Colour_drift_during_a_beat_does_not_end_a_reach_hold()
+    {
+        // A hit darkens the block while the button is down (pink to dark red on the live run).
+        var log = new List<string>();
+        var io = LiveBlock(breaksAfter: 2, inside: f => f.ButtonDown ? Rock : Ore);
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(2, io.Downs.Count());
+        Assert.Contains("step 1 'Spot N' held 2.0 s over 2 beat(s), released: outline gone after release", log);
+        Assert.DoesNotContain(log, l => l.Contains("colour moved"));
+    }
+
+    [Fact]
+    public async Task MaxMs_bounds_the_pressed_time_across_beats_by_shortening_the_last()
+    {
+        // The rule: the last beat is cut to what is left, so 2500 ms is beats of 1000, 1000 and 500,
+        // and the step ends at the limit without a look.
+        var log = new List<string>();
+        var io = LiveBlock(); // never breaks
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 2500) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var downs = io.Downs.ToList();
+        var ups = io.Ups.ToList();
+        Assert.Equal(3, downs.Count);
+        Assert.Equal(new long[] { 1000, 1000, 500 }, downs.Select((d, k) => ups[k].TimestampMs - d.TimestampMs));
+        Assert.Equal(ups[2].TimestampMs, io.NowMs); // no look after the limit
+        Assert.Contains("step 1 'Spot N' held 2.5 s over 3 beat(s), released: reached its limit", log);
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_mid_beat_aborts_and_releases_through_finally()
+    {
+        var log = new List<string>();
+        var io = LiveBlock();
+        io.OnDelay = () => { if (io.Downs.Count() == 2 && io.NowMs >= 1700) io.Foreground = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
+        Assert.Null(r.StepIndex);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Contains("step 1 'Spot N' held 1.4 s over 2 beat(s), then the playback ended", log);
+    }
+
+    [Fact]
+    public async Task A_capture_failure_on_a_look_stops_could_not_see_the_window()
+    {
+        var log = new List<string>();
+        var io = LiveBlock();
+        io.OnDelay = () => { if (io.Ups.Any()) io.CaptureWorks = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(), new PointStep(0, "p9", null, 5, 5) }, Ctx(log), io, default);
+
+        Assert.Equal("CElCPapa: step 1 'Spot N' could not see the window.", r.Reason);
+        Assert.Equal(0, r.StepIndex);
+        Assert.Single(io.Downs); // the first beat, then the look failed
+        Assert.Empty(io.Released); // the button was already up
+        Assert.DoesNotContain(log, l => l.Contains("outline gone"));
     }
 
     [Fact]
