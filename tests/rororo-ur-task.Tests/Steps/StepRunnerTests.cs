@@ -247,6 +247,51 @@ public class StepRunnerTests
         finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
     }
 
+    // ---------- first match: skipIfOther ----------
+
+    private static readonly Rgb DotGreen = new(125, 246, 13);
+    private static readonly Rgb DotRed = new(255, 19, 90);
+
+    /// <summary>"Auto Mine off (checked)": press the pickaxe only when the dot is green.</summary>
+    private static FirstMatchStep AutoMineOff() => new(0, "am-off", "Auto Mine off", new[]
+    {
+        new PointStep(0, "am-off-dot", "dot", 40, 300, Check: new ColorCheck(new CheckBox(15, -11, 3, 3), DotGreen, DotRed)),
+    }, NoMatchAction.SkipIfOther);
+
+    [Fact]
+    public async Task SkipIfOther_skips_when_every_candidate_shows_its_other_state()
+    {
+        // Auto Mine is already off: the dot is red. Skip at once and carry on.
+        var io = new FakeIo { Screen = (_, _, _) => DotRed };
+        var r = await StepRunner.RunAsync(new MacroStep[] { AutoMineOff(), new PointStep(0, "p9", null, 5, 5) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((5, 5), (down.X, down.Y));
+        Assert.True(down.TimestampMs < StepTiming.CheckGraceMs); // no wait for the ceiling
+    }
+
+    [Fact]
+    public async Task SkipIfOther_presses_when_the_candidate_matches()
+    {
+        var io = new FakeIo { Screen = (_, _, _) => DotGreen };
+        var r = await StepRunner.RunAsync(new MacroStep[] { AutoMineOff() }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal((40, 300), (io.Downs.Single().X, io.Downs.Single().Y));
+    }
+
+    [Fact]
+    public async Task SkipIfOther_stops_when_a_candidate_shows_neither_state()
+    {
+        // A popup or captcha dims the screen: the dot is neither red nor green. Nothing after
+        // this step may run, because the next step in a mine macro holds the middle of the screen.
+        var io = new FakeIo { Screen = (_, _, _) => DarkBlue };
+        var r = await StepRunner.RunAsync(new MacroStep[] { AutoMineOff(), new PointStep(0, "p9", null, 5, 5) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal(0, r.StepIndex);
+        Assert.StartsWith("CElCPapa: step 1 'Auto Mine off' found no candidate that matched after", r.Reason);
+        Assert.Empty(io.Downs);
+    }
+
     [Fact]
     public async Task Unchecked_point_waits_its_delay_then_presses()
     {

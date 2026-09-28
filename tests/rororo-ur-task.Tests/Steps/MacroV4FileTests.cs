@@ -322,4 +322,35 @@ public class MacroV4FileTests : IDisposable
         Assert.Equal(300 + StepTiming.JumpWiggleMs + 2000, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1, MaxMs: 2000)));
         Assert.Equal(300 + StepTiming.JumpWiggleMs, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1)));
     }
+
+    [Fact]
+    public void SkipIfOther_loads_from_json_by_its_spec_name()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "firstMatch", "delayMs": 0, "id": "am-off", "label": "Auto Mine off",
+                       "candidates": [ { "delayMs": 0, "id": "am-off-dot", "x": 40, "y": 300,
+                         "check": { "box": { "offsetX": 15, "offsetY": -11, "w": 3, "h": 3 },
+                                    "expect": { "r": 125, "g": 246, "b": 13 }, "other": { "r": 255, "g": 19, "b": 90 } } } ],
+                       "onNoMatch": "skipIfOther" } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal(NoMatchAction.SkipIfOther, Assert.IsType<FirstMatchStep>(m.Steps![0]).OnNoMatch);
+        Assert.Null(StepValidator.Validate(m.Steps));
+    }
+
+    [Fact]
+    public void Validator_refuses_skipIfOther_on_a_candidate_with_no_other_colour()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "am-off", "Auto Mine off", new[]
+            {
+                new PointStep(0, "am-off-dot", "dot", 40, 300, Check: new ColorCheck(new CheckBox(15, -11, 3, 3), new Rgb(125, 246, 13))),
+            }, NoMatchAction.SkipIfOther),
+        });
+        Assert.Equal("Step 1 'Auto Mine off': candidate 'dot' has no other colour, so skipIfOther can never skip.", err);
+    }
 }
