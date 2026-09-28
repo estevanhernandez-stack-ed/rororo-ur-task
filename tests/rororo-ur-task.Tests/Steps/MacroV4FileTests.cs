@@ -238,4 +238,88 @@ public class MacroV4FileTests : IDisposable
         });
         Assert.Equal("Step 1 'Best mine': candidate '#8' has a check with no box.", err);
     }
+
+    [Fact]
+    public void A_hold_round_trips_through_the_store()
+    {
+        var store = new MacroStore(_dir);
+        var m = Sample() with
+        {
+            Steps = new MacroStep[]
+            {
+                new HoldStep(300, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox(), 20)),
+                new HoldStep(0, "h2", null, 1, 1, 2, new HoldCheck(new CheckBox(-1, -1, 3, 3)), MaxMs: 1500),
+            },
+        };
+        store.Save(m);
+        var json = File.ReadAllText(Path.Combine(_dir, m.Id + ".json"));
+        Assert.Contains("\"kind\": \"hold\"", json);
+
+        var loaded = Assert.Single(store.LoadAll().Macros);
+        var a = Assert.IsType<HoldStep>(loaded.Steps![0]);
+        Assert.Equal((300, "spot-N", "Spot N", 400, 244, 1), (a.DelayMs, a.Id, a.Label, a.X, a.Y, a.Button));
+        Assert.Equal(new CheckBox(), a.Check!.Box);
+        Assert.Equal(20, a.Check.Tolerance);
+        Assert.Null(a.MaxMs);
+        var b = Assert.IsType<HoldStep>(loaded.Steps[1]);
+        Assert.Equal((2, 1500), (b.Button, b.MaxMs));
+        Assert.Equal(new CheckBox(-1, -1, 3, 3), b.Check!.Box);
+    }
+
+    [Fact]
+    public void An_agent_written_hold_loads_with_its_defaults()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "coordSpace": "client", "recordedClientW": 800, "recordedClientH": 599,
+          "steps": [ { "kind": "hold", "delayMs": 300, "id": "spot-N", "x": 400, "y": 244,
+                       "check": { "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 } } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        var h = Assert.IsType<HoldStep>(m.Steps![0]);
+        Assert.Equal(1, h.Button);
+        Assert.Equal(ColorCheck.DefaultTolerance, h.Check!.Tolerance);
+        Assert.Null(h.MaxMs);
+        Assert.Null(StepValidator.Validate(m.Steps));
+    }
+
+    [Fact]
+    public void A_hold_check_without_a_box_loads_and_is_refused_with_a_sentence()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "hold", "delayMs": 0, "id": "spot-N", "label": "Spot N", "x": 400, "y": 244,
+                       "check": { "tolerance": 20 } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal("Step 1 'Spot N' has a check with no box.", StepValidator.Validate(m.Steps!));
+    }
+
+    [Fact]
+    public void Validator_refuses_bad_holds_with_a_sentence()
+    {
+        HoldStep H(HoldCheck? check = null, int? maxMs = null, string id = "spot-N")
+            => new(0, id, "Spot N", 400, 244, Check: check, MaxMs: maxMs);
+        var ok = new HoldCheck(new CheckBox());
+
+        Assert.Null(StepValidator.Validate(new MacroStep[] { H(ok) }));
+        Assert.Equal("Step 1 has no point id.", StepValidator.Validate(new MacroStep[] { H(ok, id: " ") }));
+        Assert.Equal("Step 1 'Spot N' is a hold with no check.", StepValidator.Validate(new MacroStep[] { H() }));
+        Assert.Equal("Step 1 'Spot N' has an empty check box.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(0, 0, 0, 5))) }));
+        Assert.Equal("Step 1 'Spot N' has a check box larger than 9x9.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(0, 0, 12, 12))) }));
+        Assert.Equal("Step 1 'Spot N' has a hold tolerance below 1.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(), 0)) }));
+        Assert.Equal("Step 1 'Spot N' has a maxMs below 1.", StepValidator.Validate(new MacroStep[] { H(ok, maxMs: 0) }));
+        Assert.Equal("Step 2 reuses point id 'spot-N'.", StepValidator.Validate(new MacroStep[] { new PointStep(0, "spot-N", null, 1, 1), H(ok) }));
+    }
+
+    [Fact]
+    public void A_hold_estimates_its_limit_or_nothing_for_an_open_hold()
+    {
+        Assert.Equal(300 + StepTiming.JumpWiggleMs + 2000, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1, MaxMs: 2000)));
+        Assert.Equal(300 + StepTiming.JumpWiggleMs, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1)));
+    }
 }
