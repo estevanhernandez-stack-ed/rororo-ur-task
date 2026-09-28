@@ -137,8 +137,11 @@ Request, camelCase JSON like every other method:
       "outline": { "w": 50, "h": 50, "minCount": 60, "whiteMin": 225 },
       "maxMsPerPoint": null }                     // null = no time limit (spec decision 5)
 
-- Ur Task scales points and the outline box from `client` to the live client size with PointMath,
-  exactly as recorded points are scaled.
+- Ur Task treats `client` exactly like a recorded macro's client size: the window is set to it first
+  (EnsureClientSize), then points and the outline box play unscaled. (Ruling 2026-09-28: follow the
+  existing macro path rather than a second scaling rule.)
+- Refusals beyond the list below (plan ruling): whiteMin 0, maxMsPerPoint below 1, an outline box over
+  120 px, a minCount larger than the box.
 - Each point plays as a reach hold: hover, outline check (grace 300 ms), no outline means skip,
   otherwise hold-release-look beats until the outline is gone (or maxMsPerPoint).
 - Foreground rule as macros: it acts only while the target's window is in front; a lost foreground
