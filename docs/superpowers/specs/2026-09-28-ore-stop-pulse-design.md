@@ -82,6 +82,45 @@ ride itself is timed, not read.
   checked macro opens Settings, reads the toggle (green "On" or red "Off"), remembers the user's
   setting, turns it On when the loop starts, and restores it when the loop stops.
 
+## Reach, measured, and the ore finder (proposed 2026-09-28, not yet approved)
+
+**Reach is a distance, about 6 blocks.** Este's hover shots (2026-09-28 12:53 to 13:02):
+
+- From the top of ItsJustEstePapa's mine (zoomed out, top-down), every hovered surface block lit up,
+  corners included: at least 8 blocks across on the character's own level.
+- On the main at the Mine #8 bottom layer, a middle-layer wall block about 6 blocks up and a little to
+  the side lights up (130232); the one above it does not (130235). Straight overhead it may be 7 or 8.
+- The Mine #8 bottom layer opens into a bowl about 9 by 8 blocks, walled by the middle layer, with ore
+  set in the walls and floor. Top-down in the bowl a block is about 50 px and the character sits near
+  390,340 (800x599 client).
+
+So everything on the bowl floor is in reach, and the higher wall blocks are not. The outline check
+already tells the two apart; a block out of reach costs one look (about 300 ms) and is skipped.
+
+**Proposal: an ore finder plus a grid, instead of the 8-spot ring.** The ring touches 8 of about 70
+blocks in view. At the target layer, during the calm pause:
+
+1. **Ore first, by colour, anywhere in the frame.** Cyan crystal, purple/magenta amethyst and white
+   quartz stand apart from all three Mine #8 rocks. Ur OCR finds ore-coloured patches in the calm
+   frame, and each patch's centre becomes a target. Colour only picks where to look; the outline
+   still decides whether to press.
+2. **Then stone, on a grid.** Targets every block pitch (about 50 px at the bottom layer) out to a
+   radius of about 5 blocks around the character, nearest first.
+3. **Each target:** hover, outline check, hold-release-look (built, 0.11.0 Task 7). No outline means
+   skip.
+
+**Box size follows the block size.** A block is about 21 px at the surface, 50 px in the bowl and
+170 px in the shaft. Clearing only happens at the target layer, so the outline box and the grid pitch
+are measured there, once per zone, and live in the measured file with the ring.
+
+**What it needs:**
+- **Ur Task:** a way to press at a point Ur OCR supplies. Today every macro's points are fixed, so it
+  is either one "Clear at x,y" bridge call or a small set of generated grid macros. The bridge call
+  is cleaner. It is an additive method on Ur Task's own bridge (contract 1.0), not a RoRoRo host
+  change.
+- **Ur OCR:** ore-colour patches in the calm frame, grid targets, and the order: ore nearest first,
+  then stone nearest first.
+
 ## Not in v1 (v2: the bomb grid)
 
 At the target layer: walk to the middle of a 3x3 area, drop a bomb from its hotbar key, walk 3 blocks to
