@@ -12,6 +12,7 @@ namespace Labs626.UrTask.Macros.Steps;
 [JsonDerivedType(typeof(PointerMoveStep), "pointerMove")]
 [JsonDerivedType(typeof(WaitStep), "wait")]
 [JsonDerivedType(typeof(FirstMatchStep), "firstMatch")]
+[JsonDerivedType(typeof(HoldStep), "hold")]
 [JsonDerivedType(typeof(RawStep), "raw")]
 public abstract record MacroStep(int DelayMs);
 
@@ -22,6 +23,14 @@ public sealed record KeyStep(int DelayMs, int VirtualKeyCode, bool Down) : Macro
 public sealed record PointStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
     ColorCheck? Check = null, bool CheckEnabled = false) : MacroStep(DelayMs);
+
+/// <summary>Press a mouse button at a client-space point and keep it down while the check box
+/// still shows the colour it had just before the press. Releases when the colour moves past the
+/// tolerance, or at <see cref="MaxMs"/> when one is set; with no MaxMs there is no time limit
+/// (ore-stop spec, decision 5). Id, adjustments and scaling work exactly as for a point.</summary>
+public sealed record HoldStep(
+    int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
+    HoldCheck? Check = null, int? MaxMs = null) : MacroStep(DelayMs);
 
 /// <summary>Button held while the mouse moves by (Dx, Dy) from the start point.</summary>
 public sealed record DragStep(int DelayMs, int Button, int StartX, int StartY, int Dx, int Dy, int DurationMs) : MacroStep(DelayMs);
@@ -57,11 +66,17 @@ public static class StepTiming
     public const int PollMs = 100;
     public const int CheckGraceMs = 3000;
 
+    /// <summary>A hold lets go only after this many polls in a row past its tolerance, so one
+    /// frame of hit particles or pickaxe swing over the box does not end it early.</summary>
+    public const int HoldDriftPolls = 2;
+
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
     {
         PointStep => JumpWiggleMs + PressHoldMs,
         FirstMatchStep => JumpWiggleMs + PressHoldMs,
+        // An open hold's length is unknowable, so it counts as nothing: the estimate is a floor.
+        HoldStep h => JumpWiggleMs + (h.MaxMs ?? 0),
         DragStep d => JumpWiggleMs + d.DurationMs,
         WheelStep => JumpWiggleMs,
         PointerMoveStep p => p.DurationMs,
@@ -107,6 +122,17 @@ public static class StepValidator
                     }
                     break;
                 }
+                case HoldStep h:
+                {
+                    if (string.IsNullOrWhiteSpace(h.Id)) return $"Step {n} has no point id.";
+                    if (!ids.Add(h.Id)) return $"Step {n} reuses point id '{h.Id}'.";
+                    var name = $"Step {n} '{h.Label ?? h.Id}'";
+                    if (h.Check is null) return $"{name} is a hold with no check.";
+                    if (BoxProblem(h.Check.Box, name) is { } err) return err;
+                    if (h.Check.Tolerance < 1) return $"{name} has a hold tolerance below 1.";
+                    if (h.MaxMs is < 1) return $"{name} has a maxMs below 1.";
+                    break;
+                }
             }
         }
         return null;
@@ -114,11 +140,13 @@ public static class StepValidator
 
     /// <summary>A missing box (null from JSON), an empty one, and an oversized one each get
     /// their own sentence.</summary>
-    private static string? BoxProblem(ColorCheck check, string who)
+    private static string? BoxProblem(ColorCheck check, string who) => BoxProblem(check.Box, who);
+
+    private static string? BoxProblem(CheckBox? box, string who)
     {
-        if (check.Box is null) return $"{who} has a check with no box.";
-        if (check.Box.W < 1 || check.Box.H < 1) return $"{who} has an empty check box.";
-        if (check.Box.W > CheckBox.MaxSide || check.Box.H > CheckBox.MaxSide) return $"{who} has a check box larger than 9x9.";
+        if (box is null) return $"{who} has a check with no box.";
+        if (box.W < 1 || box.H < 1) return $"{who} has an empty check box.";
+        if (box.W > CheckBox.MaxSide || box.H > CheckBox.MaxSide) return $"{who} has a check box larger than 9x9.";
         return null;
     }
 }
