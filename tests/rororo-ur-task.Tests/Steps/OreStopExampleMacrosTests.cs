@@ -135,7 +135,17 @@ public class OreStopExampleMacrosTests
         Assert.Equal(3, steps.Count);
         var press = Assert.IsType<PointStep>(steps[0]);
         Assert.Equal(Xy(g), (press.X, press.Y));
-        Assert.Equal(g.GetProperty("check").ValueKind != JsonValueKind.Null, press.CheckEnabled);
+        var check = g.GetProperty("check");
+        Assert.Equal(check.ValueKind != JsonValueKind.Null, press.CheckEnabled);
+        if (check.ValueKind != JsonValueKind.Null)
+        {
+            // Ur OCR fills this in once the sweep measures it; an edit to measured.json without a
+            // regenerate must fail here, same as every other measured value in this file.
+            Assert.Equal(BoxOf(check.GetProperty("box")), press.Check!.Box);
+            Assert.Equal(Colour(check.GetProperty("expect")), press.Check.Expect);
+            Assert.Equal(check.GetProperty("tolerance").GetInt32(), press.Check.Tolerance);
+            Assert.Null(press.Check.Other); // generate.ps1 never writes an "other" for Go to Top
+        }
         Assert.Equal(g.GetProperty("settleMs").GetInt32(), Assert.IsType<WaitStep>(steps[1]).DelayMs);
         AssertDot(Assert.IsType<FirstMatchStep>(steps[2]), m.GetProperty("autoMine"), expectGreen: false);
     }
