@@ -24,6 +24,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 
 - **Mine spot macros check reach too.** A spot looking through a hole at ore out of reach no
   longer holds forever: no outline, no press, and Auto Mine goes back on.
+- **Esc during the focus delay now reads `stopped`, not `finished`.** The sequence never played
+  that alt, so `GetPlayback` reports state `stopped` and a repeat ends there instead of counting
+  it as a clean pass.
+- **A lost single-flight claim now reads `failed`/`refused`, not a clean finish.** If a second
+  `RunMacro` loses the race for the in-flight `SequencePlayer` (nothing ran that pass),
+  `GetPlayback` reports state `failed`, reason `refused`, detail "Another playback took the
+  sequence.", and a repeat stops spinning on it instead of reading it as `finished`.
 - The reach values in `measured.json` are provisional until the live outline measurement.
 
 ## 0.10.0 — unreleased
