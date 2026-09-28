@@ -123,6 +123,24 @@ are measured there, once per zone, and live in the measured file with the ring.
 - **Ur OCR:** ore-colour patches in the calm frame, grid targets, and the order: ore nearest first,
   then stone nearest first.
 
+### Block size is read every pass (approved by Este 2026-09-28)
+
+Found live: the camera is always fully zoomed out, but Roblox pulls it in to the first wall in its
+way. So block size follows how open the space is, not the zoom: about 170 px in a one-block shaft,
+about 32 px in the bottom pit after Este's special ability opened it, 22 px on the open surface (Este's
+shots 15:02 and 15:03, and the 14:47 capture). The character stays near the frame centre
+(about 400,340) in all of them.
+
+- **Ur OCR measures the block size on each calm frame.** The repeat spacing of the rock pattern
+  around the character (the bottom layer's blue grid lines are the clearest case). The spacing
+  sets the grid pitch, the reach radius in pixels and the outline box (w = h = pitch). If no clear
+  spacing is found, the layer's measured `pitch` is the fallback, and the log says which one was
+  used.
+- **The outline box cap rises from 120 px to 240 px** in Ur Task (OutlineCheck and ClearAt), so a
+  shaft-sized block still fits. minCount stays 60: an outline on a 22 px block is still about 90
+  near-white pixels or more.
+- Ore finding is by colour and does not change.
+
 ### The ClearAt bridge call (Ur Task bridge 1.x, additive)
 
 One call carries a whole ordered list of points and plays as ONE playback, so it rides the existing
@@ -141,7 +159,7 @@ Request, camelCase JSON like every other method:
   (EnsureClientSize), then points and the outline box play unscaled. (Ruling 2026-09-28: follow the
   existing macro path rather than a second scaling rule.)
 - Refusals beyond the list below (plan ruling): whiteMin 0, maxMsPerPoint below 1, an outline box over
-  120 px, a minCount larger than the box.
+  240 px (raised from 120, see "Block size is read every pass"), a minCount larger than the box.
 - Each point plays as a reach hold: hover, outline check (grace 300 ms), no outline means skip,
   otherwise hold-release-look beats until the outline is gone (or maxMsPerPoint).
 - Baseline (ruling 2026-09-28, every reach hold, ClearAt and recorded spots alike): before the pointer
