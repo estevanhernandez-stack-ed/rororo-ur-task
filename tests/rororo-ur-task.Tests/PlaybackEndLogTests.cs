@@ -48,4 +48,14 @@ public class PlaybackEndLogTests
             PlaybackEndLog.BridgeLine("abc", "Mine spot N", "failed", "check-failed", "CElCPapa: step 2 'Spot N' could not see the window."));
         Assert.Equal("bridge playback abc '(unnamed)': stopped", PlaybackEndLog.BridgeLine("abc", null, "stopped", null, null));
     }
+
+    [Fact]
+    public void A_run_skipped_by_reach_reads_as_finished_skipped()
+        => Assert.Equal("playback finished (skipped: no outline): 'Clear spot N' on CElCPapa in 12.4 s.",
+            PlaybackEndLog.Line("Clear spot N", "CElCPapa", PlaybackResult.CompletedSkippedByReach(), T));
+
+    [Fact]
+    public void The_bridge_line_for_a_skip_carries_the_reason()
+        => Assert.Equal("bridge playback abc 'Clear spot N': finished (skipped)",
+            PlaybackEndLog.BridgeLine("abc", "Clear spot N", "finished", "skipped", null));
 }

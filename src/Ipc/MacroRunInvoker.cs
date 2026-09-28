@@ -171,6 +171,22 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 // alone means check-failed. Prefer it over any other failed alt in the pass.
                 var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
                            ?? last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
+                // The sequence was aborted before an alt played (Esc, including during the focus
+                // delay): PlaybackOutcome.Skipped, not SkippedByReach. That alt never ran, so the
+                // pass reads stopped, never finished, and a repeat ends here (controller ruling,
+                // 2026-09-28). Checked before the failure below, so it wins over it.
+                if (last?.PerAlt.Any(a => a.Outcome == PlaybackOutcome.Skipped) == true)
+                {
+                    state = PlaybackState.Stopped;
+                    break;
+                }
+                // Pressed nothing on any alt because reach checks skipped: finished/skipped, so Ur
+                // OCR's pulse loop can tell a skipped Clear spot from a mined one (controller
+                // ruling, 2026-09-28). Additive: a finished run carried no reason before.
+                if (failure is null && !playbackCts.IsCancellationRequested
+                    && last?.PerAlt is { Count: > 0 } alts
+                    && alts.All(a => a.Outcome == PlaybackOutcome.Completed && a.SkippedByReach))
+                    reason = "skipped";
                 if (failure is not null && !playbackCts.IsCancellationRequested)
                 {
                     state = PlaybackState.Failed;

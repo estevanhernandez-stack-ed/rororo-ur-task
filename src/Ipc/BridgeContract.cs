@@ -62,7 +62,9 @@ public sealed record GetPlaybackRequest(
     string? CallerPluginId);
 
 /// <summary>State is running | finished | stopped | failed. On failed, Reason is a short code
-/// (check-failed, refused, aborted, error) and Detail is the sentence Claude shows.</summary>
+/// (check-failed, refused, aborted, error) and Detail is the sentence Claude shows. On finished,
+/// Reason is null, or "skipped" when the playback pressed nothing because reach checks skipped
+/// on every alt (0.11.0, additive; Ur MCP ignores the reason of a finished run).</summary>
 public sealed record GetPlaybackResponse(
     bool Ok,
     string? State,

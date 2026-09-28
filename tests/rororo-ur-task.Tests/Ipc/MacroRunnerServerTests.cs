@@ -2,6 +2,8 @@
 using System.IO.Pipes;
 using System.Text.Json;
 using Labs626.UrTask.Ipc;
+using Labs626.UrTask.Macros;
+using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Tests.Ipc;
 
@@ -193,5 +195,40 @@ public class MacroRunnerServerTests
         Assert.False(resp.Ok);
         Assert.Equal("refused", resp.Reason);
         Assert.Equal("Unknown method 'NoSuchMethod'.", resp.Detail);
+    }
+
+    // Pin for Ur OCR's pulse loop (controller ruling, 2026-09-28): a playback that pressed nothing
+    // because reach checks skipped reads exactly this on the wire; a normal finish has no reason.
+    [Fact]
+    public async Task GetPlayback_over_the_pipe_reports_a_skip_and_a_clean_finish_without_a_reason()
+    {
+        var alt = new AccountRegistry.AccountInfo(1123, 123, "alt-123", "acct-123");
+        var macro = new Macro(SchemaVersion: 2, Id: Guid.NewGuid().ToString(), Name: "Clear spot N", RecordMode: "PerWindow",
+            RecordedAgainstUserId: null, RecordedAgainstDisplayName: null, InterAltDelayMs: null, RecordedAtUnixMs: 0,
+            Events: new List<MacroEvent>());
+        var passes = new Queue<SequenceResult>(new[]
+        {
+            new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, SkippedByReach: true) }, 1, 0, 0, TimeSpan.Zero),
+            new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero),
+        });
+        var invoker = new MacroRunInvoker(
+            loadMacros: () => new[] { macro },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(passes.Dequeue()));
+        var server = new MacroRunnerServer(invoker);
+
+        async Task<string> RunAndReadAsync()
+        {
+            var run = await invoker.RunAsync(new RunMacroRequest("1.0", "RunMacro", macro.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+            for (int i = 0; i < 200 && invoker.ActivePlaybackCount > 0; i++) await Task.Delay(10);
+            Assert.Equal(0, invoker.ActivePlaybackCount);
+            return await RoundTripJsonAsync(server,
+                $"{{\"contractVersion\":\"1.0\",\"method\":\"GetPlayback\",\"playbackId\":\"{run.PlaybackId}\",\"callerPluginId\":\"626labs.ur-ocr\"}}");
+        }
+
+        Assert.Equal("{\"ok\":true,\"state\":\"finished\",\"reason\":\"skipped\"}", await RunAndReadAsync());
+        Assert.Equal("{\"ok\":true,\"state\":\"finished\"}", await RunAndReadAsync());
     }
 }

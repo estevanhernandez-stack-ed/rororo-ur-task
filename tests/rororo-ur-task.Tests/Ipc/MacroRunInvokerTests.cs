@@ -279,7 +279,85 @@ public class MacroRunInvokerTests
 
         var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
-        Assert.Equal("finished", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp"));
+        Assert.Equal(("finished", (string?)null), (status.State, status.Reason)); // a normal finish has no reason
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_finished_skipped_when_every_alt_was_skipped_by_reach()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Clear spot N");
+        var alt = Alt(123);
+        var skipped = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, SkippedByReach: true) }, 1, 0, 0, TimeSpan.FromSeconds(1));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => Task.FromResult<SequenceResult?>(skipped));
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-ocr"));
+        Assert.True(status.Ok);
+        Assert.Equal(("finished", "skipped", (string?)null, (int?)null), (status.State, status.Reason, status.Detail, status.StepIndex));
+    }
+
+    [Fact]
+    public async Task GetPlayback_has_no_reason_when_any_alt_pressed()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Clear spot N");
+        var alt = Alt(123);
+        var mixed = new SequenceResult(new[]
+        {
+            new AltOutcome(alt, PlaybackOutcome.Completed, null, SkippedByReach: true),
+            new AltOutcome(Alt(124), PlaybackOutcome.Completed, null),
+        }, 2, 0, 0, TimeSpan.FromSeconds(1));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => Task.FromResult<SequenceResult?>(mixed));
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-ocr"));
+        Assert.Equal(("finished", (string?)null), (status.State, status.Reason));
+    }
+
+    [Fact]
+    public async Task A_skipped_bridge_playback_logs_finished_skipped()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Clear spot N");
+        var alt = Alt(123);
+        var lines = new List<string>();
+        var skipped = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, SkippedByReach: true) }, 1, 0, 0, TimeSpan.FromSeconds(1));
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(skipped),
+            log: lines.Add);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal($"bridge playback {run.PlaybackId} 'Clear spot N': finished (skipped)", Assert.Single(lines));
+    }
+
+    [Fact]
+    public async Task GetPlayback_reports_stopped_when_the_sequence_was_aborted_before_an_alt()
+    {
+        // Esc during the focus delay: SequencePlayer ends that alt as PlaybackOutcome.Skipped
+        // ("Sequence aborted."), not SkippedByReach. It never played, so Ur OCR must not read it
+        // as a cleared spot (controller ruling, 2026-09-28). A repeat ends there too.
+        var m = NewMacro(Guid.NewGuid().ToString(), "Clear spot N");
+        var alt = Alt(123);
+        int passes = 0;
+        var aborted = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Skipped, "Sequence aborted.") }, 0, 0, 1, TimeSpan.FromSeconds(1));
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => { passes++; return Task.FromResult<SequenceResult?>(aborted); });
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr", Repeat: true), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-ocr"));
+        Assert.True(status.Ok);
+        Assert.Equal(("stopped", (string?)null, (string?)null, (int?)null), (status.State, status.Reason, status.Detail, status.StepIndex));
+        Assert.Equal(1, passes);
     }
 
     [Fact]
