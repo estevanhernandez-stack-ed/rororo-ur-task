@@ -2,6 +2,28 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.10.0 — unreleased
+
+### Added
+
+- **Hold steps.** A `hold` step presses a mouse button at a point and keeps it down while a small
+  box there shows the colour it had just before the press. It lets go when the colour moves past
+  its tolerance, or at `maxMs` if one is set, and the log says how long it held. Losing focus,
+  Esc and `StopMacro` all release the button. Built for the Space Mine ore stop, where one ore can
+  take 20 hits.
+- **First match can skip only on the other state.** With `onNoMatch: "skipIfOther"`, a first match
+  skips when every spot shows its other colour (Auto Mine already off) and stops with a report
+  when something else covers it, such as a popup or a captcha.
+- **Ore-stop example macros** in `docs/reference/events/macros/space-mine-ore-stop/`: Auto Mine
+  off and on (checked), Mine spot N through NW, Camera top-down and Go to Top, generated from one
+  file of measured values.
+
+### Fixed
+
+- **Every playback's ending is in `ur-task.log`.** A stopped playback logs its stop sentence and a
+  clean one logs a finish line. Bridge playbacks also log their id with the state `GetPlayback`
+  returns. Before, the log showed a start and nothing after it.
+
 ## 0.9.0 — unreleased
 
 ### Added
