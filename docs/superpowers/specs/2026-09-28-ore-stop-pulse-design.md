@@ -82,7 +82,7 @@ ride itself is timed, not read.
   checked macro opens Settings, reads the toggle (green "On" or red "Off"), remembers the user's
   setting, turns it On when the loop starts, and restores it when the loop stops.
 
-## Reach, measured, and the ore finder (proposed 2026-09-28, not yet approved)
+## Reach, measured, and the ore finder (approved by Este 2026-09-28)
 
 **Reach is a distance, about 6 blocks.** Este's hover shots (2026-09-28 12:53 to 13:02):
 
@@ -97,7 +97,9 @@ ride itself is timed, not read.
 So everything on the bowl floor is in reach, and the higher wall blocks are not. The outline check
 already tells the two apart; a block out of reach costs one look (about 300 ms) and is skipped.
 
-**Proposal: an ore finder plus a grid, instead of the 8-spot ring.** The ring touches 8 of about 70
+**Decision: an ore finder plus a grid, instead of the 8-spot ring.** Este: "it has always been the way
+I have wanted to head. Like we are building our own AHK." Ur Task becomes a pointer the caller can aim,
+not only a player of recorded macros. The ring touches 8 of about 70
 blocks in view. At the target layer, during the calm pause:
 
 1. **Ore first, by colour, anywhere in the frame.** Cyan crystal, purple/magenta amethyst and white
@@ -120,6 +122,34 @@ are measured there, once per zone, and live in the measured file with the ring.
   change.
 - **Ur OCR:** ore-colour patches in the calm frame, grid targets, and the order: ore nearest first,
   then stone nearest first.
+
+### The ClearAt bridge call (Ur Task bridge 1.x, additive)
+
+One call carries a whole ordered list of points and plays as ONE playback, so it rides the existing
+single-flight rule, playback id, GetPlayback, StopMacro and Esc unchanged.
+
+Request, camelCase JSON like every other method:
+
+    { "contractVersion": "1.0", "method": "ClearAt", "callerPluginId": "...",
+      "target": "<decimal user id>",
+      "client": { "w": 800, "h": 599 },          // client size the points were measured in
+      "points": [ { "x": 412, "y": 288, "label": "ore 1" }, ... ],   // in order; 1..64 points
+      "outline": { "w": 50, "h": 50, "minCount": 60, "whiteMin": 225 },
+      "maxMsPerPoint": null }                     // null = no time limit (spec decision 5)
+
+- Ur Task scales points and the outline box from `client` to the live client size with PointMath,
+  exactly as recorded points are scaled.
+- Each point plays as a reach hold: hover, outline check (grace 300 ms), no outline means skip,
+  otherwise hold-release-look beats until the outline is gone (or maxMsPerPoint).
+- Foreground rule as macros: it acts only while the target's window is in front; a lost foreground
+  aborts the playback.
+- Response is RunMacroResponse (ok + playbackId, or refused with reason). Refusals: bad version,
+  missing callerPluginId, unknown target, 0 or more than 64 points, a point or box outside `client`,
+  minCount below 1, whiteMin outside 0..255, busy (another playback running).
+- GetPlayback afterwards: finished (something was pressed), finished + reason "skipped" (every point
+  skipped), stopped, failed as today. Nothing new on the wire there.
+- The synthetic playback is never saved to the macro library and never shows in ListMacros. Its log
+  lines name it "ClearAt (N points)" and each point by its label.
 
 ## Not in v1 (v2: the bomb grid)
 
