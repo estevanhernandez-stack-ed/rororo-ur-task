@@ -2,6 +2,30 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.11.0 — unreleased
+
+### Added
+
+- **Reach checks.** A hold or a point can carry a `reach`: with the pointer on the spot, it
+  counts the near-white pixels (every channel at 225 or more) in a block-sized box around it and
+  needs at least `minCount`. That is the white outline the game draws on a block your pickaxe can
+  break. No outline within 300 ms: the step is skipped, not failed, and the log says
+  "no outline, skipped" with the count. During a hold, the outline gone for two polls running lets
+  go ("outline gone"). The box and the count scale with the window like points.
+- **Clear spot macros** for ore stop v1 (pulse) in `docs/reference/events/macros/space-mine-ore-stop/`:
+  `Clear spot N` through `Clear spot NW`, each one hold behind a reach check and nothing else,
+  because the Ur OCR loop owns Auto Mine in pulse mode.
+- **A playback that pressed nothing says so.** When reach checks skipped and no button or key
+  went down, `ur-task.log` reads "playback finished (skipped: no outline)", and a bridge playback
+  reports `GetPlayback` state `finished` with reason `skipped`. A normal finish has no reason, as
+  before.
+
+### Changed
+
+- **Mine spot macros check reach too.** A spot looking through a hole at ore out of reach no
+  longer holds forever: no outline, no press, and Auto Mine goes back on.
+- The reach values in `measured.json` are provisional until the live outline measurement.
+
 ## 0.10.0 — unreleased
 
 ### Added
