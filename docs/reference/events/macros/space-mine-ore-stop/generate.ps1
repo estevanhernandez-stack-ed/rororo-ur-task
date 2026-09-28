@@ -17,7 +17,8 @@
     - "Clear spot <name>": hold the spot and nothing else (ore stop v1, pulse). The Ur OCR loop
       owns Auto Mine in pulse mode, so these never touch the pickaxe.
   Every ring hold carries a reach check: with the pointer on the spot, no white outline means no
-  press, and the outline gone mid-hold lets go.
+  press. The game hides the outline while the button is down, so the hold presses in beats and
+  looks between them; no outline after a beat means the block broke.
 
   Install: copy macros\*.json into %LOCALAPPDATA%\626Labs\RoRoRoUrTask\macros, then restart
   Ur Task. Each file is named <id>.json, the store's own convention, so deleting a macro from the
