@@ -288,6 +288,11 @@ public class StepRunnerTests
             return Ore;
         };
 
+    /// <summary>True while the pointer is on the block centred on (cx, cy): the game draws the
+    /// outline only on hover.</summary>
+    private static bool Hovered(FakeIo io, int cx, int cy, int half = 28)
+        => Math.Max(Math.Abs(io.Cursor.X - cx), Math.Abs(io.Cursor.Y - cy)) <= half;
+
     private static HoldStep ReachHold(int? maxMs = null, int x = 400, int y = 244)
         => Hold(maxMs, x: x, y: y) with { Reach = Reach80 };
 
@@ -297,13 +302,14 @@ public class StepRunnerTests
     public async Task A_thin_white_frame_lets_the_hold_press(int thick, int count)
     {
         var log = new List<string>();
-        var io = new FakeIo { Screen = Framed(400, 244, thick: thick) };
+        var io = new FakeIo();
+        io.Screen = Framed(400, 244, thick: thick, shown: _ => Hovered(io, 400, 244));
         var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
         var down = Assert.Single(io.Downs);
         Assert.Equal((400, 244, 150L), (down.X, down.Y, down.TimestampMs)); // no grace spent: the outline was there
-        Assert.Contains($"step 1 'Spot N' outline seen ({count} near-white px, needs 60)", log);
+        Assert.Contains($"step 1 'Spot N' outline seen ({count} near-white px over a baseline of 0, needs 60)", log);
         Assert.Contains("step 1 'Spot N' held 0.5 s over 1 beat(s), released: reached its limit", log);
     }
 
@@ -317,7 +323,7 @@ public class StepRunnerTests
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome); // a skip, never a failure
         var down = Assert.Single(io.Downs);
         Assert.Equal((5, 5), (down.X, down.Y));
-        Assert.Contains("step 1 'Spot N' no outline, skipped (0 near-white px, needs 60)", log);
+        Assert.Contains("step 1 'Spot N' no outline, skipped (0 near-white px over a baseline of 0, needs 60)", log);
         Assert.DoesNotContain(log, l => l.Contains("held"));
     }
 
@@ -330,7 +336,7 @@ public class StepRunnerTests
         await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log), io, default);
 
         Assert.Equal(350, Assert.Single(io.Downs).TimestampMs);
-        Assert.Contains("step 1 'Spot N' outline seen (224 near-white px, needs 60)", log);
+        Assert.Contains("step 1 'Spot N' outline seen (224 near-white px over a baseline of 0, needs 60)", log);
     }
 
     /// <summary>The game as the live run found it: the outline shows only while no button is held,
@@ -339,7 +345,7 @@ public class StepRunnerTests
     private static FakeIo LiveBlock(int? breaksAfter = null, Func<FakeIo, Rgb>? inside = null)
     {
         var io = new FakeIo();
-        var framed = Framed(400, 244, shown: _ => !io.ButtonDown && (breaksAfter is null || io.Ups.Count() < breaksAfter));
+        var framed = Framed(400, 244, shown: _ => Hovered(io, 400, 244) && !io.ButtonDown && (breaksAfter is null || io.Ups.Count() < breaksAfter));
         io.Screen = (t, x, y) =>
         {
             var c = framed(t, x, y);
@@ -469,6 +475,74 @@ public class StepRunnerTests
         Assert.DoesNotContain(log, l => l.Contains("skipped"));
     }
 
+    // ---------- reach baseline (controller ruling 2026-09-28) ----------
+
+    private static readonly Rgb Quartz = new(236, 236, 240); // white quartz: every channel at 225 or more
+
+    /// <summary>A white quartz block at 400,244: quartz inside (55x55 = 3025 near-white px with no
+    /// hover), the hover outline 1 px at 28 out (224 px, only while the pointer is on the block and
+    /// no button is down, and only when <paramref name="outlined"/>), rock beyond. After
+    /// <paramref name="breaksAfter"/> releases the block is gone: rock.</summary>
+    private static FakeIo QuartzBlock(bool outlined, int? breaksAfter = null)
+    {
+        var io = new FakeIo();
+        io.Screen = (_, x, y) =>
+        {
+            if (breaksAfter is { } n && io.Ups.Count() >= n) return Rock;
+            var m = Math.Max(Math.Abs(x - 400), Math.Abs(y - 244));
+            if (m > 28) return Rock;
+            if (m == 28) return outlined && Hovered(io, 400, 244) && !io.ButtonDown ? White : Rock;
+            return Quartz;
+        };
+        return io;
+    }
+
+    [Fact]
+    public async Task White_quartz_without_an_outline_is_skipped_against_its_baseline()
+    {
+        // 3025 near-white px is far over minCount 60, but all of it is baseline: out of reach, no press.
+        var log = new List<string>();
+        var io = QuartzBlock(outlined: false);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.True(r.SkippedByReach);
+        Assert.Empty(io.Downs);
+        Assert.Contains("step 1 'Spot N' no outline, skipped (3025 near-white px over a baseline of 3025, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task White_quartz_with_an_outline_presses_and_ends_when_the_block_breaks()
+    {
+        var log = new List<string>();
+        var io = QuartzBlock(outlined: true, breaksAfter: 2);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach);
+        Assert.Equal(2, io.Downs.Count());
+        Assert.Contains("step 1 'Spot N' outline seen (3249 near-white px over a baseline of 3025, needs 60)", log);
+        Assert.Contains("step 1 'Spot N' held 2.0 s over 2 beat(s), released: outline gone after release", log);
+    }
+
+    [Fact]
+    public async Task A_pointer_already_on_the_block_moves_off_before_the_baseline()
+    {
+        // The pointer starts on the block, so the outline is showing. Captured there, the baseline
+        // would swallow the outline and the hold would skip. It moves one box-width right of the
+        // 80 px box (x 360..439, so x 520 at middle height 244), waits LookSettleMs, then captures.
+        var log = new List<string>();
+        var io = LiveBlock(breaksAfter: 1);
+        io.Cursor = (410, 250);
+        await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        var first = io.Sent[0];
+        Assert.Equal((MacroEventKind.MouseMove, 520, 244, 0L), (first.Kind, first.X, first.Y, first.TimestampMs));
+        Assert.Equal(((360, 204, 80, 80), (long)StepTiming.LookSettleMs), (io.CaptureRects[0], io.CaptureTimes[0]));
+        Assert.Equal(StepTiming.LookSettleMs + StepTiming.JumpWiggleMs, io.Downs.Single().TimestampMs);
+        Assert.Contains("step 1 'Spot N' outline seen (224 near-white px over a baseline of 0, needs 60)", log);
+    }
+
     [Fact]
     public async Task A_reach_box_outside_the_window_refuses_before_any_input()
     {
@@ -486,12 +560,13 @@ public class StepRunnerTests
         // (400,244) in 800x599 lands at (500,305) in 1000x749; the box grows to 100x100 and the
         // threshold to 75. The frame is drawn at the scaled size (35 px out, 280 px).
         var log = new List<string>();
-        var io = new FakeIo { Client = (1000, 749), Screen = Framed(500, 305, half: 35) };
+        var io = new FakeIo { Client = (1000, 749) };
+        io.Screen = Framed(500, 305, half: 35, shown: _ => Hovered(io, 500, 305, 35));
         await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 500) }, Ctx(log, actual: (1000, 749)), io, default);
 
         Assert.Contains((450, 255, 100, 100), io.CaptureRects);
         Assert.Equal((500, 305), (io.Downs.Single().X, io.Downs.Single().Y));
-        Assert.Contains("step 1 'Spot N' outline seen (280 near-white px, needs 75)", log);
+        Assert.Contains("step 1 'Spot N' outline seen (280 near-white px over a baseline of 0, needs 75)", log);
     }
 
     [Fact]
@@ -562,7 +637,8 @@ public class StepRunnerTests
     [InlineData("drag")]
     public async Task A_run_that_pressed_anything_is_a_plain_finish(string kind)
     {
-        var io = new FakeIo { Screen = kind == "mined" ? Framed(400, 244) : (_, x, y) => LavaAt(x, y) };
+        var io = new FakeIo();
+        io.Screen = kind == "mined" ? Framed(400, 244, shown: _ => Hovered(io, 400, 244)) : (_, x, y) => LavaAt(x, y);
         var steps = kind switch
         {
             "key" => new MacroStep[] { ReachHold(), new KeyStep(0, 0x41, true), new KeyStep(0, 0x41, false) },
