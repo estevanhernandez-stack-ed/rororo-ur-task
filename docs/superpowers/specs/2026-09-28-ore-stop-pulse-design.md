@@ -1,6 +1,6 @@
 # Ore stop v1: ride to a target layer, then pulse and clear
 
-**Status:** direction agreed with Este, 2026-09-28; spec awaiting review
+**Status:** spec approved by Este, 2026-09-28 (all listed choices accepted)
 **Replaces:** the "watch the ring while riding" part of `2026-09-27-ore-stop-loop-design.md`. Everything
 already built is kept: the hold step, the checked Auto Mine toggles, the layer vote, playback logs.
 **Products:** Ur Task (acts), Ur OCR (reads the layer). No RoRoRo host change.
