@@ -167,6 +167,20 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 // Each pass reports its own ending; a later clean pass clears an earlier refusal.
                 state = PlaybackState.Finished;
                 reason = null; detail = null; stepIndex = null;
+                // SequencePlayer's single-flight claim was lost to a concurrent pass (an empty
+                // PerAlt on a non-null result): nothing ran, so this must not read as a clean
+                // finish. `last == null` is the test ctor's run-only fakes, which stays a clean
+                // finish. `refused` (not `aborted`) so Ur OCR reruns it whether or not the account
+                // is in front (its Task 4 ruling); `break` kills the hot spin from a losing
+                // PlayAsync completing synchronously under `repeat: true` (controller ruling,
+                // 2026-09-28).
+                if (last is { PerAlt.Count: 0 })
+                {
+                    state = PlaybackState.Failed;
+                    reason = "refused";
+                    detail = "Another playback took the sequence.";
+                    break;
+                }
                 // A StepIndex is set only by a failed check (PlaybackResult.AbortedAt), so it
                 // alone means check-failed. Prefer it over any other failed alt in the pass.
                 var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
