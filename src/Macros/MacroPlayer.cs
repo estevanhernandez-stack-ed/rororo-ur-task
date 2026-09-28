@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Labs626.UrTask.Macros.Steps;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Macros;
@@ -29,12 +30,19 @@ internal sealed class MacroPlayer : IMacroPlayer
 {
     private readonly IForegroundWatcher _foreground;
     private readonly IWindowMetrics _metrics;
+    private readonly IScreenSampler _sampler;
+    private readonly IDisplayScale _displayScale;
+    private readonly PointAdjustmentStore _adjustments;
     private CancellationTokenSource? _activeCts;
 
-    public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics)
+    public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics,
+        IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null)
     {
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+        _sampler = sampler ?? new ScreenSampler(metrics);
+        _displayScale = displayScale ?? new DisplayScale();
+        _adjustments = adjustments ?? new PointAdjustmentStore(PointAdjustmentStore.DefaultPath());
     }
 
     public bool IsPlaying => _activeCts is not null;
@@ -60,6 +68,9 @@ internal sealed class MacroPlayer : IMacroPlayer
             return PlaybackResult.Refused(
                 $"Foreground window is user {preflight.RobloxUserId} ({preflight.DisplayName}); " +
                 $"target is user {targetUserId}.");
+
+        if (macro.HasSteps)
+            return await PlayStepsAsync(macro, preflight, targetUserId, external).ConfigureAwait(false);
 
         IntPtr clientHwnd = IntPtr.Zero;
         // Client-space preflight (resize + hwnd resolution) only applies when the
@@ -234,16 +245,22 @@ internal sealed class MacroPlayer : IMacroPlayer
     /// </summary>
     private PlaybackResult? EnsureClientSize(IntPtr hwnd, Macro macro)
     {
-        const int Slop = 2;  // px — DPI rounding tolerance for "reached the size".
-
         if (macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
             return PlaybackResult.Refused("Client-space macro is missing its recorded client size — re-record it.");
+        // Slop 2 px: DPI rounding tolerance for "reached the size".
+        return EnsureClientSize(hwnd, macro, (rw, rh), slop: 2, _displayScale.ScalePercentFor(hwnd));
+    }
 
+    /// <summary>Size the client area to <paramref name="target"/> (the recorded size for v3, the
+    /// display-scaled size for point macros). <paramref name="scalePercent"/> only shapes the
+    /// refusal wording.</summary>
+    private PlaybackResult? EnsureClientSize(IntPtr hwnd, Macro macro, (int W, int H) target, int slop, int scalePercent)
+    {
         var current = _metrics.ClientSize(hwnd);
         if (current is null) return PlaybackResult.Refused("Could not read target window size.");
-        if (current.Value == (rw, rh))
+        if (current.Value == (target.W, target.H))
         {
-            Diagnostics.DiagLog.Write($"EnsureClientSize: already exact {rw}x{rh}.");
+            Diagnostics.DiagLog.Write($"EnsureClientSize: already exact {target.W}x{target.H}.");
             return null;
         }
 
@@ -251,7 +268,7 @@ internal sealed class MacroPlayer : IMacroPlayer
         // maximize (its client size == the work area); a windowed resize can
         // never reach it.
         if (macro.RecordedMaximized == true)
-            return MaximizeAndLeave(hwnd, rw, rh, Slop);
+            return MaximizeAndLeave(hwnd, target.W, target.H, slop);
 
         // Windowed recording: reproduce the recorded CLIENT size. Clicks are
         // client-relative, so only the client size must match — the window may
@@ -265,25 +282,73 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (outer is null || rc is null)
             return PlaybackResult.Refused("Could not read target window rect.");
 
-        var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), rc.Value, (rw, rh));
+        var (tw, th) = WindowSpaceMath.OuterSizeForClient((outer.Value.W, outer.Value.H), rc.Value, (target.W, target.H));
         var work = _metrics.WorkAreaFor(hwnd);
         int x = Math.Max(work.X, Math.Min(outer.Value.X, work.X + work.W - tw)); // keep X, clamp fully on-screen (left-align if wider than screen)
         int y = work.Y;                                                          // pin to top — the failure mode was vertical overhang
         _metrics.SetOuterRect(hwnd, x, y, tw, th);
         var after = _metrics.ClientSize(hwnd);
-        if (after is not null && Math.Abs(after.Value.W - rw) <= Slop && Math.Abs(after.Value.H - rh) <= Slop)
+        if (after is not null && Math.Abs(after.Value.W - target.W) <= slop && Math.Abs(after.Value.H - target.H) <= slop)
         {
-            Diagnostics.DiagLog.Write($"EnsureClientSize: windowed-fit ok: {rw}x{rh} at {x},{y}.");
+            Diagnostics.DiagLog.Write($"EnsureClientSize: windowed-fit ok: {target.W}x{target.H} at {x},{y}.");
             return null;
         }
 
-        // Couldn't reach the recorded client size even as a free window —
-        // recorded on a larger monitor than this one. Advise, don't silently
-        // mis-click.
+        // Couldn't reach the target client size even as a free window. Smaller
+        // means recorded on a larger monitor; larger means Roblox's scaled
+        // minimum window. Advise, don't silently mis-click.
         Diagnostics.DiagLog.Write(
-            $"EnsureClientSize: windowed-fit UNREACHABLE: wanted {rw}x{rh} got {after?.W}x{after?.H}, work {work.W}x{work.H}.");
-        return PlaybackResult.Refused(
-            $"Couldn't size this window to the macro's recorded {rw}x{rh} (got {after?.W}x{after?.H}). It looks recorded on a larger screen — move the window fully on-screen and retry, or re-record the macro on this monitor.");
+            $"EnsureClientSize: windowed-fit UNREACHABLE: wanted {target.W}x{target.H} got {after?.W}x{after?.H}, work {work.W}x{work.H}.");
+        return PlaybackResult.Refused(SizeRefusalText(target, after, scalePercent));
+    }
+
+    /// <summary>Refusal wording. When the window came out larger than asked, the cause is Roblox's
+    /// scaled minimum size, not a smaller screen (display-scale findings, proposal 4).</summary>
+    internal static string SizeRefusalText((int W, int H) wanted, (int W, int H)? got, int scalePercent)
+    {
+        if (got is { } g && g.W >= wanted.W && g.H >= wanted.H)
+        {
+            var min = PointMath.RobloxMinOuter(scalePercent);
+            return $"Roblox wouldn't shrink this window to {wanted.W}x{wanted.H}; it stayed {g.W}x{g.H}. " +
+                   $"At {scalePercent}% display scale Roblox's smallest window is {min.W}x{min.H}. " +
+                   $"Record this macro at {scalePercent}%, or play it on a PC set to the scale it was recorded at.";
+        }
+        return $"Couldn't size this window to the macro's recorded {wanted.W}x{wanted.H} (got {got?.W}x{got?.H}). It looks recorded on a larger screen — move the window fully on-screen and retry, or re-record the macro on this monitor.";
+    }
+
+    private async Task<PlaybackResult> PlayStepsAsync(Macro macro, AccountRegistry.AccountInfo preflight, long targetUserId, CancellationToken external)
+    {
+        if (!macro.IsClientSpace || macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
+            return PlaybackResult.Refused("Point macros need a window-relative recording with its size — re-record it.");
+
+        var hwnd = _metrics.HwndForPid(preflight.Pid);
+        if (hwnd == IntPtr.Zero) return PlaybackResult.Refused("Target window handle unavailable.");
+
+        var scale = _displayScale.ScalePercentFor(hwnd);
+        var target = PointMath.TargetClientSize((rw, rh), macro.RecordedDisplayScale, scale);
+        var slop = macro.RecordedDisplayScale is int rs && rs != scale ? 6 : 2;
+        if (macro.RecordedDisplayScale is int r0 && r0 != scale)
+            Diagnostics.DiagLog.Write($"Display scale differs: recorded at {r0}%, playing at {scale}% — scaling to {target.W}x{target.H}.");
+        var refusal = EnsureClientSize(hwnd, macro, target, slop, scale);
+        if (refusal is not null) return refusal;
+        var actual = _metrics.ClientSize(hwnd) ?? target;
+
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
+        try
+        {
+            var ctx = new StepContext(preflight.DisplayName, targetUserId, macro.Id, (rw, rh), actual, scale,
+                pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
+                line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"));
+            var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
+            return await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            Ended?.Invoke(this, new PlaybackEndedArgs(macro));
+            _activeCts?.Dispose();
+            _activeCts = null;
+        }
     }
 
     /// <summary>
@@ -366,40 +431,29 @@ internal sealed class MacroPlayer : IMacroPlayer
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }
 
-    private static (int x, int y) GetCurrentCursorPos()
+    internal static (int x, int y) GetCurrentCursorPos()
     {
         if (GetCursorPos(out var pt)) return (pt.X, pt.Y);
         return (0, 0);
     }
 
-    private static void SendMacroEvent(MacroEvent evt)
+    /// <summary>Sends one event. Returns false when SendInput injected nothing (UIPI, a
+    /// secure desktop), so the step path can stop instead of pressing on blind; the v3 path
+    /// ignores the result, as it always has.</summary>
+    internal static bool SendMacroEvent(MacroEvent evt) => evt.Kind switch
     {
-        switch (evt.Kind)
-        {
-            case MacroEventKind.KeyDown:
-                SendKey((ushort)evt.VirtualKeyCode, keyUp: false);
-                break;
-            case MacroEventKind.KeyUp:
-                SendKey((ushort)evt.VirtualKeyCode, keyUp: true);
-                break;
-            case MacroEventKind.MouseMove:
-                SendMouseMove(evt.X, evt.Y);
-                break;
-            case MacroEventKind.MouseDown:
-                SendMouseButton(evt.X, evt.Y, evt.MouseButton, isDown: true);
-                break;
-            case MacroEventKind.MouseUp:
-                SendMouseButton(evt.X, evt.Y, evt.MouseButton, isDown: false);
-                break;
-            case MacroEventKind.MouseWheel:
-                SendMouseWheel(evt.X, evt.Y, evt.WheelDelta);
-                break;
-        }
-    }
+        MacroEventKind.KeyDown => SendKey((ushort)evt.VirtualKeyCode, keyUp: false),
+        MacroEventKind.KeyUp => SendKey((ushort)evt.VirtualKeyCode, keyUp: true),
+        MacroEventKind.MouseMove => SendMouseMove(evt.X, evt.Y),
+        MacroEventKind.MouseDown => SendMouseButton(evt.X, evt.Y, evt.MouseButton, isDown: true),
+        MacroEventKind.MouseUp => SendMouseButton(evt.X, evt.Y, evt.MouseButton, isDown: false),
+        MacroEventKind.MouseWheel => SendMouseWheel(evt.X, evt.Y, evt.WheelDelta),
+        _ => true, // nothing to send
+    };
 
     // ---------- Input synthesis helpers ----------
 
-    private static void SendKey(ushort vkCode, bool keyUp)
+    private static bool SendKey(ushort vkCode, bool keyUp)
     {
         // Derive scan code from the virtual-key code. Many games (Roblox
         // included) check the scan code to distinguish "real" input from
@@ -425,7 +479,7 @@ internal sealed class MacroPlayer : IMacroPlayer
                 },
             },
         };
-        SendOne(ref input);
+        return SendOne(ref input);
     }
 
     /// <summary>
@@ -443,7 +497,7 @@ internal sealed class MacroPlayer : IMacroPlayer
         _ => false,
     };
 
-    private static void SendMouseMove(int screenX, int screenY)
+    private static bool SendMouseMove(int screenX, int screenY)
     {
         var (nx, ny) = NormalizeForVirtualDesktop(screenX, screenY);
         var input = new INPUT
@@ -459,10 +513,10 @@ internal sealed class MacroPlayer : IMacroPlayer
                 },
             },
         };
-        SendOne(ref input);
+        return SendOne(ref input);
     }
 
-    private static void SendMouseButton(int screenX, int screenY, int button, bool isDown)
+    private static bool SendMouseButton(int screenX, int screenY, int button, bool isDown)
     {
         // Buttons: 1=L 2=R 3=M 4=X1 5=X2
         uint flag = button switch
@@ -473,7 +527,7 @@ internal sealed class MacroPlayer : IMacroPlayer
             4 or 5 => isDown ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP,
             _ => 0u,
         };
-        if (flag == 0u) return;
+        if (flag == 0u) return true; // unknown button: nothing to send, not a refused send
 
         uint mouseData = (button == 4) ? XBUTTON1 : (button == 5) ? XBUTTON2 : 0u;
         var (nx, ny) = NormalizeForVirtualDesktop(screenX, screenY);
@@ -491,10 +545,10 @@ internal sealed class MacroPlayer : IMacroPlayer
                 },
             },
         };
-        SendOne(ref input);
+        return SendOne(ref input);
     }
 
-    private static void SendMouseWheel(int screenX, int screenY, int delta)
+    private static bool SendMouseWheel(int screenX, int screenY, int delta)
     {
         var (nx, ny) = NormalizeForVirtualDesktop(screenX, screenY);
         var input = new INPUT
@@ -511,7 +565,19 @@ internal sealed class MacroPlayer : IMacroPlayer
                 },
             },
         };
-        SendOne(ref input);
+        return SendOne(ref input);
+    }
+
+    /// <summary>Relative movement (no ABSOLUTE flag): what Roblox reads as camera turn while it
+    /// holds the pointer in first person or shift-lock.</summary>
+    internal static bool SendMouseRelative(int dx, int dy)
+    {
+        var input = new INPUT
+        {
+            type = INPUT_MOUSE,
+            union = new InputUnion { mouse = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = MOUSEEVENTF_MOVE } },
+        };
+        return SendOne(ref input);
     }
 
     private static (int x, int y) NormalizeForVirtualDesktop(int screenX, int screenY)
@@ -529,11 +595,12 @@ internal sealed class MacroPlayer : IMacroPlayer
         return (nx, ny);
     }
 
-    private static unsafe void SendOne(ref INPUT input)
+    /// <summary>True when SendInput injected the event; it returns the count injected.</summary>
+    private static unsafe bool SendOne(ref INPUT input)
     {
         fixed (INPUT* p = &input)
         {
-            _ = SendInput(1, p, Marshal.SizeOf<INPUT>());
+            return SendInput(1, p, Marshal.SizeOf<INPUT>()) == 1;
         }
     }
 
@@ -615,12 +682,18 @@ internal sealed class MacroPlayer : IMacroPlayer
 
 public enum PlaybackOutcome { Refused, Completed, Aborted, Skipped }
 
-public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason)
+public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int? StepIndex = null)
 {
     public static PlaybackResult Refused(string reason) => new(PlaybackOutcome.Refused, reason);
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
+
+    /// <summary>Stopped by a check: a colour that never showed, a window it could not see, or a
+    /// box outside the window. Only check failures carry a StepIndex (0-based), so GetPlayback's
+    /// failed/check-failed always means a check. Foreground loss and cancellation use
+    /// <see cref="Aborted"/> without an index.</summary>
+    public static PlaybackResult AbortedAt(string reason, int stepIndex) => new(PlaybackOutcome.Aborted, reason, stepIndex);
 }
 
 internal sealed record PlaybackStartedArgs(Macro Macro, AccountRegistry.AccountInfo? BoundAccount, long TargetUserId);

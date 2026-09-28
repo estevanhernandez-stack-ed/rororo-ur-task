@@ -124,6 +124,15 @@ internal sealed class MacroRunnerServer
                     return Bytes(StopMacroResponse.Refused("refused", "Missing callerPluginId."));
                 return Bytes(_invoker.StopMacro(req));
             }
+            case BridgeContract.MethodGetPlayback:
+            {
+                var req = JsonSerializer.Deserialize<GetPlaybackRequest>(frame, BridgeContract.Json);
+                if (req is null)
+                    return Bytes(GetPlaybackResponse.Refused("refused", "Empty request."));
+                if (string.IsNullOrWhiteSpace(req.CallerPluginId))
+                    return Bytes(GetPlaybackResponse.Refused("refused", "Missing callerPluginId."));
+                return Bytes(_invoker.GetPlayback(req));
+            }
             default:
                 return Bytes(RunMacroResponse.Refused("refused", $"Unknown method '{env.Method}'."));
         }

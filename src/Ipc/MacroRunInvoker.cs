@@ -27,8 +27,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
     private readonly Func<long?> _resolveForegroundUserId;
     private readonly Func<bool> _isBusy;
-    private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task> _play;
+    private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _play;
     private readonly Func<bool> _abort;
+    private readonly PlaybackRegistry _registry;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
@@ -41,11 +42,30 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             snapshot: () => accounts.Snapshot().ToList(),
             resolveForegroundUserId: () => foreground.ResolveForegroundAccount()?.RobloxUserId,
             isBusy: () => player.IsRunning,
-            play: (macro, targets, delay, ct) => player.PlayAsync(macro, targets, delay, ct),
+            playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),
             abort: () => player.Abort())
     { }
 
-    // Test ctor.
+    // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
+    internal MacroRunInvoker(
+        Func<IReadOnlyList<Macro>> loadMacros,
+        Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
+        Func<long?> resolveForegroundUserId,
+        Func<bool> isBusy,
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
+        Func<bool>? abort = null,
+        PlaybackRegistry? registry = null)
+    {
+        _loadMacros = loadMacros;
+        _snapshot = snapshot;
+        _resolveForegroundUserId = resolveForegroundUserId;
+        _isBusy = isBusy;
+        _play = playWithResult;
+        _abort = abort ?? (() => false);
+        _registry = registry ?? new PlaybackRegistry();
+    }
+
+    // Test ctor, unchanged signature: fakes that only need to run. Adapts into the one delegate.
     internal MacroRunInvoker(
         Func<IReadOnlyList<Macro>> loadMacros,
         Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
@@ -53,14 +73,10 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool> isBusy,
         Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task> play,
         Func<bool>? abort = null)
-    {
-        _loadMacros = loadMacros;
-        _snapshot = snapshot;
-        _resolveForegroundUserId = resolveForegroundUserId;
-        _isBusy = isBusy;
-        _play = play;
-        _abort = abort ?? (() => false);
-    }
+        : this(loadMacros, snapshot, resolveForegroundUserId, isBusy,
+               playWithResult: async (m, t, d, c) => { await play(m, t, d, c).ConfigureAwait(false); return null; },
+               abort: abort)
+    { }
 
     public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
@@ -83,6 +99,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var playbackId = Guid.NewGuid().ToString("N");
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
+        _registry.Started(playbackId);
         _ = ObservePlaybackAsync(playbackId, macro, targets, request.InterAltDelayMs, request.Repeat, playbackCts);
         return Task.FromResult(RunMacroResponse.Accepted(playbackId));
     }
@@ -121,6 +138,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         return StopMacroResponse.Done(stopped);
     }
 
+    public GetPlaybackResponse GetPlayback(GetPlaybackRequest request) => _registry.Get(request.PlaybackId);
+
     private async Task ObservePlaybackAsync(
         string playbackId, Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets,
         int? interAltDelayMs, bool repeat, CancellationTokenSource playbackCts)
@@ -131,18 +150,43 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         // which is a hang wearing an ack's clothes.
         await Task.Yield();
 
+        SequenceResult? last = null;
+        var state = PlaybackState.Finished;
+        string? reason = null, detail = null;
+        int? stepIndex = null;
         try
         {
             do
             {
-                await _play(macro, targets, interAltDelayMs, playbackCts.Token).ConfigureAwait(false);
+                last = await _play(macro, targets, interAltDelayMs, playbackCts.Token).ConfigureAwait(false);
+                // Each pass reports its own ending; a later clean pass clears an earlier refusal.
+                state = PlaybackState.Finished;
+                reason = null; detail = null; stepIndex = null;
+                // A StepIndex is set only by a failed check (PlaybackResult.AbortedAt), so it
+                // alone means check-failed. Prefer it over any other failed alt in the pass.
+                var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
+                           ?? last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
+                if (failure is not null && !playbackCts.IsCancellationRequested)
+                {
+                    state = PlaybackState.Failed;
+                    reason = failure.StepIndex is not null ? "check-failed"
+                           : failure.Outcome == PlaybackOutcome.Refused ? "refused" : "aborted";
+                    detail = failure.Reason;
+                    stepIndex = failure.StepIndex + 1; // 1-based on the wire, same as "step N" in the detail
+                    // A failed check ends a repeat: retrying it forever helps nobody. Only step
+                    // macros can fail a check, so v3 repeat behaviour is unchanged: a refused or
+                    // aborted v3 pass loops on as it did in 0.8.
+                    if (failure.StepIndex is not null) break;
+                }
             }
             while (repeat && !playbackCts.IsCancellationRequested);
+            if (playbackCts.IsCancellationRequested) state = PlaybackState.Stopped;
         }
-        catch (OperationCanceledException) { /* stopped */ }
-        catch { /* fire-and-forget; playback errors surface on the Ur Task side */ }
+        catch (OperationCanceledException) { state = PlaybackState.Stopped; }
+        catch (Exception ex) { state = PlaybackState.Failed; reason = "error"; detail = ex.Message; }
         finally
         {
+            _registry.Finished(playbackId, state, reason, detail, stepIndex);
             _playbacks.TryRemove(playbackId, out _);
             playbackCts.Dispose();
         }

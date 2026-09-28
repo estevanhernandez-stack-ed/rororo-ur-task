@@ -1,9 +1,11 @@
+using System.Linq;
 using System.Text.Json.Serialization;
+using Labs626.UrTask.Macros.Steps;
 
 namespace Labs626.UrTask.Macros;
 
 /// <summary>
-/// Top-level macro envelope (v3). v3 adds a coordinate space: "client" macros
+/// Top-level macro envelope (v4). v3 adds a coordinate space: "client" macros
 /// store mouse coords relative to the recorded window's client area (plus the
 /// recorded client size) and replay against the target window wherever it sits;
 /// "screen" macros (all pre-v3 recordings) keep absolute screen pixels and play
@@ -34,10 +36,15 @@ public sealed record Macro(
     long? RecordedPlaceId = null,       // game identity at record time — soft metadata (v0.6, still schema v3
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? RecordedGameName = null,    //   so v0.5 readers still open shared bundles; nullable = "any game")
-    bool AllGames = false)              // user override: usable everywhere regardless of the stamp
+    bool AllGames = false,              // user override: usable everywhere regardless of the stamp
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? RecordedDisplayScale = null,   // percent (100, 125…) at record time; v4. Null = unknown (pre-v4).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MacroStep>? Steps = null) // v4 point steps; when present these play, Events is the kept original
 {
-    /// <summary>Current schema version. Bump on shape changes.</summary>
-    public const int CurrentSchemaVersion = 3;
+    /// <summary>Current schema version. v4 adds point steps and the recorded display scale; a
+    /// macro without steps plays exactly as v3.</summary>
+    public const int CurrentSchemaVersion = 4;
 
     /// <summary>Absolute screen pixels — all pre-v3 recordings + AllWindows mode.</summary>
     public const string CoordSpaceScreen = "screen";
@@ -52,7 +59,10 @@ public sealed record Macro(
     /// place stamp AND the user hasn't flipped the "All games" override.</summary>
     public bool IsGameScoped => !AllGames && RecordedPlaceId is > 0;
 
-    public TimeSpan Duration => Events.Count == 0
-        ? TimeSpan.Zero
-        : TimeSpan.FromMilliseconds(Events[^1].TimestampMs);
+    /// <summary>True when this macro plays through the step runner (v4 point steps).</summary>
+    public bool HasSteps => Steps is { Count: > 0 };
+
+    public TimeSpan Duration => HasSteps
+        ? TimeSpan.FromMilliseconds(Steps!.Sum(StepTiming.EstimateMs))
+        : Events.Count == 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(Events[^1].TimestampMs);
 }

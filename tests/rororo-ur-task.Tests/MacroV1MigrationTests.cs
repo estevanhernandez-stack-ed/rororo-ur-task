@@ -13,7 +13,7 @@ public class MacroV1MigrationTests
 
         var macro = MacroV1Migrator.LoadAndMigrate(json);
 
-        Assert.Equal(3, macro.SchemaVersion);
+        Assert.Equal(Macro.CurrentSchemaVersion, macro.SchemaVersion);
         Assert.Equal("11111111-2222-3333-4444-555555555555", macro.Id);
         Assert.Equal("test-jump-jump", macro.Name);
         Assert.Equal("PerWindow", macro.RecordMode);
@@ -41,7 +41,7 @@ public class MacroV1MigrationTests
 
         var result = MacroV1Migrator.LoadAndMigrate(json);
 
-        Assert.Equal(3, result.SchemaVersion);
+        Assert.Equal(Macro.CurrentSchemaVersion, result.SchemaVersion);
         Assert.Equal("already-v2", result.Name);
         Assert.Equal("PinkPotatoChip", result.RecordedAgainstDisplayName);
         Assert.Equal(Macro.CoordSpaceScreen, result.CoordSpace);
