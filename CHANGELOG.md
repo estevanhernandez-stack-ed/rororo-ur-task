@@ -36,6 +36,11 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   measured in first, as for a macro. It rides the same single-flight rule, playback id,
   `GetPlayback`, `StopMacro` and Esc as `RunMacro`, is never saved or listed, and logs as
   "ClearAt (N points)" with each point by its label. Additive on bridge contract 1.0.
+- **Clearing stops the moment a menu or a player's profile covers the game: Ur Task checks the
+  Auto Mine dot before every press.** `ClearAt` takes an optional `guard`: a pixel box, the colour
+  it should show and a tolerance. Before each point and each hold, a colour past the tolerance
+  stops the playback as `check-failed`, and no more input is sent. A call without a guard plays
+  as before.
 - **Camera turn left:** a quarter turn with the arrow key, for the pulse to look again from a new
   angle.
 
