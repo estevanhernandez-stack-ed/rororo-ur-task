@@ -11,13 +11,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   needs at least `minCount`. That is the white outline the game draws on a block your pickaxe can
   break. No outline within 300 ms: the step is skipped, not failed, and the log says
   "no outline, skipped" with the count. The box and the count scale with the window like points.
-- **One block per spot.** A hold behind a reach check breaks one block and stops, instead of
-  digging a column. It taps for 250 ms, lets go, and looks (the game hides the outline while the
+- **One block per spot.** Ur Task holds the button on each block, longer each time it doesn't
+  break, and stops as soon as the block breaks. The first hold is 0.3 s, then 0.6, 1.2, 2.4, and
+  3 s from then on. Between holds it lets go and looks (the game hides the outline while the
   button is down). No outline: the block broke. The outline moved or shrank: the block broke and
-  the next one down is showing, and it is left alone. The same outline: a hit, so another tap.
-  The log says "broke after N tap(s)", with "(outline moved to the next block)" when it jumped. A
-  `maxMs` bounds the pressed time across taps (the last tap is cut short); with none, ore is never
-  abandoned for time.
+  the next one down is showing, and it is left alone. The log says "broke after N hold(s), X s
+  held", with "(outline moved to the next block)" when it jumped. A `maxMs` bounds the pressed
+  time across holds (the last hold is cut short); with none, ore is never abandoned for time.
 - **Turn on Hide My Pets in Roblox Settings before running a pulse.** Pets sit over the character
   and the ring spots, and cover the outline.
 - **Clear spot macros** for ore stop v1 (pulse) in `docs/reference/events/macros/space-mine-ore-stop/`:
@@ -31,7 +31,7 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   Task now clears wherever Ur OCR points: ore first, then the stone around you. Under the hood
   this is `ClearAt`, a bridge call: one account, the client size it measured in, 1 to 64 points
   in order and one outline box, played as ONE playback. Each point is a reach hold (hover,
-  outline check, then one block tapped until it breaks, measured over the box's no-hover
+  outline check, then one block held until it breaks, measured over the box's no-hover
   baseline), skipped when no outline shows. The window is sized to the client it was
   measured in first, as for a macro. It rides the same single-flight rule, playback id,
   `GetPlayback`, `StopMacro` and Esc as `RunMacro`, is never saved or listed, and logs as
