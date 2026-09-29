@@ -345,8 +345,9 @@ internal static class StepRunner
     /// <see cref="StepTiming.HoldDriftPolls"/> polls in a row, or at MaxMs. With no MaxMs there is
     /// no time limit: ore is never abandoned for taking long (ore-stop spec, decision 5).
     /// <para>With a reach check (ore-stop pulse spec): after the jump, no white outline within
-    /// <see cref="StepTiming.ReachGraceMs"/> skips the step without pressing. Otherwise it taps
-    /// one block (<see cref="PlayTapsAsync"/>), and colour drift plays no part.</para>
+    /// <see cref="StepTiming.ReachGraceMs"/> skips the step without pressing. Otherwise it holds
+    /// on one block until it breaks (<see cref="PlayReachHoldsAsync"/>), and colour drift plays no
+    /// part.</para>
     /// </summary>
     private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
     {
@@ -370,7 +371,7 @@ internal static class StepRunner
             var (seen0, area0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
             LogOutline(ctx, index, label, seen0, area0.Count, r0.Need, baseline);
             if (!seen0) { tally.ReachSkips++; return; }
-            await PlayTapsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
+            await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
             return;
         }
         var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
@@ -418,63 +419,63 @@ internal static class StepRunner
     /// <summary>
     /// A hold behind a reach check breaks one block and stops (ore-stop pulse spec, "One block per
     /// spot"). A long press digs a column: the main breaks a block about every 0.3 s, and the block
-    /// below lights up at the same spot. So it taps for <see cref="StepTiming.TapMs"/>, lets go,
-    /// waits <see cref="StepTiming.LookSettleMs"/>, and looks (the game hides the outline while the
-    /// button is down). No outline: the block broke. The outline's bounding box moved (any edge more
-    /// than <see cref="StepTiming.OutlineMoveTolerancePx"/>): the block broke and the next one down
-    /// is showing, which it leaves alone. The same box: a hit, not a break, so it taps again. A hit
-    /// darkens the block, so colour drift ends nothing here.
-    /// <para>MaxMs bounds the pressed time across taps: the last tap is cut to what is left, and the
-    /// step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
+    /// below lights up at the same spot. So it holds for <see cref="StepTiming.FirstHoldMs"/>, lets
+    /// go, waits <see cref="StepTiming.LookSettleMs"/>, and looks (the game hides the outline while
+    /// the button is down). No outline: the block broke. The outline's bounding box moved (any edge
+    /// more than <see cref="StepTiming.OutlineMoveTolerancePx"/>): the block broke and the next one
+    /// down is showing, which it leaves alone. The same box: a hit, not a break, so it holds again,
+    /// twice as long, up to <see cref="StepTiming.MaxHoldMs"/> (a hard block's progress does not
+    /// carry across releases, so short presses never break it). A hit darkens the block, so colour
+    /// drift ends nothing here.
+    /// <para>MaxMs bounds the pressed time across holds: the last hold is cut to what is left, and
+    /// the step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
     /// </summary>
-    private static async Task PlayTapsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
     {
-        long pressedMs = 0, tapStart = -1;
-        int taps = 0;
+        long pressedMs = 0, holdStart = -1;
+        int holds = 0, nextHoldMs = StepTiming.FirstHoldMs;
         string outcome;
         try
         {
             while (true)
             {
-                var tapMs = h.MaxMs is { } max ? Math.Min(StepTiming.TapMs, max - pressedMs) : StepTiming.TapMs;
+                var holdMs = h.MaxMs is { } max ? Math.Min(nextHoldMs, max - pressedMs) : nextHoldMs;
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
                 heldButtons.Add(h.Button);
-                taps++;
-                tapStart = io.NowMs;
-                while (io.NowMs - tapStart < tapMs)
+                holds++;
+                holdStart = io.NowMs;
+                while (io.NowMs - holdStart < holdMs)
                 {
                     // Foreground only: the outline is hidden while pressed and a hit moves the colour.
-                    await io.Delay((int)Math.Min(StepTiming.PollMs, tapMs - (io.NowMs - tapStart)), ct);
+                    await io.Delay((int)Math.Min(StepTiming.PollMs, holdMs - (io.NowMs - holdStart)), ct);
                     GuardForeground(io);
                 }
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, h.Button, 0));
                 heldButtons.Remove(h.Button);
-                pressedMs += io.NowMs - tapStart;
-                tapStart = -1;
+                pressedMs += io.NowMs - holdStart;
+                holdStart = -1;
                 if (pressedMs >= h.MaxMs)
                 {
                     outcome = string.Create(CultureInfo.InvariantCulture,
-                        $"pressed {pressedMs / 1000.0:F1} s over {taps} tap(s), released: reached its limit");
+                        $"pressed {pressedMs / 1000.0:F1} s over {holds} hold(s), released: reached its limit");
                     break;
                 }
 
                 await io.Delay(StepTiming.LookSettleMs, ct);
                 var (seen, after) = await AwaitOutlineAsync(r, baseline, io, name, index, ct); // the same baseline as the pre-press check
-                if (!seen) { outcome = string.Create(CultureInfo.InvariantCulture, $"broke after {taps} tap(s)"); break; }
-                if (OutlineMoved(before.Bounds, after.Bounds))
-                {
-                    outcome = string.Create(CultureInfo.InvariantCulture, $"broke after {taps} tap(s) (outline moved to the next block)");
-                    break;
-                }
+                var broke = string.Create(CultureInfo.InvariantCulture, $"broke after {holds} hold(s), {pressedMs / 1000.0:F1} s held");
+                if (!seen) { outcome = broke; break; }
+                if (OutlineMoved(before.Bounds, after.Bounds)) { outcome = broke + " (outline moved to the next block)"; break; }
                 before = after;
+                nextHoldMs = Math.Min(nextHoldMs * 2, StepTiming.MaxHoldMs); // a hit, not a break: hold longer
             }
         }
         catch
         {
             // As for any hold: RunAsync's finally releases a button still in heldButtons.
-            var total = pressedMs + (tapStart >= 0 ? io.NowMs - tapStart : 0);
+            var total = pressedMs + (holdStart >= 0 ? io.NowMs - holdStart : 0);
             ctx.Log(string.Create(CultureInfo.InvariantCulture,
-                $"step {index + 1} '{label}' pressed {total / 1000.0:F1} s over {taps} tap(s), then the playback ended"));
+                $"step {index + 1} '{label}' pressed {total / 1000.0:F1} s over {holds} hold(s), then the playback ended"));
             throw;
         }
         ctx.Log(string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' {outcome}"));

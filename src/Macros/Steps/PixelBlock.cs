@@ -35,7 +35,7 @@ public sealed class PixelBlock
     public int? CountNearWhite(int x, int y, int w, int h, int min) => MeasureNearWhite(x, y, w, h, min)?.Count;
 
     /// <summary>The near-white count of a box (client coordinates) and the bounding box of those
-    /// pixels, in client coordinates too. A reach hold compares the bounds across a tap: a block
+    /// pixels, in client coordinates too. A reach hold compares the bounds across a hold: a block
     /// that broke shows the next one down, which moves the outline's edges. Null if the box is not
     /// fully inside.</summary>
     public NearWhiteArea? MeasureNearWhite(int x, int y, int w, int h, int min)
