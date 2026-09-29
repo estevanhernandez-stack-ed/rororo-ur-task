@@ -47,6 +47,7 @@ $Ids = @{
     'Auto Mine on (checked)'  = '0e5a0000-0000-4000-8000-000000000002'
     'Camera top-down'         = '0e5a0000-0000-4000-8000-000000000003'
     'Go to Top'               = '0e5a0000-0000-4000-8000-000000000004'
+    'Camera turn left'        = '0e5a0000-0000-4000-8000-000000000005'
     'Mine spot N'             = '0e5a0000-0000-4000-8000-000000000011'
     'Mine spot NE'            = '0e5a0000-0000-4000-8000-000000000012'
     'Mine spot E'             = '0e5a0000-0000-4000-8000-000000000013'
@@ -75,6 +76,9 @@ if ($null -eq $m.ring.reach.measuredOn) {
 }
 if ($null -eq $m.goToTop.check) {
     Write-Warning "goToTop.check is null: the Go to Top press is unchecked until the Ur OCR capture sweep measures it; regenerate after."
+}
+if ($null -ne $m.turn -and $null -eq $m.turn.measuredOn) {
+    Write-Warning "turn is provisional (measuredOn is null). Regenerate after confirming the hold length live."
 }
 
 function Rgb($c) { [ordered]@{ r = [int]$c.r; g = [int]$c.g; b = [int]$c.b } }
@@ -216,3 +220,15 @@ if ($null -ne $g.check) {
     $press.checkEnabled = $true
 }
 Write-Macro (Macro 'Go to Top' @($press, [ordered]@{ kind = 'wait'; delayMs = [int]$g.settleMs }, (DotCheck 'am-on' 'Auto Mine on' 'red')))
+
+# ---- Camera turn left: hold the Left arrow, release, settle so a following capture sees the
+# turned view. VK_LEFT (0x25); MacroPlayer.SendKey derives the scan code Roblox requires.
+$VkLeft = 0x25
+$TurnSettleMs = 300
+$turnHoldMs = 500
+if ($null -ne $m.turn -and $null -ne $m.turn.holdMs) { $turnHoldMs = [int]$m.turn.holdMs }
+Write-Macro (Macro 'Camera turn left' @(
+        [ordered]@{ kind = 'key'; delayMs = 0; virtualKeyCode = $VkLeft; down = $true },
+        [ordered]@{ kind = 'key'; delayMs = $turnHoldMs; virtualKeyCode = $VkLeft; down = $false },
+        [ordered]@{ kind = 'wait'; delayMs = $TurnSettleMs }
+    ))

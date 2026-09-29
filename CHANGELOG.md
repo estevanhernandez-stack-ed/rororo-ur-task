@@ -36,6 +36,8 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   measured in first, as for a macro. It rides the same single-flight rule, playback id,
   `GetPlayback`, `StopMacro` and Esc as `RunMacro`, is never saved or listed, and logs as
   "ClearAt (N points)" with each point by its label. Additive on bridge contract 1.0.
+- **Camera turn left:** a quarter turn with the arrow key, for the pulse to look again from a new
+  angle.
 
 ### Changed
 

@@ -79,7 +79,7 @@ public class OreStopExampleMacrosTests
     public void Every_example_loads_validates_and_is_saved_as_its_id()
     {
         var (macros, m) = Load();
-        var expected = new[] { "Auto Mine off (checked)", "Auto Mine on (checked)", "Camera top-down", "Go to Top" }
+        var expected = new[] { "Auto Mine off (checked)", "Auto Mine on (checked)", "Camera top-down", "Camera turn left", "Go to Top" }
             .Concat(RingNames.Select(n => $"Mine spot {n}"))
             .Concat(RingNames.Select(n => $"Clear spot {n}"))
             .OrderBy(s => s, StringComparer.Ordinal);
@@ -168,6 +168,25 @@ public class OreStopExampleMacrosTests
     }
 
     [Fact]
+    public void Camera_turn_left_holds_the_Left_arrow_key_then_releases_and_settles()
+    {
+        const int VkLeft = 0x25;
+        var (macros, m) = Load();
+        var turn = m.GetProperty("turn");
+        var steps = Assert.Single(macros, x => x.Name == "Camera turn left").Steps!;
+        Assert.Equal(3, steps.Count);
+
+        var down = Assert.IsType<KeyStep>(steps[0]);
+        Assert.Equal((0, VkLeft, true), (down.DelayMs, down.VirtualKeyCode, down.Down));
+
+        var up = Assert.IsType<KeyStep>(steps[1]);
+        Assert.Equal((turn.GetProperty("holdMs").GetInt32(), VkLeft, false), (up.DelayMs, up.VirtualKeyCode, up.Down));
+
+        var settle = Assert.IsType<WaitStep>(steps[2]);
+        Assert.Equal(300, settle.DelayMs);
+    }
+
+    [Fact]
     public void Go_to_Top_presses_the_button_waits_then_turns_Auto_Mine_on()
     {
         var (macros, m) = Load();
@@ -210,7 +229,8 @@ public class OreStopExampleMacrosTests
                 case FirstMatchStep f: Assert.All(f.Candidates, c => Assert.Contains((c.X, c.Y), allowed)); break;
                 case DragStep d: Assert.Equal(2, d.Button); break;
                 case WaitStep: break;
-                default: Assert.Fail($"'{macro.Name}' has a {step.GetType().Name}; the examples use only points, holds, first matches, right drags and waits."); break;
+                case KeyStep: break; // the arrow-key turn presses no client point
+                default: Assert.Fail($"'{macro.Name}' has a {step.GetType().Name}; the examples use only points, holds, first matches, right drags, waits and key steps."); break;
             }
         }
     }
