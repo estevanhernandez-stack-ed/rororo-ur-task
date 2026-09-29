@@ -186,6 +186,25 @@ public class MacroPlayerStepPathTests : IDisposable
     }
 
     [Fact]
+    public async Task A_ClearAt_macro_hands_its_guard_to_the_step_runner()
+    {
+        // The guard is the first thing a ClearAt point samples, before any park or input. The
+        // blind sampler sees nothing there, so the point stops before any input is sent.
+        var metrics = new FakeMetrics { Client = (816, 638), Outer = (10, 20, 832, 677) };
+        var sampler = new BlindSampler();
+        var player = Player(metrics, new FakeScale(100), sampler);
+        var request = new Labs626.UrTask.Ipc.ClearAtRequest("1.0", "ClearAt", "626labs.ur-ocr", "42",
+            new Labs626.UrTask.Ipc.ClearAtClient(816, 638), new[] { new Labs626.UrTask.Ipc.ClearAtPoint(400, 300, "ore 1") },
+            new Labs626.UrTask.Ipc.ClearAtOutline(50, 50, 60), Guard: new Labs626.UrTask.Ipc.ClearAtGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30));
+        var macro = Labs626.UrTask.Ipc.ClearAtMacro.Build(request, "clearat-pb1");
+
+        var result = await player.PlayAsync(macro, targetUserId: 42);
+
+        Assert.Equal((PlaybackOutcome.Aborted, (int?)0), (result.Outcome, result.StepIndex));
+        Assert.Equal((55, 289, 3, 3), sampler.Rects[0]);
+    }
+
+    [Fact]
     public async Task A_clean_finish_is_logged()
     {
         var metrics = new FakeMetrics { Client = (816, 638), Outer = (10, 20, 832, 677) };

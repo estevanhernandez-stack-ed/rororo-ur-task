@@ -25,10 +25,13 @@ internal interface IStepIo
 
 /// <param name="SharedBaseline">True for a ClearAt pass: its reach holds share one baseline frame
 /// instead of parking before every spot (StepRunner's BaselineFrame).</param>
+/// <param name="Guard">A ClearAt pass's guard pixel, sampled before every hold's first input and
+/// before every press; a changed colour stops the playback (StepRunner.CheckGuard). Null: none.</param>
 internal sealed record StepContext(
     string AccountName, long UserId, string MacroId,
     (int W, int H) RecordedClient, (int W, int H) ActualClient, int DisplayScale,
-    Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false);
+    Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false,
+    ScreenGuard? Guard = null);
 
 /// <summary>
 /// Plays v4 steps. A point with its check on treats its delay as a ceiling: it presses as soon
@@ -393,12 +396,14 @@ internal static class StepRunner
         var reach = ReachFor(h.Reach, at, client, ctx, name, index);
 
         await io.Delay(h.DelayMs, ct);
+        CheckGuard(ctx, io, index, name); // before the park, the hover or any press for this point
         // Baseline before the pointer lands (controller ruling 2026-09-28): white quartz passes the
         // raw count with no hover, so a reach hold looks for the rise over the box as it is unhovered.
         // A ClearAt pass shares one frame (BaselineFrame); a recorded hold parks for its own.
         var baseline = reach is not { } rb ? 0
             : shared is not null ? await SharedBaselineAsync(shared, rb, io, client, ctx, index, label, name, ct)
             : await BaselineAsync(rb, io, client, ctx, index, label, name, ct);
+        CheckGuard(ctx, io, index, name); // the park took a settle: look again before the hover
         await JumpAsync(io, at, ct);
         if (reach is { } r0)
         {
@@ -486,6 +491,7 @@ internal static class StepRunner
         {
             while (true)
             {
+                CheckGuard(ctx, io, index, name); // before every hold, and before a fresh baseline's park
                 if (freshBaseline is not null && holds == FreshBaselineBeforeHold - 1)
                 {
                     baseline = await freshBaseline();
@@ -493,6 +499,7 @@ internal static class StepRunner
                     var (still, area) = await AwaitOutlineAsync(r, baseline, io, name, index, ct);
                     if (!still) { outcome = "no outline on a fresh baseline, stopped"; break; }
                     before = area;
+                    CheckGuard(ctx, io, index, name); // the park and look took time: look again
                 }
                 var holdMs = h.MaxMs is { } max ? Math.Min(nextHoldMs, max - pressedMs) : nextHoldMs;
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
@@ -546,6 +553,27 @@ internal static class StepRunner
         const int tol = StepTiming.OutlineMoveTolerancePx;
         return Math.Abs(p.MinX - q.MinX) > tol || Math.Abs(p.MinY - q.MinY) > tol
             || Math.Abs(p.MaxX - q.MaxX) > tol || Math.Abs(p.MaxY - q.MaxY) > tol;
+    }
+
+    // ---------- the ClearAt guard (live safety bug 2026-09-28 23:49) ----------
+
+    /// <summary>
+    /// A ClearAt hold landed on another player and opened their profile, Friend and Trade buttons
+    /// and all; the pass only noticed at its end. With a guard (<see cref="StepContext.Guard"/>)
+    /// every point and every hold first averages the guard box, placed and scaled like a reach box,
+    /// the same way colour checks sample. Further than its tolerance from the expected colour, or a
+    /// box it cannot see, stops the playback as a failed check before any more input: a menu or a
+    /// profile covers the game. Released buttons stay released; RunAsync's finally lets go of any
+    /// still down. No guard: nothing is sampled.
+    /// </summary>
+    private static void CheckGuard(StepContext ctx, IStepIo io, int index, string name)
+    {
+        if (ctx.Guard is not { } g) return;
+        var rect = PointMath.ScaledRect(Place(ctx, (g.X, g.Y)), new CheckBox(0, 0, g.W, g.H), ctx.RecordedClient, ctx.ActualClient);
+        var seen = SampleGuarded(io, rect) ?? throw new StopException($"{name} could not see the window.", index);
+        if (seen.DistanceTo(g.Expect) <= g.Tolerance) return;
+        throw new StopException(string.Create(CultureInfo.InvariantCulture,
+            $"ClearAt stopped: the guard at ({g.X},{g.Y}) isn't the expected colour (saw {seen.Hex}); something may be over the game (a menu or a player's profile)."), index);
     }
 
     // ---------- reach (the white outline) ----------

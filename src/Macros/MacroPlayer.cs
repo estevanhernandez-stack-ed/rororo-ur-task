@@ -348,7 +348,7 @@ internal sealed class MacroPlayer : IMacroPlayer
             var ctx = new StepContext(preflight.DisplayName, targetUserId, macro.Id, (rw, rh), actual, scale,
                 pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
                 line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"),
-                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id));
+                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard);
             var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
