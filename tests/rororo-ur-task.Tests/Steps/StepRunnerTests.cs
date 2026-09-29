@@ -1384,6 +1384,57 @@ public class StepRunnerTests
         Assert.Contains("ClearAt: shared baseline (1 park for 5 points)", log);
     }
 
+    [Theory]
+    [InlineData(12, 1)]
+    [InlineData(13, 2)] // the 13th point without a break takes a fresh frame
+    [InlineData(24, 2)]
+    [InlineData(25, 3)]
+    public async Task A_shared_pass_refreshes_its_frame_every_12_points_without_a_break(int points, int parks)
+    {
+        // A grid 100 px apart, 7 across, rows at y 100, 200, 300, 400. Nothing in reach.
+        var grid = Enumerable.Range(0, points).Select(k => (100 + k % 7 * 100, 100 + k / 7 * 100, $"p{k + 1}")).ToArray();
+        var log = new List<string>();
+        var io = Blocks();
+        await StepRunner.RunAsync(ClearAtSteps(null, grid), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(parks, io.Parks.Count);
+        Assert.Contains($"ClearAt: shared baseline ({parks} parks for {points} points)".Replace("(1 parks", "(1 park"), log);
+    }
+
+    [Fact]
+    public async Task A_long_hold_checks_again_on_a_fresh_baseline_and_stops_when_the_outline_was_the_background()
+    {
+        // The shared frame is taken at LookSettleMs over plain rock. Right after, a quartz-white patch
+        // (20x20 = 400 px) shows inside the box and stays; there is no outline at all. Against the
+        // stale baseline of 0 it reads as an outline that never breaks. Before the 3rd hold the
+        // point parks again: the fresh baseline is 400, nothing rises over it, and the point stops.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (t, x, y) => t > StepTiming.LookSettleMs && x is >= 60 and < 80 && y is >= 60 and < 80 ? Quartz : Rock };
+        // MaxMs bounds a regression (it would press to the limit) so it fails instead of hanging.
+        var r = await StepRunner.RunAsync(ClearAtSteps(20_000, (100, 100, "a")), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach); // it pressed: not a skip
+        Assert.Equal(new long[] { 300, 600 }, HeldMs(io));
+        Assert.Equal(2, io.Parks.Count);
+        Assert.True(io.Parks[1].T > io.Ups.Last().TimestampMs);
+        Assert.Contains("step 1 'a' outline seen (400 near-white px over a baseline of 0, needs 60)", log);
+        Assert.Contains("step 1 'a' no outline on a fresh baseline, stopped", log);
+        Assert.DoesNotContain(log, l => l.Contains("broke"));
+    }
+
+    [Fact]
+    public async Task A_long_hold_that_still_shows_its_outline_on_a_fresh_baseline_keeps_holding()
+    {
+        var log = new List<string>();
+        var io = Blocks((100, 100, 4));
+        await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(new long[] { 300, 600, 1200, 2400 }, HeldMs(io));
+        Assert.Equal(2, io.Parks.Count); // the start, then the check before hold 3 only
+        Assert.Contains("step 1 'a' broke after 4 hold(s), 4.5 s held", log);
+    }
+
     [Fact]
     public async Task A_shared_pass_keeps_MaxMs_and_reaching_the_limit_is_not_a_break()
     {
@@ -1393,7 +1444,7 @@ public class StepRunnerTests
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
         Assert.Equal(new long[] { 300, 600, 1200, 2400, 3000, 2500, 300, 600, 1200, 2400, 3000, 2500 }, HeldMs(io));
-        Assert.Single(io.Parks);
+        Assert.Equal(3, io.Parks.Count); // the start and one check before each point's 3rd hold; the limit is no break
         Assert.Contains("step 1 'a' pressed 10.0 s over 6 hold(s), released: reached its limit", log);
         Assert.Contains("step 2 'b' pressed 10.0 s over 6 hold(s), released: reached its limit", log);
     }
