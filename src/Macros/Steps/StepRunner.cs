@@ -23,10 +23,12 @@ internal interface IStepIo
     long NowMs { get; }
 }
 
+/// <param name="SharedBaseline">True for a ClearAt pass: its reach holds share one baseline frame
+/// instead of parking before every spot (StepRunner's BaselineFrame).</param>
 internal sealed record StepContext(
     string AccountName, long UserId, string MacroId,
     (int W, int H) RecordedClient, (int W, int H) ActualClient, int DisplayScale,
-    Func<string, PointAdjustment?> Adjust, Action<string> Log);
+    Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false);
 
 /// <summary>
 /// Plays v4 steps. A point with its check on treats its delay as a ceiling: it presses as soon
@@ -51,6 +53,22 @@ internal static class StepRunner
     {
         public bool Pressed;
         public int ReachSkips;
+    }
+
+    /// <summary>
+    /// A ClearAt pass's one baseline (live finding 2026-09-28 21:00): the per-spot park and settle
+    /// cost most of a pass, and most spots are skipped. The pass parks once, captures the union of
+    /// every point's reach box, and each point measures its baseline from that frame. A break
+    /// changes the scene near it, so it drops the frame and the next reach hold takes a fresh one:
+    /// 1 + breaks parks per pass, not one per spot. Recorded macros never share.
+    /// </summary>
+    private sealed class BaselineFrame(IReadOnlyList<MacroStep> steps)
+    {
+        public IReadOnlyList<MacroStep> Steps { get; } = steps;
+        public int Points { get; } = steps.Count(s => s is HoldStep { Reach: not null });
+        /// <summary>Null until the first reach hold, and again after a break.</summary>
+        public PixelBlock? Frame;
+        public int Parks;
     }
 
     /// <summary>Forwards everything to the real IO and notes any button or key going down, so a
@@ -80,6 +98,7 @@ internal static class StepRunner
         if (invalid is not null) return PlaybackResult.Refused(invalid);
 
         var tally = new RunTally();
+        var shared = ctx.SharedBaseline ? new BaselineFrame(steps) : null;
         io = new PressWatchIo(io, tally);
         var heldKeys = new HashSet<int>();
         var heldButtons = new HashSet<int>();
@@ -106,7 +125,7 @@ internal static class StepRunner
                         await PlayFirstMatchAsync(f, i, ctx, io, heldButtons, ct);
                         break;
                     case HoldStep h:
-                        await PlayHoldAsync(h, i, ctx, io, heldButtons, tally, ct);
+                        await PlayHoldAsync(h, i, ctx, io, heldButtons, tally, shared, ct);
                         break;
                     case DragStep d:
                         await PlayDragAsync(d, ctx, io, heldButtons, ct);
@@ -154,6 +173,9 @@ internal static class StepRunner
             // then), Send drops the event and the button would stay down system-wide.
             foreach (var vk in heldKeys) io.Send(new MacroEvent(0, MacroEventKind.KeyUp, vk, 0, 0, 0, 0));
             foreach (var b in heldButtons) io.ReleaseButton(b);
+            if (shared is not null)
+                ctx.Log(string.Create(CultureInfo.InvariantCulture,
+                    $"ClearAt: shared baseline ({shared.Parks} {(shared.Parks == 1 ? "park" : "parks")} for {shared.Points} {(shared.Points == 1 ? "point" : "points")})"));
         }
     }
 
@@ -349,12 +371,11 @@ internal static class StepRunner
     /// on one block until it breaks (<see cref="PlayReachHoldsAsync"/>), and colour drift plays no
     /// part.</para>
     /// </summary>
-    private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
+    private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, BaselineFrame? shared, CancellationToken ct)
     {
         var label = h.Label ?? h.Id;
         var name = $"{ctx.AccountName}: step {index + 1} '{label}'";
-        var adj = ctx.Adjust(h.Id);
-        var at = Place(ctx, adj is null ? (h.X, h.Y) : (adj.X, adj.Y));
+        var at = HoldAt(h, ctx);
         var check = h.Check!; // StepValidator refuses a hold without one
         var box = PointMath.BoxRect(at, check.Box);
         var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
@@ -364,14 +385,18 @@ internal static class StepRunner
         await io.Delay(h.DelayMs, ct);
         // Baseline before the pointer lands (controller ruling 2026-09-28): white quartz passes the
         // raw count with no hover, so a reach hold looks for the rise over the box as it is unhovered.
-        var baseline = reach is { } rb ? await BaselineAsync(rb, io, client, ctx, index, label, name, ct) : 0;
+        // A ClearAt pass shares one frame (BaselineFrame); a recorded hold parks for its own.
+        var baseline = reach is not { } rb ? 0
+            : shared is not null ? await SharedBaselineAsync(shared, rb, io, client, ctx, index, label, name, ct)
+            : await BaselineAsync(rb, io, client, ctx, index, label, name, ct);
         await JumpAsync(io, at, ct);
         if (reach is { } r0)
         {
             var (seen0, area0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
             LogOutline(ctx, index, label, seen0, area0.Count, r0.Need, baseline);
             if (!seen0) { tally.ReachSkips++; return; }
-            await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
+            var broke = await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
+            if (broke && shared is not null) shared.Frame = null; // the scene nearby changed: a fresh frame next
             return;
         }
         var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
@@ -429,12 +454,14 @@ internal static class StepRunner
     /// drift ends nothing here.
     /// <para>MaxMs bounds the pressed time across holds: the last hold is cut to what is left, and
     /// the step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
+    /// <para>True when the block broke; false when the step ended at its MaxMs limit.</para>
     /// </summary>
-    private static async Task PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task<bool> PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
     {
         long pressedMs = 0, holdStart = -1;
         int holds = 0, nextHoldMs = StepTiming.FirstHoldMs;
         string outcome;
+        bool broke = false;
         try
         {
             while (true)
@@ -463,9 +490,9 @@ internal static class StepRunner
 
                 await io.Delay(StepTiming.LookSettleMs, ct);
                 var (seen, after) = await AwaitOutlineAsync(r, baseline, io, name, index, ct); // the same baseline as the pre-press check
-                var broke = string.Create(CultureInfo.InvariantCulture, $"broke after {holds} hold(s), {pressedMs / 1000.0:F1} s held");
-                if (!seen) { outcome = broke; break; }
-                if (OutlineMoved(before.Bounds, after.Bounds)) { outcome = broke + " (outline moved to the next block)"; break; }
+                var brokeLine = string.Create(CultureInfo.InvariantCulture, $"broke after {holds} hold(s), {pressedMs / 1000.0:F1} s held");
+                if (!seen) { outcome = brokeLine; broke = true; break; }
+                if (OutlineMoved(before.Bounds, after.Bounds)) { outcome = brokeLine + " (outline moved to the next block)"; broke = true; break; }
                 before = after;
                 nextHoldMs = Math.Min(nextHoldMs * 2, StepTiming.MaxHoldMs); // a hit, not a break: hold longer
             }
@@ -479,6 +506,7 @@ internal static class StepRunner
             throw;
         }
         ctx.Log(string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' {outcome}"));
+        return broke;
     }
 
     /// <summary>True when any edge of the outline's bounding box moved more than
@@ -543,24 +571,69 @@ internal static class StepRunner
     /// </summary>
     private static async Task<int> BaselineAsync(ReachPlan r, IStepIo io, (int W, int H) client, StepContext ctx, int index, string label, string name, CancellationToken ct)
     {
+        await ParkForBaselineAsync(r.Rect, r.Rect.W, io, client, ctx, index, label, ct);
+        return MeasureGuarded(io, r.Rect, r.WhiteMin)?.Count ?? throw new StopException($"{name} could not see the window.", index);
+    }
+
+    /// <summary>
+    /// A ClearAt point's baseline from the pass's shared frame (<see cref="BaselineFrame"/>). With
+    /// no frame (the first reach hold, or the first after a break) it parks as
+    /// <see cref="BaselineAsync"/> does, the union of every point's reach box standing in for the
+    /// one box, and captures that union once. A frame that does not hold this point's box (the
+    /// window changed size since) is taken again. A failed capture stops the step like any other.
+    /// </summary>
+    private static async Task<int> SharedBaselineAsync(BaselineFrame shared, ReachPlan r, IStepIo io, (int W, int H) client, StepContext ctx, int index, string label, string name, CancellationToken ct)
+    {
+        if (shared.Frame?.MeasureNearWhite(r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H, r.WhiteMin) is { } kept) return kept.Count;
+
+        var union = ReachUnion(shared.Steps, r.Rect, ctx, client);
+        await ParkForBaselineAsync(union, r.Rect.W, io, client, ctx, index, label, ct);
+        shared.Parks++;
+        GuardForeground(io);
+        shared.Frame = io.Capture(union.X, union.Y, union.W, union.H);
+        return shared.Frame?.MeasureNearWhite(r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H, r.WhiteMin)?.Count
+            ?? throw new StopException($"{name} could not see the window.", index);
+    }
+
+    /// <summary>The smallest rect holding <paramref name="own"/> and every reach hold's box that
+    /// fits the window. A box outside the window is left out; its own step stops when it plays.</summary>
+    private static (int X, int Y, int W, int H) ReachUnion(IReadOnlyList<MacroStep> steps, (int X, int Y, int W, int H) own, StepContext ctx, (int W, int H) client)
+    {
+        int x0 = own.X, y0 = own.Y, x1 = own.X + own.W, y1 = own.Y + own.H;
+        foreach (var h in steps.OfType<HoldStep>())
+        {
+            if (h.Reach is null) continue;
+            var b = PointMath.ScaledRect(HoldAt(h, ctx), h.Reach.Box, ctx.RecordedClient, ctx.ActualClient);
+            if (!PointMath.InsideClient(b, client)) continue;
+            x0 = Math.Min(x0, b.X); y0 = Math.Min(y0, b.Y);
+            x1 = Math.Max(x1, b.X + b.W); y1 = Math.Max(y1, b.Y + b.H);
+        }
+        return (x0, y0, x1 - x0, y1 - y0);
+    }
+
+    /// <summary>
+    /// Moves the pointer off <paramref name="away"/> before a baseline count: the title-bar park,
+    /// then <see cref="StepTiming.LookSettleMs"/>. When the window refuses the park, a pointer
+    /// inside <paramref name="away"/> moves <paramref name="gap"/> px outside it (right, else left,
+    /// at its middle height, clamped to the client) and waits the same settle.
+    /// </summary>
+    private static async Task ParkForBaselineAsync((int X, int Y, int W, int H) away, int gap, IStepIo io, (int W, int H) client, StepContext ctx, int index, string label, CancellationToken ct)
+    {
         GuardForeground(io);
         if (io.ParkPointer(client.W / 2, TitleBarParkY))
         {
             await io.Delay(StepTiming.LookSettleMs, ct);
+            return;
         }
-        else
+        ctx.Log($"step {index + 1} '{label}' could not park the pointer on the title bar; took the baseline beside the box");
+        if (io.CursorClient() is { } c && InsideRect(c, away))
         {
-            ctx.Log($"step {index + 1} '{label}' could not park the pointer on the title bar; took the baseline beside the box");
-            if (io.CursorClient() is { } c && InsideRect(c, r.Rect))
-            {
-                var y = Math.Clamp(r.Rect.Y + r.Rect.H / 2, 0, client.H - 1);
-                var x = Math.Clamp(r.Rect.X + 2 * r.Rect.W, 0, client.W - 1);
-                if (InsideRect((x, y), r.Rect)) x = Math.Clamp(r.Rect.X - r.Rect.W, 0, client.W - 1);
-                SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, x, y, 0, 0));
-                await io.Delay(StepTiming.LookSettleMs, ct);
-            }
+            var y = Math.Clamp(away.Y + away.H / 2, 0, client.H - 1);
+            var x = Math.Clamp(away.X + away.W + gap, 0, client.W - 1);
+            if (InsideRect((x, y), away)) x = Math.Clamp(away.X - gap, 0, client.W - 1);
+            SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, x, y, 0, 0));
+            await io.Delay(StepTiming.LookSettleMs, ct);
         }
-        return MeasureGuarded(io, r.Rect, r.WhiteMin)?.Count ?? throw new StopException($"{name} could not see the window.", index);
     }
 
     private static bool InsideRect((int X, int Y) p, (int X, int Y, int W, int H) b)
@@ -737,6 +810,10 @@ internal static class StepRunner
             check = check with { Expect = adj.Expect ?? check.Expect, Other = adj.Other ?? check.Other };
         return (adj is null ? (p.X, p.Y) : (adj.X, adj.Y), check);
     }
+
+    /// <summary>Where a hold presses in the actual window, its saved adjustment applied.</summary>
+    private static (int X, int Y) HoldAt(HoldStep h, StepContext ctx)
+        => ctx.Adjust(h.Id) is { } adj ? Place(ctx, (adj.X, adj.Y)) : Place(ctx, (h.X, h.Y));
 
     private static (int X, int Y) Place(StepContext ctx, (int X, int Y) recorded)
         => PointMath.Place(recorded, ctx.RecordedClient, ctx.ActualClient);

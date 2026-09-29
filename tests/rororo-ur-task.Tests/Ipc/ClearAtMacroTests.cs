@@ -72,6 +72,14 @@ public class ClearAtMacroTests
     public void Build_carries_maxMsPerPoint_to_every_hold()
         => Assert.All(ClearAtMacro.Build(Valid(3, maxMs: 4000), "clearat-x").Steps!.Cast<HoldStep>(), h => Assert.Equal(4000, h.MaxMs));
 
+    [Theory]
+    [InlineData("clearat-0123abcd", true)]
+    [InlineData("m1", false)]
+    [InlineData("my-clearat-macro", false)]
+    [InlineData("ClearAt-x", false)]
+    public void Only_a_ClearAt_playback_shares_one_baseline_per_pass(string macroId, bool shares)
+        => Assert.Equal(shares, ClearAtMacro.SharesBaseline(macroId));
+
     [Fact]
     public void The_built_steps_pass_the_step_validator()
         => Assert.Null(StepValidator.Validate(ClearAtMacro.Build(Valid(64), "clearat-x").Steps!));

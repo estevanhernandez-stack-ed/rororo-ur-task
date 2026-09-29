@@ -87,6 +87,10 @@ internal static class ClearAtMacro
             AllGames: true, Steps: steps);
     }
 
+    /// <summary>True for a ClearAt playback's synthetic macro, whose reach holds share one baseline
+    /// frame per pass (StepContext.SharedBaseline). Saved macros park before every spot.</summary>
+    public static bool SharesBaseline(string macroId) => macroId.StartsWith(IdPrefix, StringComparison.Ordinal);
+
     public static string NameFor(int points) => points == 1 ? "ClearAt (1 point)" : Inv($"ClearAt ({points} points)");
 
     /// <summary>The ur-task.log line when a ClearAt is accepted: every point by its label and where
