@@ -11,11 +11,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   needs at least `minCount`. That is the white outline the game draws on a block your pickaxe can
   break. No outline within 300 ms: the step is skipped, not failed, and the log says
   "no outline, skipped" with the count. The box and the count scale with the window like points.
-- **Reach holds play as hold-release-look beats.** The game hides the outline while the button
-  is down, so a hold behind a reach check presses for a 1 s beat, lets go, and looks. Still
-  outlined: another beat. No outline: the block broke or went out of reach, and the log says
-  "held N s over K beat(s), released: outline gone after release". A `maxMs` bounds the pressed
-  time across beats (the last beat is cut short); with none, ore is never abandoned for time.
+- **One block per spot.** A hold behind a reach check breaks one block and stops, instead of
+  digging a column. It taps for 250 ms, lets go, and looks (the game hides the outline while the
+  button is down). No outline: the block broke. The outline moved or shrank: the block broke and
+  the next one down is showing, and it is left alone. The same outline: a hit, so another tap.
+  The log says "broke after N tap(s)", with "(outline moved to the next block)" when it jumped. A
+  `maxMs` bounds the pressed time across taps (the last tap is cut short); with none, ore is never
+  abandoned for time.
 - **Turn on Hide My Pets in Roblox Settings before running a pulse.** Pets sit over the character
   and the ring spots, and cover the outline.
 - **Clear spot macros** for ore stop v1 (pulse) in `docs/reference/events/macros/space-mine-ore-stop/`:
@@ -29,8 +31,8 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   Task now clears wherever Ur OCR points: ore first, then the stone around you. Under the hood
   this is `ClearAt`, a bridge call: one account, the client size it measured in, 1 to 64 points
   in order and one outline box, played as ONE playback. Each point is a reach hold (hover,
-  outline check, hold-release-look beats until the outline is gone, measured over the box's
-  no-hover baseline), skipped when no outline shows. The window is sized to the client it was
+  outline check, then one block tapped until it breaks, measured over the box's no-hover
+  baseline), skipped when no outline shows. The window is sized to the client it was
   measured in first, as for a macro. It rides the same single-flight rule, playback id,
   `GetPlayback`, `StopMacro` and Esc as `RunMacro`, is never saved or listed, and logs as
   "ClearAt (N points)" with each point by its label. Additive on bridge contract 1.0.
@@ -38,9 +40,11 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 ### Changed
 
 - **Reach holds look for the outline over a baseline.** Before the pointer moves onto the spot,
-  the hold counts the box's near-white pixels with the pointer elsewhere (moving it one box-width
-  away first if it is already inside), and the outline counts only when the count rises at least
-  `minCount` over that. White quartz is bright enough to pass the raw count with no hover, so an
+  it parks on the Roblox window's title bar (a move, never a click), waits for any outline to
+  clear, and counts the box's near-white pixels. The outline counts only when the count rises at
+  least `minCount` over that. The title bar hovers no block; a spot one box-width away could light
+  the neighbouring block and swallow the outline. A window with no title bar takes the baseline
+  beside the box instead, and the log says so. White quartz is bright enough to pass the raw count with no hover, so an
   out-of-reach quartz block read as outlined and was pressed with no time limit. The log reads
   "outline seen (N near-white px over a baseline of B, needs M)". Reach points are unchanged.
 - **The outline box can be up to 240 px a side, up from 120.** The camera pops in to the first
