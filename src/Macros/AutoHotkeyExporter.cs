@@ -219,12 +219,12 @@ public static class AutoHotkeyExporter
                     var holdMs = h.MaxMs ?? HoldExportMs;
                     var holdLabel = SanitizeComment(h.Label ?? h.Id);
                     if (h.Reach is { } hr) sb.Append(ReachComment(h.Label ?? h.Id, hr)).Append(Nl);
-                    // A reach hold plays as hold-release-look beats in Ur Task; colour plays no part.
-                    var beats = FormattableString.Invariant($"presses in {StepTiming.HoldBeatMs} ms beats and looks for the outline after each release, until it is gone");
+                    // A reach hold taps one block in Ur Task and looks after each tap; colour plays no part.
+                    var taps = FormattableString.Invariant($"taps once per block in {StepTiming.TapMs} ms presses, looking after each, until the outline goes or moves to the next block");
                     var holdNote = (h.Reach is not null, h.MaxMs is not null) switch
                     {
-                        (true, false) => FormattableString.Invariant($"; hold: '{holdLabel}' {beats} (Ur Task only); exported as a {holdMs} ms hold"),
-                        (true, true) => FormattableString.Invariant($"; hold: '{holdLabel}' {beats} or {holdMs} ms pressed (Ur Task only); exported as a {holdMs} ms hold"),
+                        (true, false) => FormattableString.Invariant($"; hold: '{holdLabel}' {taps} (Ur Task only); exported as a {holdMs} ms hold"),
+                        (true, true) => FormattableString.Invariant($"; hold: '{holdLabel}' {taps}, or {holdMs} ms pressed (Ur Task only); exported as a {holdMs} ms hold"),
                         (false, false) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold"),
                         (false, true) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold"),
                     };

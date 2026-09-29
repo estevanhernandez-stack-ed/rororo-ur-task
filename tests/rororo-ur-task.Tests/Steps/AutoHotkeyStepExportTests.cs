@@ -102,16 +102,16 @@ public class AutoHotkeyStepExportTests
     }
 
     [Fact]
-    public void A_reach_hold_notes_its_beats()
+    public void A_reach_hold_notes_that_it_taps_once_per_block()
     {
         var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
         var hold = new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach);
 
         var open = AutoHotkeyExporter.Export(M(hold), AhkVersion.V1);
-        Assert.Contains("; hold: 'Spot N' presses in 1000 ms beats and looks for the outline after each release, until it is gone (Ur Task only); exported as a 1000 ms hold\r\n", open);
+        Assert.Contains("; hold: 'Spot N' taps once per block in 250 ms presses, looking after each, until the outline goes or moves to the next block (Ur Task only); exported as a 1000 ms hold\r\n", open);
         Assert.DoesNotContain("colour changes", open);
 
         var capped = AutoHotkeyExporter.Export(M(hold with { MaxMs = 2500 }), AhkVersion.V1);
-        Assert.Contains("; hold: 'Spot N' presses in 1000 ms beats and looks for the outline after each release, until it is gone or 2500 ms pressed (Ur Task only); exported as a 2500 ms hold\r\n", capped);
+        Assert.Contains("; hold: 'Spot N' taps once per block in 250 ms presses, looking after each, until the outline goes or moves to the next block, or 2500 ms pressed (Ur Task only); exported as a 2500 ms hold\r\n", capped);
     }
 }
