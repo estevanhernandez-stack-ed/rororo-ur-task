@@ -18,9 +18,11 @@ At the target layer, a pass becomes two phases:
 
 1. **Ore, as now.** The finder's ore points go through ClearAt: outline check, growing holds, one
    block per spot, the guard. Ore is worth the care.
-2. **Stone, swept.** One continuous hold. The button goes down on the block under the character,
-   the pointer travels a path around the character, one block apart, out to the reach radius, and
-   the button comes up where it started. Whatever block is under the pointer while it's held gets
+2. **Stone, swept.** One continuous hold. The button goes down on a block **beside** the character,
+   the pointer travels a ring path around the character, one block apart, out to the reach radius,
+   and the button comes up where it started. **Never on the block under the character:** measured
+   overnight, a hold there digs straight down, the character drops with it, and the camera moves,
+   so the rest of the path points at the wrong place. Whatever block is under the pointer while it's held gets
    mined. No per-spot look, no baseline, no park.
 
 Then read again, as now. A sweep that broke nothing (the frame barely changed) counts as an empty
@@ -28,12 +30,13 @@ pass: turn the camera, then ride a burst.
 
 ## The path
 
-- A square spiral outward from the character centre (400,310), one block (the pass's block size)
-  per step, out to about 5 blocks. It's the same grid the finder already lays, visited in spiral
+- Square rings around the character centre (400,310), from the first ring outward, one block (the
+  pass's block size) per step, out to about 5 blocks. The centre block is excluded, and the path
+  never crosses it (the ring-to-ring step goes outward, not through the middle). It's the same grid the finder already lays, visited in spiral
   order, not nearest-first.
 - HUD points are skipped (the same HudMask). The path jumps over them with the button still held;
   the move is a single straight input.
-- **The button comes up only on the start block** (the character centre). A release is a click, and
+- **The button comes up only on the start block** (the first-ring block the sweep began on). A release is a click, and
   a click on a player or a chest opens a popup. The start block is the one place a release can't
   land on something else.
 - The dwell per point starts at about 400 ms and is a setting. The main breaks a bottom-layer block
@@ -42,8 +45,8 @@ pass: turn the camera, then ride a burst.
 ## Safety
 
 - **Check the guard during the sweep, not only before.** With the button held, the guard pixel
-  (the Auto Mine dot) is sampled every few points. If it changes, move back to the start block and
-  release there, then stop the playback. (A hold can't open a popup; only a release can. Returning
+  (the Auto Mine dot) is sampled every few points. If it changes, move back to the start block (the
+  first-ring block) and release there, then stop the playback. (A hold can't open a popup; only a release can. Returning
   to the start before releasing keeps even that release safe.)
 - The foreground check happens before the press and at every point. On focus loss, release, as
   every hold does today.
