@@ -21,6 +21,9 @@ internal static class ClearAtMacro
     /// <summary>A caller's label is cut to this many chars before it plays or reaches the log.</summary>
     public const int MaxLabelLength = 40;
 
+    /// <summary>The largest guard tolerance: the black-to-white distance, 441.7, rounded down.</summary>
+    public const int MaxGuardTolerance = 441;
+
     /// <summary>A refused target is echoed only when it is all digits and at most this long;
     /// anything else could carry a forged log line.</summary>
     private const int MaxEchoedTargetLength = 20;
@@ -54,6 +57,7 @@ internal static class ClearAtMacro
         if (o.MinCount > o.W * o.H) return "ClearAt has an outline minCount larger than its box, so it can never pass.";
         if (o.WhiteMin is < 1 or > 255) return "ClearAt has an outline whiteMin outside 1 to 255.";
         if (r.MaxMsPerPoint is < 1) return "ClearAt has a maxMsPerPoint below 1.";
+        if (r.Guard is { } g && ValidateGuard(g, client) is { } guardProblem) return guardProblem;
 
         var box = BoxFor(o);
         for (int i = 0; i < count; i++)
@@ -84,7 +88,29 @@ internal static class ClearAtMacro
             RecordMode: "PerWindow", RecordedAgainstUserId: null, RecordedAgainstDisplayName: null,
             InterAltDelayMs: null, RecordedAtUnixMs: 0, Events: Array.Empty<MacroEvent>(),
             CoordSpace: Macro.CoordSpaceClient, RecordedClientW: r.Client!.W, RecordedClientH: r.Client.H,
-            AllGames: true, Steps: steps);
+            AllGames: true, Steps: steps)
+        {
+            Guard = r.Guard is { Expect: { } expect } g ? new ScreenGuard(g.X, g.Y, g.W, g.H, expect, g.Tolerance) : null,
+        };
+    }
+
+    /// <summary>The ur-task.log line when a guarded ClearAt is accepted; null without a guard.
+    /// Call only after <see cref="Validate"/> returned null.</summary>
+    public static string? GuardLine(ClearAtRequest r)
+        => r.Guard is { Expect: { } e } g ? Inv($"ClearAt guard at ({g.X},{g.Y}), expecting {e.Hex} ±{g.Tolerance}") : null;
+
+    /// <summary>The guard's own rules: a colour, a box of 1 to <see cref="CheckBox.MaxSide"/> px a side
+    /// inside the client, and a tolerance of 1 to <see cref="MaxGuardTolerance"/>.</summary>
+    private static string? ValidateGuard(ClearAtGuard g, ClearAtClient client)
+    {
+        if (g.Expect is not { } e) return "ClearAt has a guard with no expected colour.";
+        if (e.R is < 0 or > 255 || e.G is < 0 or > 255 || e.B is < 0 or > 255) return "ClearAt has a guard colour outside 0 to 255.";
+        if (g.W is < 1 or > CheckBox.MaxSide || g.H is < 1 or > CheckBox.MaxSide)
+            return Inv($"ClearAt has a guard box outside 1 to {CheckBox.MaxSide} px a side.");
+        if (g.Tolerance is < 1 or > MaxGuardTolerance) return Inv($"ClearAt has a guard tolerance outside 1 to {MaxGuardTolerance}.");
+        if (!PointMath.InsideClient((g.X, g.Y, g.W, g.H), (client.W, client.H)))
+            return Inv($"ClearAt has a guard at {g.X},{g.Y} outside the {client.W}x{client.H} client.");
+        return null;
     }
 
     /// <summary>True for a ClearAt playback's synthetic macro, whose reach holds share one baseline

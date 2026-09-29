@@ -120,6 +120,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var playbackId = Guid.NewGuid().ToString("N");
         var macro = ClearAtMacro.Build(request, ClearAtMacro.IdPrefix + playbackId);
         _log(ClearAtMacro.StartLine(playbackId, macro, targets[0].DisplayName));
+        if (ClearAtMacro.GuardLine(request) is { } guardLine) _log(guardLine);
         return Task.FromResult(Start(playbackId, macro, targets, interAltDelayMs: null, repeat: false, ct));
     }
 

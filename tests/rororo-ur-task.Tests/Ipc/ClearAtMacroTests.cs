@@ -156,6 +156,80 @@ public class ClearAtMacroTests
         Assert.Equal(sentence, ClearAtMacro.Validate(r));
     }
 
+    // ---------- the guard (live safety bug 2026-09-28 23:49) ----------
+
+    private static readonly ClearAtGuard Dot = new(55, 289, 3, 3, new Rgb(255, 19, 90), 30);
+
+    [Fact]
+    public void The_guard_round_trips_as_camelCase_json()
+    {
+        var json = SpecJson.Replace("\"maxMsPerPoint\": null }",
+            "\"maxMsPerPoint\": null, \"guard\": { \"x\": 55, \"y\": 289, \"w\": 3, \"h\": 3, \"expect\": { \"r\": 255, \"g\": 19, \"b\": 90 }, \"tolerance\": 30 } }");
+        var r = JsonSerializer.Deserialize<ClearAtRequest>(json, BridgeContract.Json)!;
+        Assert.Equal(Dot, r.Guard);
+
+        var back = JsonSerializer.Serialize(r, BridgeContract.Json);
+        Assert.Contains("\"guard\":{\"x\":55,\"y\":289,\"w\":3,\"h\":3,\"expect\":{\"r\":255,\"g\":19,\"b\":90},\"tolerance\":30}", back);
+        Assert.Equal(Dot, JsonSerializer.Deserialize<ClearAtRequest>(back, BridgeContract.Json)!.Guard);
+    }
+
+    [Fact]
+    public void A_call_without_a_guard_reads_as_null_and_builds_none()
+    {
+        Assert.Null(Spec().Guard);
+        Assert.Null(ClearAtMacro.Build(Spec(), "clearat-pb1").Guard);
+        Assert.Null(ClearAtMacro.GuardLine(Spec()));
+    }
+
+    [Fact]
+    public void Build_carries_the_guard_to_the_macro_but_never_to_its_json()
+    {
+        var m = ClearAtMacro.Build(Valid() with { Guard = Dot }, "clearat-x");
+        Assert.Equal(new ScreenGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30), m.Guard);
+        Assert.DoesNotContain("guard", JsonSerializer.Serialize(m), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(m.Guard, (m with { Name = "x" }).Guard); // a copy keeps it
+    }
+
+    [Fact]
+    public void GuardLine_names_the_spot_the_colour_and_the_tolerance()
+        => Assert.Equal("ClearAt guard at (55,289), expecting #FF135A ±30", ClearAtMacro.GuardLine(Valid() with { Guard = Dot }));
+
+    [Fact]
+    public void Validate_accepts_a_guard_at_its_limits()
+    {
+        Assert.Null(ClearAtMacro.Validate(Valid() with { Guard = Dot }));
+        Assert.Null(ClearAtMacro.Validate(Valid() with { Guard = Dot with { X = 0, Y = 0, W = 1, H = 1, Tolerance = 1 } }));
+        Assert.Null(ClearAtMacro.Validate(Valid() with { Guard = Dot with { X = 791, Y = 590, W = 9, H = 9, Tolerance = 441 } }));
+    }
+
+    [Theory]
+    [InlineData("left", "ClearAt has a guard at -1,289 outside the 800x599 client.")]
+    [InlineData("right", "ClearAt has a guard at 798,289 outside the 800x599 client.")]
+    [InlineData("bottom", "ClearAt has a guard at 55,597 outside the 800x599 client.")]
+    [InlineData("w-0", "ClearAt has a guard box outside 1 to 9 px a side.")]
+    [InlineData("h-10", "ClearAt has a guard box outside 1 to 9 px a side.")]
+    [InlineData("tolerance-0", "ClearAt has a guard tolerance outside 1 to 441.")]
+    [InlineData("tolerance-442", "ClearAt has a guard tolerance outside 1 to 441.")]
+    [InlineData("no-expect", "ClearAt has a guard with no expected colour.")]
+    [InlineData("expect-256", "ClearAt has a guard colour outside 0 to 255.")]
+    public void Validate_refuses_a_bad_guard_with_one_sentence(string @case, string sentence)
+    {
+        var g = @case switch
+        {
+            "left" => Dot with { X = -1 },
+            "right" => Dot with { X = 798 },
+            "bottom" => Dot with { Y = 597 },
+            "w-0" => Dot with { W = 0 },
+            "h-10" => Dot with { H = 10 },
+            "tolerance-0" => Dot with { Tolerance = 0 },
+            "tolerance-442" => Dot with { Tolerance = 442 },
+            "no-expect" => Dot with { Expect = null },
+            "expect-256" => Dot with { Expect = new Rgb(256, 19, 90) },
+            _ => throw new ArgumentOutOfRangeException(nameof(@case)),
+        };
+        Assert.Equal(sentence, ClearAtMacro.Validate(Valid() with { Guard = g }));
+    }
+
     /// <summary>The label a one-point call's hold plays and logs under.</summary>
     private static string LabelOf(string? label)
         => ((HoldStep)ClearAtMacro.Build(Valid(1) with { Points = new[] { new ClearAtPoint(100, 100, label) } }, "clearat-x").Steps![0]).Label!;

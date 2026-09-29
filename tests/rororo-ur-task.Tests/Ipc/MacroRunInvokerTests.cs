@@ -557,6 +557,45 @@ public class MacroRunInvokerTests
     }
 
     [Fact]
+    public async Task ClearAt_logs_its_guard_once_at_the_start_and_plays_it()
+    {
+        Macro? played = null;
+        var log = new List<string>();
+        var inv = ClearAtInvoker((m, _, _, _) => { played = m; return Task.FromResult<SequenceResult?>(null); }, log: log);
+
+        var r = await inv.ClearAtAsync(ClearAt() with { Guard = new ClearAtGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30) }, default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.True(r.Ok);
+        Assert.Single(log, l => l == "ClearAt guard at (55,289), expecting #FF135A ±30");
+        Assert.Equal(new ScreenGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30), played!.Guard);
+    }
+
+    [Fact]
+    public async Task ClearAt_without_a_guard_logs_none()
+    {
+        var log = new List<string>();
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), log: log);
+        await inv.ClearAtAsync(ClearAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.DoesNotContain(log, l => l.Contains("guard"));
+    }
+
+    [Fact]
+    public async Task A_ClearAt_stopped_by_its_guard_reads_failed_check_failed_with_the_sentence()
+    {
+        const string stop = "ClearAt stopped: the guard at (55,289) isn't the expected colour (saw #F5F5F5); something may be over the game (a menu or a player's profile).";
+        var failed = new SequenceResult(new[] { new AltOutcome(Alt(123), PlaybackOutcome.Aborted, stop, 2) }, 0, 1, 0, TimeSpan.Zero);
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(failed));
+
+        var r = await inv.ClearAtAsync(ClearAt(points: 3) with { Guard = new ClearAtGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30) }, default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, r.PlaybackId);
+        Assert.Equal(("failed", "check-failed", 3, stop), (status.State, status.Reason, status.StepIndex, status.Detail));
+    }
+
+    [Fact]
     public async Task ClearAt_is_stopped_by_StopMacro_like_any_playback()
     {
         var inv = ClearAtInvoker(async (_, _, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return null; });

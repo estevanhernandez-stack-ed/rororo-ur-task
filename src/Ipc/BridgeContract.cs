@@ -87,6 +87,12 @@ public sealed record ClearAtPoint(int X, int Y, string? Label = null);
 /// at MinCount or more pixels whose every channel is at least WhiteMin (see OutlineCheck).</summary>
 public sealed record ClearAtOutline(int W, int H, int MinCount, int WhiteMin = OutlineCheck.DefaultWhiteMin);
 
+/// <summary>A pixel box in <see cref="ClearAtRequest.Client"/> pixels that must stay within
+/// Tolerance of Expect (RGB distance) while the call plays, or it stops before any more input: the
+/// Auto Mine dot, which a menu or a player's profile covers. Expect is nullable so a missing one is
+/// refused rather than read as black.</summary>
+public sealed record ClearAtGuard(int X, int Y, int W, int H, Rgb? Expect, int Tolerance);
+
 /// <summary>
 /// Press where the caller points (bridge 1.x, additive; ore-stop pulse spec, "The ClearAt bridge
 /// call"). Each point, in order, plays as a reach hold on the target account, and the whole list
@@ -101,7 +107,8 @@ public sealed record ClearAtRequest(
     ClearAtClient? Client,
     IReadOnlyList<ClearAtPoint>? Points,
     ClearAtOutline? Outline,
-    int? MaxMsPerPoint = null);
+    int? MaxMsPerPoint = null,
+    ClearAtGuard? Guard = null);
 
 internal static class BridgeContract
 {

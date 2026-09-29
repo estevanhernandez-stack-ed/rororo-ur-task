@@ -93,9 +93,9 @@ public class StepRunnerTests
     }
 
     private static StepContext Ctx(List<string>? log = null, Func<string, PointAdjustment?>? adjust = null,
-        (int, int)? actual = null, bool shared = false)
+        (int, int)? actual = null, bool shared = false, ScreenGuard? guard = null)
         => new("CElCPapa", 5400534998, shared ? "clearat-test" : "m1", (800, 599), actual ?? (800, 599), 100,
-            adjust ?? (_ => null), s => log?.Add(s), SharedBaseline: shared);
+            adjust ?? (_ => null), s => log?.Add(s), SharedBaseline: shared, Guard: guard);
 
     private static ColorCheck GreenCheck(Rgb? other = null) => new(new CheckBox(), Green, other);
 
@@ -1476,5 +1476,134 @@ public class StepRunnerTests
         Assert.Equal(new[] { 1 }, io.Released);
         Assert.Equal(2, io.Parks.Count); // the start, then the refresh after 'a' broke
         Assert.Contains("ClearAt: shared baseline (2 parks for 2 points)", log);
+    }
+
+    // ---------- ClearAt: the guard (live safety bug 2026-09-28 23:49) ----------
+
+    /// <summary>The Auto Mine dot while clearing (Auto Mine off, so red), 3x3 at 55,289.</summary>
+    private static readonly ScreenGuard Guard = new(55, 289, 3, 3, DotRed, 30);
+
+    private const string GuardStop = "ClearAt stopped: the guard at (55,289) isn't the expected colour (saw #F5F5F5); "
+        + "something may be over the game (a menu or a player's profile).";
+
+    /// <summary>Paints the guard spot over <paramref name="io"/>'s screen: the red dot while
+    /// <paramref name="red"/> holds, white (a popup over the game) once it does not.</summary>
+    private static FakeIo Guarded(FakeIo io, Func<FakeIo, bool> red)
+    {
+        var under = io.Screen;
+        io.Screen = (t, x, y) => x is >= 55 and < 58 && y is >= 289 and < 292 ? (red(io) ? DotRed : White) : under(t, x, y);
+        return io;
+    }
+
+    /// <summary>True when nothing at all was sent after the last button release.</summary>
+    private static bool NothingSentAfterTheLastRelease(FakeIo io)
+        => io.Sent.Count > 0 && io.Sent[^1].Kind == MacroEventKind.MouseUp && !io.ButtonDown;
+
+    [Fact]
+    public async Task A_guard_that_keeps_its_colour_lets_the_pass_run_as_before()
+    {
+        var log = new List<string>();
+        var io = Guarded(Blocks((100, 100, 1), (300, 100, 2)), _ => true);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, Row5), Ctx(log, shared: true, guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(3, io.Downs.Count());
+        Assert.Contains("step 1 'a' broke after 1 hold(s), 0.3 s held", log);
+        Assert.Contains("step 3 'c' broke after 2 hold(s), 0.9 s held", log);
+        Assert.Contains("ClearAt: shared baseline (3 parks for 5 points)", log);
+        // Sampled at every point and before every hold: 5 points, 3 holds.
+        Assert.True(io.CaptureRects.Count(c => c == (55, 289, 3, 3)) >= 8);
+    }
+
+    [Fact]
+    public async Task A_guard_that_turns_white_before_point_3_stops_with_no_input_after_it()
+    {
+        var log = new List<string>();
+        var io = Guarded(Blocks((100, 100, 1), (200, 100, 1), (300, 100, 1)), io => io.Ups.Count() < 2);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, Row5), Ctx(log, shared: true, guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal(2, r.StepIndex); // a check failure at step 3: check-failed on the wire
+        Assert.Equal(GuardStop, r.Reason);
+        Assert.Equal(new[] { (100, 100), (200, 100) }, io.Downs.Select(d => (d.X, d.Y)));
+        Assert.True(NothingSentAfterTheLastRelease(io)); // point 3 never moved, hovered or pressed
+        Assert.Equal((200, 100), (io.Sent[^1].X, io.Sent[^1].Y));
+        Assert.Equal(2, io.Parks.Count); // point 3 never parked either
+        Assert.Empty(io.Released);
+    }
+
+    [Fact]
+    public async Task A_guard_that_fails_between_holds_stops_before_the_next_hold()
+    {
+        var log = new List<string>();
+        var io = Guarded(Blocks((100, 100, null)), io => io.Ups.Count() < 1);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a"), (200, 100, "b")),
+            Ctx(log, shared: true, guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal((0, GuardStop), (r.StepIndex, r.Reason));
+        Assert.Equal(new long[] { 300 }, HeldMs(io)); // one hold, released, and no second
+        Assert.True(NothingSentAfterTheLastRelease(io));
+        Assert.Contains("step 1 'a' pressed 0.3 s over 1 hold(s), then the playback ended", log);
+    }
+
+    [Fact]
+    public async Task A_guard_that_fails_before_a_fresh_baseline_stops_without_parking_again()
+    {
+        var io = Guarded(Blocks((100, 100, null)), io => io.Ups.Count() < 2);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(shared: true, guard: Guard), io, default);
+
+        Assert.Equal((0, GuardStop), (r.StepIndex, r.Reason));
+        Assert.Equal(new long[] { 300, 600 }, HeldMs(io));
+        Assert.Single(io.Parks); // the 3rd hold's fresh-baseline park never happened
+        Assert.True(NothingSentAfterTheLastRelease(io));
+    }
+
+    [Fact]
+    public async Task A_guard_already_covered_at_the_start_sends_nothing_at_all()
+    {
+        var io = Guarded(Blocks((100, 100, 1)), _ => false);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(shared: true, guard: Guard), io, default);
+
+        Assert.Equal((0, GuardStop), (r.StepIndex, r.Reason));
+        Assert.Empty(io.Sent);
+        Assert.Empty(io.Parks);
+    }
+
+    [Fact]
+    public async Task A_guard_colour_within_its_tolerance_passes()
+    {
+        // #FF135A seen as #EB1E6E: distance sqrt(20^2 + 11^2 + 20^2) = 30.3, inside 31, outside 30.
+        var io = new FakeIo();
+        var near = new Rgb(255 - 20, 19 + 11, 90 + 20);
+        io.Screen = (_, x, y) => x is >= 55 and < 58 && y is >= 289 and < 292 ? near : Rock;
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(shared: true, guard: Guard with { Tolerance = 31 }), io, default);
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+
+        var r2 = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(shared: true, guard: Guard), new FakeIo { Screen = io.Screen }, default);
+        Assert.Equal("ClearAt stopped: the guard at (55,289) isn't the expected colour (saw #EB1E6E); "
+            + "something may be over the game (a menu or a player's profile).", r2.Reason);
+    }
+
+    [Fact]
+    public async Task The_guard_scales_with_the_window_like_the_points()
+    {
+        // Measured at 800x599, played at 1000x749: 55,289 lands at 69,361 and the 3 px box grows to 4.
+        var io = new FakeIo { Client = (1000, 749), Screen = (_, _, _) => DotRed };
+        await StepRunner.RunAsync(ClearAtSteps(null, (400, 244, "a")), Ctx(shared: true, actual: (1000, 749), guard: Guard), io, default);
+
+        Assert.Contains((69, 361, 4, 4), io.CaptureRects);
+        Assert.DoesNotContain((55, 289, 3, 3), io.CaptureRects);
+    }
+
+    [Fact]
+    public async Task Without_a_guard_a_white_dot_changes_nothing()
+    {
+        var io = Guarded(Blocks((100, 100, 1)), _ => false);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a")), Ctx(shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Single(io.Downs);
+        Assert.DoesNotContain(io.CaptureRects, c => c == (55, 289, 3, 3));
     }
 }
