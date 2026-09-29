@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Labs626.UrTask.PluginHost;
 
 namespace Labs626.UrTask.Macros.Steps;
@@ -37,6 +38,21 @@ internal sealed class RealStepIo : IStepIo
 
     public bool MoveRelative(int dx, int dy) => MacroPlayer.SendMouseRelative(dx, dy);
 
+    /// <summary>A move only, never a click, and only onto the target's own frame: the screen point
+    /// must lie inside the window's outer rect above its client area (a borderless window has no
+    /// such row), and the window under it must be the target itself, not one covering it. Anything
+    /// else refuses without moving, and the runner takes its baseline another way.</summary>
+    public bool ParkPointer(int clientX, int clientY)
+    {
+        var origin = _metrics.ClientOrigin(_hwnd);
+        var outer = _metrics.OuterRect(_hwnd);
+        if (origin is null || outer is null) return false;
+        var (sx, sy) = WindowSpaceMath.ToScreen((clientX, clientY), origin.Value);
+        if (!WindowSpaceMath.OnFrameAboveClient((sx, sy), outer.Value, origin.Value)) return false;
+        if (GetAncestor(WindowFromPoint(new POINT { x = sx, y = sy }), GA_ROOT) != _hwnd) return false;
+        return MacroPlayer.SendMacroEvent(new MacroEvent(0, MacroEventKind.MouseMove, 0, sx, sy, 0, 0));
+    }
+
     public (int X, int Y)? CursorClient()
     {
         var origin = _metrics.ClientOrigin(_hwnd);
@@ -57,4 +73,15 @@ internal sealed class RealStepIo : IStepIo
     public bool TargetInForeground() => _foreground.ResolveForegroundAccount()?.RobloxUserId == _targetUserId;
 
     public Task Delay(int ms, CancellationToken ct) => ms <= 0 ? Task.CompletedTask : Task.Delay(ms, ct);
+
+    private const uint GA_ROOT = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int x; public int y; }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 }

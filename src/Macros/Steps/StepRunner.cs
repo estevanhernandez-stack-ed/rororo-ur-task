@@ -10,6 +10,11 @@ internal interface IStepIo
     /// held button still comes up after the target has closed (the v3 release rule).</summary>
     bool ReleaseButton(int button);
     bool MoveRelative(int dx, int dy);
+    /// <summary>Moves the pointer to a client-space point above the client area, on the target
+    /// window's own title bar, where it can hover no block. A move only, never a click. False, with
+    /// nothing moved, when that point is not on the target's own frame (a borderless window has
+    /// none, another window may cover it) or the window has gone.</summary>
+    bool ParkPointer(int clientX, int clientY);
     (int X, int Y)? CursorClient();
     (int W, int H)? ClientSize();
     PixelBlock? Capture(int clientX, int clientY, int w, int h);
@@ -60,6 +65,7 @@ internal static class StepRunner
         }
         public bool ReleaseButton(int button) => inner.ReleaseButton(button);
         public bool MoveRelative(int dx, int dy) => inner.MoveRelative(dx, dy);
+        public bool ParkPointer(int clientX, int clientY) => inner.ParkPointer(clientX, clientY);
         public (int X, int Y)? CursorClient() => inner.CursorClient();
         public (int W, int H)? ClientSize() => inner.ClientSize();
         public PixelBlock? Capture(int clientX, int clientY, int w, int h) => inner.Capture(clientX, clientY, w, h);
@@ -227,8 +233,8 @@ internal static class StepRunner
 
         await io.Delay(p.DelayMs, ct);
         await JumpAsync(io, at, ct);
-        var (seen, count) = await AwaitOutlineAsync(reach, baseline: 0, io, name, index, ct); // points take no baseline
-        LogOutline(ctx, index, label, seen, count, reach.Need);
+        var (seen, area) = await AwaitOutlineAsync(reach, baseline: 0, io, name, index, ct); // points take no baseline
+        LogOutline(ctx, index, label, seen, area.Count, reach.Need);
         if (!seen) { tally.ReachSkips++; return; }
         await ClickAsync(io, at, p.Button, heldButtons, ct); // already on the point: no second jump
     }
@@ -339,8 +345,8 @@ internal static class StepRunner
     /// <see cref="StepTiming.HoldDriftPolls"/> polls in a row, or at MaxMs. With no MaxMs there is
     /// no time limit: ore is never abandoned for taking long (ore-stop spec, decision 5).
     /// <para>With a reach check (ore-stop pulse spec): after the jump, no white outline within
-    /// <see cref="StepTiming.ReachGraceMs"/> skips the step without pressing. Otherwise it plays
-    /// as beats (<see cref="PlayBeatsAsync"/>), and colour drift plays no part.</para>
+    /// <see cref="StepTiming.ReachGraceMs"/> skips the step without pressing. Otherwise it taps
+    /// one block (<see cref="PlayTapsAsync"/>), and colour drift plays no part.</para>
     /// </summary>
     private static async Task PlayHoldAsync(HoldStep h, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, RunTally tally, CancellationToken ct)
     {
@@ -357,14 +363,14 @@ internal static class StepRunner
         await io.Delay(h.DelayMs, ct);
         // Baseline before the pointer lands (controller ruling 2026-09-28): white quartz passes the
         // raw count with no hover, so a reach hold looks for the rise over the box as it is unhovered.
-        var baseline = reach is { } rb ? await BaselineAsync(rb, io, client, name, index, ct) : 0;
+        var baseline = reach is { } rb ? await BaselineAsync(rb, io, client, ctx, index, label, name, ct) : 0;
         await JumpAsync(io, at, ct);
         if (reach is { } r0)
         {
-            var (seen0, count0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
-            LogOutline(ctx, index, label, seen0, count0, r0.Need, baseline);
+            var (seen0, area0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
+            LogOutline(ctx, index, label, seen0, area0.Count, r0.Need, baseline);
             if (!seen0) { tally.ReachSkips++; return; }
-            await PlayBeatsAsync(h, r0, baseline, at, index, label, name, ctx, io, heldButtons, ct);
+            await PlayTapsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
             return;
         }
         var start = SampleGuarded(io, box) ?? throw new StopException($"{name} could not see the window.", index);
@@ -410,56 +416,79 @@ internal static class StepRunner
     }
 
     /// <summary>
-    /// A hold behind a reach check, as hold-release-look beats (ore-stop pulse spec, found in the
-    /// live run). The game hides the outline while the button is down, so it cannot be watched
-    /// during a press: press for <see cref="StepTiming.HoldBeatMs"/>, let go, wait
-    /// <see cref="StepTiming.LookSettleMs"/>, and look. Still outlined means the block is still
-    /// there, so press again; no outline means it broke or went out of reach. A hit darkens the
-    /// block, so colour drift ends nothing here.
-    /// <para>MaxMs bounds the pressed time across beats: the last beat is cut to what is left, and
-    /// the step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
+    /// A hold behind a reach check breaks one block and stops (ore-stop pulse spec, "One block per
+    /// spot"). A long press digs a column: the main breaks a block about every 0.3 s, and the block
+    /// below lights up at the same spot. So it taps for <see cref="StepTiming.TapMs"/>, lets go,
+    /// waits <see cref="StepTiming.LookSettleMs"/>, and looks (the game hides the outline while the
+    /// button is down). No outline: the block broke. The outline's bounding box moved (any edge more
+    /// than <see cref="StepTiming.OutlineMoveTolerancePx"/>): the block broke and the next one down
+    /// is showing, which it leaves alone. The same box: a hit, not a break, so it taps again. A hit
+    /// darkens the block, so colour drift ends nothing here.
+    /// <para>MaxMs bounds the pressed time across taps: the last tap is cut to what is left, and the
+    /// step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
     /// </summary>
-    private static async Task PlayBeatsAsync(HoldStep h, ReachPlan r, int baseline, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task PlayTapsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
     {
-        long pressedMs = 0, beatStart = -1;
-        int beats = 0;
-        string why;
+        long pressedMs = 0, tapStart = -1;
+        int taps = 0;
+        string outcome;
         try
         {
             while (true)
             {
-                var beatMs = h.MaxMs is { } max ? Math.Min(StepTiming.HoldBeatMs, max - pressedMs) : StepTiming.HoldBeatMs;
+                var tapMs = h.MaxMs is { } max ? Math.Min(StepTiming.TapMs, max - pressedMs) : StepTiming.TapMs;
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
                 heldButtons.Add(h.Button);
-                beats++;
-                beatStart = io.NowMs;
-                while (io.NowMs - beatStart < beatMs)
+                taps++;
+                tapStart = io.NowMs;
+                while (io.NowMs - tapStart < tapMs)
                 {
                     // Foreground only: the outline is hidden while pressed and a hit moves the colour.
-                    await io.Delay((int)Math.Min(StepTiming.PollMs, beatMs - (io.NowMs - beatStart)), ct);
+                    await io.Delay((int)Math.Min(StepTiming.PollMs, tapMs - (io.NowMs - tapStart)), ct);
                     GuardForeground(io);
                 }
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, at.X, at.Y, h.Button, 0));
                 heldButtons.Remove(h.Button);
-                pressedMs += io.NowMs - beatStart;
-                beatStart = -1;
-                if (pressedMs >= h.MaxMs) { why = "reached its limit"; break; }
+                pressedMs += io.NowMs - tapStart;
+                tapStart = -1;
+                if (pressedMs >= h.MaxMs)
+                {
+                    outcome = string.Create(CultureInfo.InvariantCulture,
+                        $"pressed {pressedMs / 1000.0:F1} s over {taps} tap(s), released: reached its limit");
+                    break;
+                }
 
                 await io.Delay(StepTiming.LookSettleMs, ct);
-                var (seen, _) = await AwaitOutlineAsync(r, baseline, io, name, index, ct); // the same baseline as the pre-press check
-                if (!seen) { why = "outline gone after release"; break; }
+                var (seen, after) = await AwaitOutlineAsync(r, baseline, io, name, index, ct); // the same baseline as the pre-press check
+                if (!seen) { outcome = string.Create(CultureInfo.InvariantCulture, $"broke after {taps} tap(s)"); break; }
+                if (OutlineMoved(before.Bounds, after.Bounds))
+                {
+                    outcome = string.Create(CultureInfo.InvariantCulture, $"broke after {taps} tap(s) (outline moved to the next block)");
+                    break;
+                }
+                before = after;
             }
         }
         catch
         {
             // As for any hold: RunAsync's finally releases a button still in heldButtons.
-            var total = pressedMs + (beatStart >= 0 ? io.NowMs - beatStart : 0);
+            var total = pressedMs + (tapStart >= 0 ? io.NowMs - tapStart : 0);
             ctx.Log(string.Create(CultureInfo.InvariantCulture,
-                $"step {index + 1} '{label}' held {total / 1000.0:F1} s over {beats} beat(s), then the playback ended"));
+                $"step {index + 1} '{label}' pressed {total / 1000.0:F1} s over {taps} tap(s), then the playback ended"));
             throw;
         }
-        ctx.Log(string.Create(CultureInfo.InvariantCulture,
-            $"step {index + 1} '{label}' held {pressedMs / 1000.0:F1} s over {beats} beat(s), released: {why}"));
+        ctx.Log(string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' {outcome}"));
+    }
+
+    /// <summary>True when any edge of the outline's bounding box moved more than
+    /// <see cref="StepTiming.OutlineMoveTolerancePx"/>. A seen outline always has bounds (its count
+    /// is at least Need over the baseline); a missing one reads as moved, never as the same block.</summary>
+    private static bool OutlineMoved((int MinX, int MinY, int MaxX, int MaxY)? a, (int MinX, int MinY, int MaxX, int MaxY)? b)
+    {
+        if (a is not { } p || b is not { } q) return true;
+        const int tol = StepTiming.OutlineMoveTolerancePx;
+        return Math.Abs(p.MinX - q.MinX) > tol || Math.Abs(p.MinY - q.MinY) > tol
+            || Math.Abs(p.MaxX - q.MaxX) > tol || Math.Abs(p.MaxY - q.MaxY) > tol;
     }
 
     // ---------- reach (the white outline) ----------
@@ -478,41 +507,59 @@ internal static class StepRunner
         return new ReachPlan(rect, PointMath.ScaledCount(reach.MinCount, ctx.RecordedClient, ctx.ActualClient), reach.WhiteMin);
     }
 
-    /// <summary>With the pointer already on the spot: count until the outline shows, for at most
+    /// <summary>With the pointer already on the spot: measure until the outline shows, for at most
     /// <see cref="StepTiming.ReachGraceMs"/>. The outline shows when the count rises at least Need
-    /// over <paramref name="baseline"/> (0 for reach points). A lost foreground aborts and a failed
-    /// capture stops the step; neither ever reads as "no outline".</summary>
-    private static async Task<(bool Seen, int Count)> AwaitOutlineAsync(ReachPlan r, int baseline, IStepIo io, string name, int index, CancellationToken ct)
+    /// over <paramref name="baseline"/> (0 for reach points). The area carries the count and the
+    /// near-white bounds of the last look. A lost foreground aborts and a failed capture stops the
+    /// step; neither ever reads as "no outline".</summary>
+    private static async Task<(bool Seen, NearWhiteArea Area)> AwaitOutlineAsync(ReachPlan r, int baseline, IStepIo io, string name, int index, CancellationToken ct)
     {
         var start = io.NowMs;
         while (true)
         {
-            var count = CountGuarded(io, r.Rect, r.WhiteMin) ?? throw new StopException($"{name} could not see the window.", index);
-            if (count - baseline >= r.Need) return (true, count);
-            if (io.NowMs - start >= StepTiming.ReachGraceMs) return (false, count);
+            var area = MeasureGuarded(io, r.Rect, r.WhiteMin) ?? throw new StopException($"{name} could not see the window.", index);
+            if (area.Count - baseline >= r.Need) return (true, area);
+            if (io.NowMs - start >= StepTiming.ReachGraceMs) return (false, area);
             await io.Delay(StepTiming.PollMs, ct);
         }
     }
 
+    /// <summary>Where the baseline park puts the pointer: this far above the client area, on the
+    /// title bar, where it can hover no block.</summary>
+    private const int TitleBarParkY = -12;
+
     /// <summary>
     /// A reach hold's baseline (controller ruling 2026-09-28): the box's near-white count with the
     /// pointer off it. White quartz passes the count with no hover at all, so an out-of-reach quartz
-    /// block would otherwise read as outlined and be pressed forever. A pointer already inside the
-    /// box moves one box-width outside it first (right of the box, else left, at its middle height,
-    /// clamped to the client) and waits <see cref="StepTiming.LookSettleMs"/> for the hover outline
-    /// to go. A failed capture stops the step like any other.
+    /// block would otherwise read as outlined and be pressed forever. The pointer parks on the
+    /// window's title bar (client centre x, <see cref="TitleBarParkY"/>), a move only, and waits
+    /// <see cref="StepTiming.LookSettleMs"/> for the hover outline to clear ("One block per spot":
+    /// a spot one box-width away can light the neighbouring block, whose edge falls in the box).
+    /// <para>A window with no title bar (borderless) refuses the park. Then, as before, a pointer
+    /// already inside the box moves one box-width outside it (right of the box, else left, at its
+    /// middle height, clamped to the client) and waits the same settle. A failed capture stops the
+    /// step like any other.</para>
     /// </summary>
-    private static async Task<int> BaselineAsync(ReachPlan r, IStepIo io, (int W, int H) client, string name, int index, CancellationToken ct)
+    private static async Task<int> BaselineAsync(ReachPlan r, IStepIo io, (int W, int H) client, StepContext ctx, int index, string label, string name, CancellationToken ct)
     {
-        if (io.CursorClient() is { } c && InsideRect(c, r.Rect))
+        GuardForeground(io);
+        if (io.ParkPointer(client.W / 2, TitleBarParkY))
         {
-            var y = Math.Clamp(r.Rect.Y + r.Rect.H / 2, 0, client.H - 1);
-            var x = Math.Clamp(r.Rect.X + 2 * r.Rect.W, 0, client.W - 1);
-            if (InsideRect((x, y), r.Rect)) x = Math.Clamp(r.Rect.X - r.Rect.W, 0, client.W - 1);
-            SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, x, y, 0, 0));
             await io.Delay(StepTiming.LookSettleMs, ct);
         }
-        return CountGuarded(io, r.Rect, r.WhiteMin) ?? throw new StopException($"{name} could not see the window.", index);
+        else
+        {
+            ctx.Log($"step {index + 1} '{label}' could not park the pointer on the title bar; took the baseline beside the box");
+            if (io.CursorClient() is { } c && InsideRect(c, r.Rect))
+            {
+                var y = Math.Clamp(r.Rect.Y + r.Rect.H / 2, 0, client.H - 1);
+                var x = Math.Clamp(r.Rect.X + 2 * r.Rect.W, 0, client.W - 1);
+                if (InsideRect((x, y), r.Rect)) x = Math.Clamp(r.Rect.X - r.Rect.W, 0, client.W - 1);
+                SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, x, y, 0, 0));
+                await io.Delay(StepTiming.LookSettleMs, ct);
+            }
+        }
+        return MeasureGuarded(io, r.Rect, r.WhiteMin)?.Count ?? throw new StopException($"{name} could not see the window.", index);
     }
 
     private static bool InsideRect((int X, int Y) p, (int X, int Y, int W, int H) b)
@@ -530,12 +577,12 @@ internal static class StepRunner
             : string.Create(CultureInfo.InvariantCulture, $"step {index + 1} '{label}' no outline, skipped ({n})"));
     }
 
-    /// <summary>A near-white count guarded like <see cref="SampleGuarded"/>. Null when the capture
-    /// fails or comes back the wrong shape.</summary>
-    private static int? CountGuarded(IStepIo io, (int X, int Y, int W, int H) r, int whiteMin)
+    /// <summary>A near-white measure (count and bounds) guarded like <see cref="SampleGuarded"/>.
+    /// Null when the capture fails or comes back the wrong shape.</summary>
+    private static NearWhiteArea? MeasureGuarded(IStepIo io, (int X, int Y, int W, int H) r, int whiteMin)
     {
         GuardForeground(io);
-        return io.Capture(r.X, r.Y, r.W, r.H)?.CountNearWhite(r.X, r.Y, r.W, r.H, whiteMin);
+        return io.Capture(r.X, r.Y, r.W, r.H)?.MeasureNearWhite(r.X, r.Y, r.W, r.H, whiteMin);
     }
 
     /// <summary>A capture guarded like a send: another window in front covers the target, so a

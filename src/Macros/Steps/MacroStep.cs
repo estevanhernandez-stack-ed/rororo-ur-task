@@ -32,10 +32,10 @@ public sealed record PointStep(
 /// tolerance, or at <see cref="MaxMs"/> when one is set; with no MaxMs there is no time limit
 /// (ore-stop spec, decision 5). Id, adjustments and scaling work exactly as for a point.
 /// <para><see cref="Reach"/>: when set, the hold presses only if the white outline shows with the
-/// pointer on the spot (else the step is skipped). It then plays as beats instead: press for
-/// <see cref="StepTiming.HoldBeatMs"/>, let go, look for the outline, and press again while it
-/// shows. Colour drift ends nothing there, and MaxMs bounds the pressed time across beats
-/// (ore-stop pulse spec, found in the live run).</para></summary>
+/// pointer on the spot (else the step is skipped). It then breaks one block and stops: tap for
+/// <see cref="StepTiming.TapMs"/>, let go, look, and tap again only while the same outline shows.
+/// Colour drift ends nothing there, and MaxMs bounds the pressed time across taps (ore-stop pulse
+/// spec, "One block per spot").</para></summary>
 public sealed record HoldStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
     HoldCheck? Check = null, int? MaxMs = null, OutlineCheck? Reach = null) : MacroStep(DelayMs);
@@ -87,13 +87,19 @@ public static class StepTiming
     /// two; a pass ends the wait at once, so only a skip pays it.</summary>
     public const int ReachGraceMs = 300;
 
-    /// <summary>One press of a hold behind a reach check. The game hides the outline while the
-    /// button is down, so a reach hold presses for a beat, lets go, and looks.</summary>
-    public const int HoldBeatMs = 1000;
+    /// <summary>One tap of a hold behind a reach check. The game hides the outline while the button
+    /// is down, so a reach hold taps, lets go, and looks. 250 ms broke one block per tap in the live
+    /// test; a longer press digs on into the block below, which lights up at the same spot.</summary>
+    public const int TapMs = 250;
 
-    /// <summary>After a beat's release, how long before the look starts, so the outline can come
-    /// back on hover.</summary>
+    /// <summary>After a tap's release, how long before the look starts, so the outline can come
+    /// back on hover. Also the wait after the baseline park, for the outline to clear.</summary>
     public const int LookSettleMs = 150;
+
+    /// <summary>How far any edge of the outline's bounding box may move across a tap and still be
+    /// the same block. A break shows the next block down, whose outline moves and shrinks; a hit
+    /// leaves the edges where they were, within a few pixels.</summary>
+    public const int OutlineMoveTolerancePx = 6;
 
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
