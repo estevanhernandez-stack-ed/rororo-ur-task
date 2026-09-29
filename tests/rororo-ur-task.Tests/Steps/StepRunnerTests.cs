@@ -93,9 +93,9 @@ public class StepRunnerTests
     }
 
     private static StepContext Ctx(List<string>? log = null, Func<string, PointAdjustment?>? adjust = null,
-        (int, int)? actual = null)
-        => new("CElCPapa", 5400534998, "m1", (800, 599), actual ?? (800, 599), 100,
-            adjust ?? (_ => null), s => log?.Add(s));
+        (int, int)? actual = null, bool shared = false)
+        => new("CElCPapa", 5400534998, shared ? "clearat-test" : "m1", (800, 599), actual ?? (800, 599), 100,
+            adjust ?? (_ => null), s => log?.Add(s), SharedBaseline: shared);
 
     private static ColorCheck GreenCheck(Rgb? other = null) => new(new CheckBox(), Green, other);
 
@@ -1256,5 +1256,174 @@ public class StepRunnerTests
         Assert.Contains((450, 255, 100, 100), io.CaptureRects);
         Assert.Equal((500, 305), (io.Downs.Single().X, io.Downs.Single().Y));
         Assert.Contains("step 1 'ore 1' outline seen (280 near-white px over a baseline of 0, needs 75)", log);
+    }
+
+    // ---------- ClearAt: one shared baseline per pass (live finding 2026-09-28 21:00) ----------
+
+    /// <summary>Five points in a row, 100 px apart. Their 80 px boxes span x 60..539, y 60..139.</summary>
+    private static readonly (int X, int Y, string Label)[] Row5 =
+        { (100, 100, "a"), (200, 100, "b"), (300, 100, "c"), (400, 100, "d"), (500, 100, "e") };
+    private static readonly (int X, int Y, int W, int H) Row5Union = (60, 60, 480, 80);
+
+    /// <summary>Blocks centred on the given points, each with the hover outline of
+    /// <see cref="Framed"/> (only while the pointer is on it and no button is down). Each breaks
+    /// after its own number of holds (null never does) and is rock from then on; rock everywhere
+    /// else.</summary>
+    private static FakeIo Blocks(params (int Cx, int Cy, int? BreaksAfter)[] blocks)
+    {
+        var io = new FakeIo();
+        io.Screen = (t, x, y) =>
+        {
+            foreach (var b in blocks)
+            {
+                if (Math.Max(Math.Abs(x - b.Cx), Math.Abs(y - b.Cy)) > 28) continue;
+                if (b.BreaksAfter is { } n && io.Ups.Count(u => (u.X, u.Y) == (b.Cx, b.Cy)) >= n) return Rock;
+                return Framed(b.Cx, b.Cy, shown: _ => Hovered(io, b.Cx, b.Cy) && !io.ButtonDown)(t, x, y);
+            }
+            return Rock;
+        };
+        return io;
+    }
+
+    [Fact]
+    public async Task A_ClearAt_pass_that_skips_every_point_parks_and_counts_the_background_once()
+    {
+        var log = new List<string>();
+        var io = Blocks(); // nothing in reach
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, Row5), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.True(r.SkippedByReach);
+        Assert.Empty(io.Downs);
+        Assert.Equal((400, -12, 0L), Assert.Single(io.Parks));
+        // One capture of the union of the boxes, at LookSettleMs; every other capture is a point's own look.
+        Assert.Equal((Row5Union, (long)StepTiming.LookSettleMs), (io.CaptureRects[0], io.CaptureTimes[0]));
+        Assert.Single(io.CaptureRects, c => c == Row5Union);
+        Assert.All(io.CaptureRects.Skip(1), c => Assert.Equal((80, 80), (c.W, c.H)));
+        Assert.Contains("step 5 'e' no outline, skipped (0 near-white px over a baseline of 0, needs 60)", log);
+        Assert.Contains("ClearAt: shared baseline (1 park for 5 points)", log);
+    }
+
+    [Fact]
+    public async Task A_ClearAt_pass_parks_again_only_after_a_break()
+    {
+        // Points 1 and 3 break (after 1 and 2 holds); 2, 4 and 5 are out of reach. Parks: the start,
+        // after the break at 1, after the break at 3. A break at the last point would need none.
+        var log = new List<string>();
+        var io = Blocks((100, 100, 1), (300, 100, 2));
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, Row5), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(3, io.Downs.Count());
+        Assert.Equal(3, io.Parks.Count);
+        Assert.Equal(3, io.CaptureRects.Count(c => c == Row5Union));
+        var ups = io.Ups.Select(u => u.TimestampMs).ToArray();
+        Assert.True(io.Parks[1].T > ups[0]);  // after point 1 broke
+        Assert.True(io.Parks[2].T > ups[2]);  // after point 3 broke, not after its first hold
+        Assert.Contains("step 1 'a' broke after 1 hold(s), 0.3 s held", log);
+        Assert.Contains("step 3 'c' broke after 2 hold(s), 0.9 s held", log);
+        Assert.Contains("ClearAt: shared baseline (3 parks for 5 points)", log);
+    }
+
+    [Fact]
+    public async Task The_shared_baseline_still_skips_white_quartz_without_an_outline()
+    {
+        var log = new List<string>();
+        var io = QuartzBlock(outlined: false);
+        var r = await StepRunner.RunAsync(ClearAtSteps(10_000, (400, 244, "quartz 1"), (150, 150, "stone 2")),
+            Ctx(log, shared: true), io, default);
+
+        Assert.True(r.SkippedByReach);
+        Assert.Empty(io.Downs);
+        Assert.Single(io.Parks);
+        Assert.Contains("step 1 'quartz 1' no outline, skipped (3025 near-white px over a baseline of 3025, needs 60)", log);
+        Assert.Contains("step 2 'stone 2' no outline, skipped (0 near-white px over a baseline of 0, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task White_quartz_with_an_outline_presses_against_the_shared_baseline()
+    {
+        var log = new List<string>();
+        var io = QuartzBlock(outlined: true, breaksAfter: 1);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (400, 244, "quartz 1")), Ctx(log, shared: true), io, default);
+
+        Assert.False(r.SkippedByReach);
+        Assert.Single(io.Downs);
+        Assert.Contains("step 1 'quartz 1' outline seen (3249 near-white px over a baseline of 3025, needs 60)", log);
+    }
+
+    [Fact]
+    public async Task Recorded_reach_holds_still_park_before_every_step()
+    {
+        var log = new List<string>();
+        var io = Blocks();
+        var r = await StepRunner.RunAsync(new MacroStep[]
+            { ReachHold(), ReachHold(x: 150, y: 150) with { Id = "spot-2" }, ReachHold(x: 600, y: 400) with { Id = "spot-3" } },
+            Ctx(log), io, default);
+
+        Assert.True(r.SkippedByReach);
+        Assert.Equal(3, io.Parks.Count);
+        Assert.DoesNotContain(log, l => l.StartsWith("ClearAt:"));
+    }
+
+    [Fact]
+    public async Task A_shared_pass_with_the_park_refused_takes_the_frame_beside_every_box()
+    {
+        // Borderless: the park refuses. The pointer is inside the union of the boxes (x 60..539), so
+        // it moves one box-width right of the union (539 + 1 + 80 = 620) at its middle height (100).
+        var log = new List<string>();
+        var io = Blocks();
+        io.ParkWorks = false;
+        io.Cursor = (210, 100);
+        await StepRunner.RunAsync(ClearAtSteps(null, Row5), Ctx(log, shared: true), io, default);
+
+        Assert.Single(io.Parks);
+        Assert.Equal((MacroEventKind.MouseMove, 620, 100, 0L), (io.Sent[0].Kind, io.Sent[0].X, io.Sent[0].Y, io.Sent[0].TimestampMs));
+        Assert.Equal((Row5Union, (long)StepTiming.LookSettleMs), (io.CaptureRects[0], io.CaptureTimes[0]));
+        Assert.Single(log, l => l.Contains("could not park the pointer on the title bar"));
+        Assert.Contains("ClearAt: shared baseline (1 park for 5 points)", log);
+    }
+
+    [Fact]
+    public async Task A_shared_pass_keeps_MaxMs_and_reaching_the_limit_is_not_a_break()
+    {
+        var log = new List<string>();
+        var io = Blocks((100, 100, null), (200, 100, null));
+        var r = await StepRunner.RunAsync(ClearAtSteps(10_000, (100, 100, "a"), (200, 100, "b")), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(new long[] { 300, 600, 1200, 2400, 3000, 2500, 300, 600, 1200, 2400, 3000, 2500 }, HeldMs(io));
+        Assert.Single(io.Parks);
+        Assert.Contains("step 1 'a' pressed 10.0 s over 6 hold(s), released: reached its limit", log);
+        Assert.Contains("step 2 'b' pressed 10.0 s over 6 hold(s), released: reached its limit", log);
+    }
+
+    [Fact]
+    public async Task A_shared_pass_that_loses_the_foreground_mid_hold_aborts_and_releases()
+    {
+        var log = new List<string>();
+        var io = Blocks((100, 100, null));
+        io.OnDelay = () => { if (io.Downs.Count() == 2 && io.ButtonDown) io.Foreground = false; };
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a"), (200, 100, "b")), Ctx(log, shared: true), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/2.", r.Reason);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Contains("ClearAt: shared baseline (1 park for 2 points)", log);
+    }
+
+    [Fact]
+    public async Task A_shared_pass_is_cancelled_like_any_playback()
+    {
+        var log = new List<string>();
+        var io = Blocks((100, 100, 1), (200, 100, null));
+        using var cts = new CancellationTokenSource();
+        io.OnDelay = () => { if (io.Downs.Count() == 2 && io.ButtonDown) cts.Cancel(); };
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (100, 100, "a"), (200, 100, "b")), Ctx(log, shared: true), io, cts.Token);
+
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Equal(new[] { 1 }, io.Released);
+        Assert.Equal(2, io.Parks.Count); // the start, then the refresh after 'a' broke
+        Assert.Contains("ClearAt: shared baseline (2 parks for 2 points)", log);
     }
 }
