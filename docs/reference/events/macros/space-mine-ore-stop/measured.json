@@ -36,5 +36,6 @@
     "dragMs": 400,
     "countBackPx": 40,
     "countBackMs": 200
-  }
+  },
+  "turn": { "holdMs": 500, "measuredOn": "2026-09-28" }
 }

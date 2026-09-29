@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 4,
+  "id": "0e5a0000-0000-4000-8000-000000000005",
+  "name": "Camera turn left",
+  "recordMode": "PerWindow",
+  "recordedAgainstUserId": null,
+  "recordedAgainstDisplayName": "agent",
+  "interAltDelayMs": null,
+  "recordedAtUnixMs": 1790467200000,
+  "events": [],
+  "coordSpace": "client",
+  "recordedClientW": 800,
+  "recordedClientH": 599,
+  "recordedMaximized": false,
+  "recordedPlaceId": 8737899170,
+  "allGames": false,
+  "recordedDisplayScale": 100,
+  "steps": [
+    {
+      "kind": "key",
+      "delayMs": 0,
+      "virtualKeyCode": 37,
+      "down": true
+    },
+    {
+      "kind": "key",
+      "delayMs": 500,
+      "virtualKeyCode": 37,
+      "down": false
+    },
+    {
+      "kind": "wait",
+      "delayMs": 300
+    }
+  ]
+}
