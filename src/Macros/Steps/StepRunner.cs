@@ -61,15 +61,25 @@ internal static class StepRunner
     /// every point's reach box, and each point measures its baseline from that frame. A break
     /// changes the scene near it, so it drops the frame and the next reach hold takes a fresh one:
     /// 1 + breaks parks per pass, not one per spot. Recorded macros never share.
+    /// <para>Two guards against a stale frame (controller ruling 2026-09-28): the frame is also
+    /// taken again after <see cref="MaxPointsPerFrame"/> points without a break, and a point about
+    /// to press a third time checks its outline against a fresh frame first
+    /// (<see cref="PlayReachHoldsAsync"/>). A stale baseline under white quartz would press forever.</para>
     /// </summary>
     private sealed class BaselineFrame(IReadOnlyList<MacroStep> steps)
     {
+        public const int MaxPointsPerFrame = 12;
         public IReadOnlyList<MacroStep> Steps { get; } = steps;
         public int Points { get; } = steps.Count(s => s is HoldStep { Reach: not null });
         /// <summary>Null until the first reach hold, and again after a break.</summary>
         public PixelBlock? Frame;
+        /// <summary>How many points have measured their baseline from the current frame.</summary>
+        public int PointsOnFrame;
         public int Parks;
     }
+
+    /// <summary>A reach hold re-checks its outline on a fresh frame before this hold (shared pass only).</summary>
+    private const int FreshBaselineBeforeHold = 3;
 
     /// <summary>Forwards everything to the real IO and notes any button or key going down, so a
     /// press by any step kind (raw steps included) counts. Releases in RunAsync's finally are ups,
@@ -395,7 +405,12 @@ internal static class StepRunner
             var (seen0, area0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
             LogOutline(ctx, index, label, seen0, area0.Count, r0.Need, baseline);
             if (!seen0) { tally.ReachSkips++; return; }
-            var broke = await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, ct);
+            Func<Task<int>>? fresh = shared is null ? null : () =>
+            {
+                shared.Frame = null; // a fresh park and frame, kept for the rest of the pass
+                return SharedBaselineAsync(shared, r0, io, client, ctx, index, label, name, ct);
+            };
+            var broke = await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, fresh, ct);
             if (broke && shared is not null) shared.Frame = null; // the scene nearby changed: a fresh frame next
             return;
         }
@@ -454,9 +469,14 @@ internal static class StepRunner
     /// drift ends nothing here.
     /// <para>MaxMs bounds the pressed time across holds: the last hold is cut to what is left, and
     /// the step ends at the limit without a look. With no MaxMs there is no limit (decision 5).</para>
-    /// <para>True when the block broke; false when the step ended at its MaxMs limit.</para>
+    /// <para>In a shared ClearAt pass (<paramref name="freshBaseline"/> set), two "same box" looks
+    /// may mean a stale baseline rather than a hard block, so before hold
+    /// <see cref="FreshBaselineBeforeHold"/> it parks, takes a fresh baseline, jumps back and looks
+    /// again. No outline over the fresh baseline stops the point: it pressed, so it is no skip.</para>
+    /// <para>True when the block broke; false when the step ended at its MaxMs limit or on the
+    /// fresh-baseline check.</para>
     /// </summary>
-    private static async Task<bool> PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    private static async Task<bool> PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, Func<Task<int>>? freshBaseline, CancellationToken ct)
     {
         long pressedMs = 0, holdStart = -1;
         int holds = 0, nextHoldMs = StepTiming.FirstHoldMs;
@@ -466,6 +486,14 @@ internal static class StepRunner
         {
             while (true)
             {
+                if (freshBaseline is not null && holds == FreshBaselineBeforeHold - 1)
+                {
+                    baseline = await freshBaseline();
+                    await JumpAsync(io, at, ct);
+                    var (still, area) = await AwaitOutlineAsync(r, baseline, io, name, index, ct);
+                    if (!still) { outcome = "no outline on a fresh baseline, stopped"; break; }
+                    before = area;
+                }
                 var holdMs = h.MaxMs is { } max ? Math.Min(nextHoldMs, max - pressedMs) : nextHoldMs;
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, at.X, at.Y, h.Button, 0));
                 heldButtons.Add(h.Button);
@@ -584,13 +612,19 @@ internal static class StepRunner
     /// </summary>
     private static async Task<int> SharedBaselineAsync(BaselineFrame shared, ReachPlan r, IStepIo io, (int W, int H) client, StepContext ctx, int index, string label, string name, CancellationToken ct)
     {
-        if (shared.Frame?.MeasureNearWhite(r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H, r.WhiteMin) is { } kept) return kept.Count;
+        if (shared.PointsOnFrame < BaselineFrame.MaxPointsPerFrame
+            && shared.Frame?.MeasureNearWhite(r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H, r.WhiteMin) is { } kept)
+        {
+            shared.PointsOnFrame++;
+            return kept.Count;
+        }
 
         var union = ReachUnion(shared.Steps, r.Rect, ctx, client);
         await ParkForBaselineAsync(union, r.Rect.W, io, client, ctx, index, label, ct);
         shared.Parks++;
         GuardForeground(io);
         shared.Frame = io.Capture(union.X, union.Y, union.W, union.H);
+        shared.PointsOnFrame = 1;
         return shared.Frame?.MeasureNearWhite(r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H, r.WhiteMin)?.Count
             ?? throw new StopException($"{name} could not see the window.", index);
     }
