@@ -158,6 +158,36 @@ the bottom is near-black with bright blue lines and no red.
   it's no layer, and the pulse rides a burst, as today.
 - The 8-spot ring stays for the old ring triggers. Only the pulse's layer read changes.
 
+### One block per spot: tap, look, stop when it changes (Este chose single blocks, 2026-09-28)
+
+A held beat digs several blocks deep: the main breaks a block about every 0.3 s, and once a block
+breaks, the block below lights up at the same spot. Measured live the same evening (probe frames in
+the sweep folder `2026-09-28-taps\probe`):
+
+- A 250 ms tap broke one surface block on the main and on ItsJustEstePapa, including a red crystal
+  ore on the main.
+- When a block breaks, the outline either disappears or jumps: it moves and shrinks to the next
+  block down, seen through the hole. When a tap hits without breaking, the outline's bounding box
+  stays where it was (same edges within a few pixels).
+- The outline clears within 150 ms of the pointer leaving the block. It does not linger.
+- "Move one box-width away" for the baseline can land on the neighbouring block, which lights up
+  with its edge inside the box (baseline 461 = hovered 461, a false skip).
+
+So, for a reach hold:
+1. **Baseline:** park the pointer on the Roblox window's title bar (above the client area, so it
+   can't hover a block and clicks nothing), wait for the outline to clear, then count.
+2. **Look before:** hover the spot, and record the outline's count over the baseline and its
+   bounding box (the near-white pixels in the box).
+3. **Tap:** press for 250 ms, release.
+4. **Look after:** after a short settle, count and box again.
+   - No outline (count over baseline below minCount): the block broke. Done.
+   - The box moved or resized (any edge more than 6 px from before): the block broke and a new one
+     is showing. Done. Don't press the new one.
+   - Same box: hit, not broken. Tap again from step 3. No time limit (decision 5) unless the step
+     sets maxMs.
+
+This replaces the 1 s hold-release-look beats for reach holds. Non-reach holds are unchanged.
+
 ### The ClearAt bridge call (Ur Task bridge 1.x, additive)
 
 One call carries a whole ordered list of points and plays as ONE playback, so it rides the existing
