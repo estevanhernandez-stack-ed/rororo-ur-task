@@ -32,10 +32,11 @@ public sealed record PointStep(
 /// tolerance, or at <see cref="MaxMs"/> when one is set; with no MaxMs there is no time limit
 /// (ore-stop spec, decision 5). Id, adjustments and scaling work exactly as for a point.
 /// <para><see cref="Reach"/>: when set, the hold presses only if the white outline shows with the
-/// pointer on the spot (else the step is skipped). It then breaks one block and stops: tap for
-/// <see cref="StepTiming.TapMs"/>, let go, look, and tap again only while the same outline shows.
-/// Colour drift ends nothing there, and MaxMs bounds the pressed time across taps (ore-stop pulse
-/// spec, "One block per spot").</para></summary>
+/// pointer on the spot (else the step is skipped). It then breaks one block and stops: hold for
+/// <see cref="StepTiming.FirstHoldMs"/>, let go, look, and hold again, twice as long up to
+/// <see cref="StepTiming.MaxHoldMs"/>, only while the same outline shows. Colour drift ends nothing
+/// there, and MaxMs bounds the pressed time across holds (ore-stop pulse spec, "One block per
+/// spot").</para></summary>
 public sealed record HoldStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
     HoldCheck? Check = null, int? MaxMs = null, OutlineCheck? Reach = null) : MacroStep(DelayMs);
@@ -87,16 +88,21 @@ public static class StepTiming
     /// two; a pass ends the wait at once, so only a skip pays it.</summary>
     public const int ReachGraceMs = 300;
 
-    /// <summary>One tap of a hold behind a reach check. The game hides the outline while the button
-    /// is down, so a reach hold taps, lets go, and looks. 250 ms broke one block per tap in the live
-    /// test; a longer press digs on into the block below, which lights up at the same spot.</summary>
-    public const int TapMs = 250;
+    /// <summary>The first press of a hold behind a reach check. The game hides the outline while the
+    /// button is down, so a reach hold presses, lets go, and looks. Surface stone breaks on one short
+    /// press; a hard block (crystal, the bottom layer) needs the button held, and its progress does
+    /// not carry across releases, so each press after a hit is twice as long as the one before, up
+    /// to <see cref="MaxHoldMs"/>.</summary>
+    public const int FirstHoldMs = 300;
 
-    /// <summary>After a tap's release, how long before the look starts, so the outline can come
+    /// <summary>The longest single press of a reach hold: 300, 600, 1200, 2400, then this each time.</summary>
+    public const int MaxHoldMs = 3000;
+
+    /// <summary>After a hold's release, how long before the look starts, so the outline can come
     /// back on hover. Also the wait after the baseline park, for the outline to clear.</summary>
     public const int LookSettleMs = 150;
 
-    /// <summary>How far any edge of the outline's bounding box may move across a tap and still be
+    /// <summary>How far any edge of the outline's bounding box may move across a hold and still be
     /// the same block. A break shows the next block down, whose outline moves and shrinks; a hit
     /// leaves the edges where they were, within a few pixels.</summary>
     public const int OutlineMoveTolerancePx = 6;

@@ -340,7 +340,7 @@ public class StepRunnerTests
         var down = Assert.Single(io.Downs);
         Assert.Equal((400, 244, ReachPressMs), (down.X, down.Y, down.TimestampMs)); // no grace spent: the outline was there
         Assert.Contains($"step 1 'Spot N' outline seen ({count} near-white px over a baseline of 0, needs 60)", log);
-        Assert.Contains("step 1 'Spot N' pressed 0.2 s over 1 tap(s), released: reached its limit", log);
+        Assert.Contains("step 1 'Spot N' pressed 0.2 s over 1 hold(s), released: reached its limit", log);
     }
 
     [Fact]
@@ -370,12 +370,12 @@ public class StepRunnerTests
         Assert.Contains("step 1 'Spot N' outline seen (224 near-white px over a baseline of 0, needs 60)", log);
     }
 
-    /// <summary>The game as the live tap test found it: the outline shows only while the pointer is
+    /// <summary>The game as the live tests found it: the outline shows only while the pointer is
     /// on the block and no button is held. <paramref name="frameAfter"/> gives the outline frame
-    /// (centre and half-size) after a number of taps, or null for no outline: a block that broke
+    /// (centre and half-size) after a number of holds, or null for no outline: a block that broke
     /// with nothing lit behind it. A break that reveals the next block down returns a smaller
     /// frame somewhere else.</summary>
-    private static FakeIo TapBlock(Func<int, (int Cx, int Cy, int Half)?> frameAfter, Func<FakeIo, Rgb>? inside = null)
+    private static FakeIo HoldBlock(Func<int, (int Cx, int Cy, int Half)?> frameAfter, Func<FakeIo, Rgb>? inside = null)
     {
         var io = new FakeIo();
         io.Screen = (t, x, y) =>
@@ -387,133 +387,143 @@ public class StepRunnerTests
         return io;
     }
 
-    /// <summary>One block at 400,244 that breaks after <paramref name="breaksAfter"/> taps and shows
+    /// <summary>One block at 400,244 that breaks after <paramref name="breaksAfter"/> holds and shows
     /// no outline from then on. Null never breaks.</summary>
     private static FakeIo LiveBlock(int? breaksAfter = null, Func<FakeIo, Rgb>? inside = null)
-        => TapBlock(taps => breaksAfter is { } n && taps >= n ? null : (400, 244, 28), inside);
+        => HoldBlock(holds => breaksAfter is { } n && holds >= n ? null : (400, 244, 28), inside);
 
     /// <summary>When a reach hold presses first: parked and counted at LookSettleMs, then the jump.</summary>
     private const long ReachPressMs = StepTiming.LookSettleMs + StepTiming.JumpWiggleMs;
 
-    /// <summary>One tap and its look: TapMs pressed, LookSettleMs settle, and the outline is back at once.</summary>
-    private const long TapPeriodMs = StepTiming.TapMs + StepTiming.LookSettleMs;
+    /// <summary>The growing holds of a block that never breaks: 300, 600, 1200, 2400, then 3000 each.</summary>
+    private static readonly long[] HoldLadderMs = { 300, 600, 1200, 2400, 3000, 3000 };
+
+    /// <summary>How long each press lasted, in order.</summary>
+    private static long[] HeldMs(FakeIo io)
+    {
+        var ups = io.Ups.ToList();
+        return io.Downs.Select((d, k) => ups[k].TimestampMs - d.TimestampMs).ToArray();
+    }
 
     [Fact]
-    public async Task A_block_that_needs_four_taps_is_tapped_four_times_while_its_box_holds()
+    public async Task A_block_that_breaks_on_the_first_hold_is_held_once_for_300_ms()
     {
+        var log = new List<string>();
+        var io = LiveBlock(breaksAfter: 1);
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach); // it mined: a plain finish
+        Assert.Equal(new long[] { 300 }, HeldMs(io));
+        Assert.Equal(ReachPressMs, Assert.Single(io.Downs).TimestampMs);
+        Assert.Empty(io.Released); // the hold let go itself
+        Assert.Contains("step 1 'Spot N' broke after 1 hold(s), 0.3 s held", log);
+        Assert.DoesNotContain(log, l => l.Contains("moved"));
+    }
+
+    [Fact]
+    public async Task A_block_that_needs_four_holds_is_held_twice_as_long_each_time()
+    {
+        // Mining progress does not carry across releases on hard blocks, so each hit that leaves
+        // the same box doubles the next hold: 300, 600, 1200, 2400, then broke.
         var log = new List<string>();
         var io = LiveBlock(breaksAfter: 4);
         var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
-        Assert.False(r.SkippedByReach); // it mined: a plain finish
-        Assert.Equal(4, io.Downs.Count());
-        Assert.Equal(4, io.Ups.Count());
-        Assert.Empty(io.Released); // every tap let go itself
-        Assert.Equal(Enumerable.Range(0, 4).Select(k => ReachPressMs + k * TapPeriodMs), io.Downs.Select(d => d.TimestampMs));
-        Assert.Contains("step 1 'Spot N' broke after 4 tap(s)", log);
+        Assert.Equal(new long[] { 300, 600, 1200, 2400 }, HeldMs(io));
+        Assert.Empty(io.Released);
+        // Each look waits LookSettleMs after the release and sees the outline at once.
+        var downs = io.Downs.Select(d => d.TimestampMs).ToArray();
+        var ups = io.Ups.Select(u => u.TimestampMs).ToArray();
+        for (int k = 1; k < downs.Length; k++) Assert.Equal(ups[k - 1] + StepTiming.LookSettleMs, downs[k]);
+        Assert.Contains("step 1 'Spot N' broke after 4 hold(s), 4.5 s held", log);
         Assert.Single(log, l => l.Contains("outline seen")); // the pre-press check only, no line per look
+    }
+
+    [Fact]
+    public async Task The_hold_stops_growing_at_its_cap_and_MaxMs_cuts_the_last()
+    {
+        // An unbreakable block with MaxMs 10000: 300, 600, 1200, 2400, 3000, then the last cut to
+        // the 2500 left, and the step ends at the limit without a look.
+        var log = new List<string>();
+        var io = LiveBlock(); // never breaks
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 10_000) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(new long[] { 300, 600, 1200, 2400, 3000, 2500 }, HeldMs(io));
+        Assert.Equal(io.Ups.Last().TimestampMs, io.NowMs); // no look after the limit
+        Assert.Contains("step 1 'Spot N' pressed 10.0 s over 6 hold(s), released: reached its limit", log);
+    }
+
+    [Fact]
+    public async Task Without_MaxMs_an_unbreakable_block_keeps_holding_at_the_cap()
+    {
+        // No time limit (decision 5): past 2400 every hold is the 3000 cap. Stopped from outside.
+        var io = LiveBlock();
+        using var cts = new CancellationTokenSource();
+        io.OnDelay = () => { if (io.Ups.Count() >= HoldLadderMs.Length) cts.Cancel(); };
+        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(), io, cts.Token);
+
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Equal(HoldLadderMs, HeldMs(io).Take(HoldLadderMs.Length));
     }
 
     [Fact]
     public async Task A_break_that_reveals_the_block_below_ends_the_step_without_pressing_it()
     {
-        // Tap 1 breaks the block; the next one down shows through the hole: a smaller outline
+        // Hold 1 breaks the block; the next one down shows through the hole: a smaller outline
         // 40 px up, still inside the 80 px reach box.
         var log = new List<string>();
-        var io = TapBlock(taps => taps == 0 ? (400, 244, 28) : (400, 204, 20));
+        var io = HoldBlock(holds => holds == 0 ? (400, 244, 28) : (400, 204, 20));
         var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
-        Assert.Single(io.Downs);
-        Assert.Single(io.Ups);
-        Assert.Contains("step 1 'Spot N' broke after 1 tap(s) (outline moved to the next block)", log);
-    }
-
-    [Fact]
-    public async Task A_break_with_no_outline_after_ends_the_step()
-    {
-        var log = new List<string>();
-        var io = LiveBlock(breaksAfter: 1);
-        await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
-
-        Assert.Single(io.Downs);
-        Assert.Contains("step 1 'Spot N' broke after 1 tap(s)", log);
-        Assert.DoesNotContain(log, l => l.Contains("moved"));
+        Assert.Equal(new long[] { 300 }, HeldMs(io));
+        Assert.Contains("step 1 'Spot N' broke after 1 hold(s), 0.3 s held (outline moved to the next block)", log);
     }
 
     [Theory]
-    [InlineData(6, 2, "broke after 2 tap(s)")]                                   // jitter: the same block, tap again
-    [InlineData(7, 1, "broke after 1 tap(s) (outline moved to the next block)")] // past the tolerance: a new block
-    public async Task An_outline_that_shifts_within_the_tolerance_is_the_same_block(int shift, int taps, string end)
+    [InlineData(6, 2, "broke after 2 hold(s), 0.9 s held")]                                   // jitter: the same block, hold again
+    [InlineData(7, 1, "broke after 1 hold(s), 0.3 s held (outline moved to the next block)")] // past the tolerance: a new block
+    public async Task An_outline_that_shifts_within_the_tolerance_is_the_same_block(int shift, int holds, string end)
     {
-        var io = TapBlock(t => t switch { 0 => (400, 244, 28), 1 => (400 + shift, 244, 28), _ => null });
+        var io = HoldBlock(t => t switch { 0 => (400, 244, 28), 1 => (400 + shift, 244, 28), _ => null });
         var log = new List<string>();
         await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
 
-        Assert.Equal(taps, io.Downs.Count());
+        Assert.Equal(holds, io.Downs.Count());
         Assert.Contains($"step 1 'Spot N' {end}", log);
     }
 
     [Fact]
-    public async Task Every_tap_runs_its_full_length_while_the_press_hides_the_outline()
+    public async Task Colour_drift_during_a_hold_does_not_end_a_reach_hold()
     {
-        // The outline vanishes the moment the button goes down; that must never cut a tap short.
-        var io = LiveBlock(breaksAfter: 2);
-        await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(), io, default);
-
-        var downs = io.Downs.ToList();
-        var ups = io.Ups.ToList();
-        Assert.Equal(2, downs.Count);
-        for (int k = 0; k < downs.Count; k++)
-            Assert.Equal(StepTiming.TapMs, ups[k].TimestampMs - downs[k].TimestampMs);
-    }
-
-    [Fact]
-    public async Task Colour_drift_during_a_tap_does_not_end_a_reach_hold()
-    {
-        // A hit darkens the block while the button is down (pink to dark red on the live run).
+        // A hit darkens the block while the button is down (pink to dark red on the live run), and
+        // the outline vanishes the moment the button goes down; neither cuts a hold short.
         var log = new List<string>();
         var io = LiveBlock(breaksAfter: 2, inside: f => f.ButtonDown ? Rock : Ore);
         await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
 
-        Assert.Equal(2, io.Downs.Count());
-        Assert.Contains("step 1 'Spot N' broke after 2 tap(s)", log);
+        Assert.Equal(new long[] { 300, 600 }, HeldMs(io));
+        Assert.Contains("step 1 'Spot N' broke after 2 hold(s), 0.9 s held", log);
         Assert.DoesNotContain(log, l => l.Contains("colour moved"));
     }
 
     [Fact]
-    public async Task MaxMs_bounds_the_pressed_time_across_taps_by_shortening_the_last()
+    public async Task Losing_the_foreground_mid_hold_aborts_and_releases_through_finally()
     {
-        // The last tap is cut to what is left, so 600 ms is taps of 250, 250 and 100, and the step
-        // ends at the limit without a look.
-        var log = new List<string>();
-        var io = LiveBlock(); // never breaks
-        var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold(maxMs: 600) }, Ctx(log), io, default);
-
-        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
-        var downs = io.Downs.ToList();
-        var ups = io.Ups.ToList();
-        Assert.Equal(3, downs.Count);
-        Assert.Equal(new long[] { 250, 250, 100 }, downs.Select((d, k) => ups[k].TimestampMs - d.TimestampMs));
-        Assert.Equal(ups[2].TimestampMs, io.NowMs); // no look after the limit
-        Assert.Contains("step 1 'Spot N' pressed 0.6 s over 3 tap(s), released: reached its limit", log);
-    }
-
-    [Fact]
-    public async Task Losing_the_foreground_mid_tap_aborts_and_releases_through_finally()
-    {
-        // Tap 3 goes down after two full taps; the foreground goes 100 ms into it.
+        // Hold 3 goes down after holds of 300 and 600; the foreground goes 100 ms into it.
         var log = new List<string>();
         var io = LiveBlock();
-        io.OnDelay = () => { if (io.Downs.Count() == 3 && io.NowMs >= ReachPressMs + 2 * TapPeriodMs + 100) io.Foreground = false; };
+        io.OnDelay = () => { if (io.Downs.Count() == 3 && io.NowMs >= io.Downs.Last().TimestampMs + 100) io.Foreground = false; };
         var r = await StepRunner.RunAsync(new MacroStep[] { ReachHold() }, Ctx(log), io, default);
 
         Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
         Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
         Assert.Null(r.StepIndex);
         Assert.Equal(new[] { 1 }, io.Released);
-        Assert.Contains("step 1 'Spot N' pressed 0.6 s over 3 tap(s), then the playback ended", log);
+        Assert.Contains("step 1 'Spot N' pressed 1.0 s over 3 hold(s), then the playback ended", log);
     }
 
     [Fact]
@@ -526,7 +536,7 @@ public class StepRunnerTests
 
         Assert.Equal("CElCPapa: step 1 'Spot N' could not see the window.", r.Reason);
         Assert.Equal(0, r.StepIndex);
-        Assert.Single(io.Downs); // the first tap, then the look failed
+        Assert.Single(io.Downs); // the first hold, then the look failed
         Assert.Empty(io.Released); // the button was already up
         Assert.DoesNotContain(log, l => l.Contains("outline gone"));
     }
@@ -606,7 +616,7 @@ public class StepRunnerTests
         Assert.False(r.SkippedByReach);
         Assert.Equal(2, io.Downs.Count());
         Assert.Contains("step 1 'Spot N' outline seen (3249 near-white px over a baseline of 3025, needs 60)", log);
-        Assert.Contains("step 1 'Spot N' broke after 2 tap(s)", log);
+        Assert.Contains("step 1 'Spot N' broke after 2 hold(s), 0.9 s held", log);
     }
 
     [Fact]
@@ -1216,7 +1226,7 @@ public class StepRunnerTests
         Assert.False(r.SkippedByReach); // one point mined: a plain finish
         Assert.Equal(2, io.Downs.Count());
         Assert.All(io.Downs, d => Assert.Equal((400, 244), (d.X, d.Y)));
-        Assert.Contains("step 1 'ore 1' broke after 2 tap(s)", log);
+        Assert.Contains("step 1 'ore 1' broke after 2 hold(s), 0.9 s held", log);
         Assert.Contains("step 2 'stone 2' no outline, skipped (0 near-white px over a baseline of 0, needs 60)", log);
     }
 
