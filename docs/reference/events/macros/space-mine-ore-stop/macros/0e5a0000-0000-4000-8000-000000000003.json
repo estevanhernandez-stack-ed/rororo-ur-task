@@ -35,6 +35,34 @@
       "dx": 0,
       "dy": -40,
       "durationMs": 200
+    },
+    {
+      "kind": "key",
+      "delayMs": 150,
+      "virtualKeyCode": 73,
+      "down": true
+    },
+    {
+      "kind": "key",
+      "delayMs": 3000,
+      "virtualKeyCode": 73,
+      "down": false
+    },
+    {
+      "kind": "key",
+      "delayMs": 150,
+      "virtualKeyCode": 79,
+      "down": true
+    },
+    {
+      "kind": "key",
+      "delayMs": 1000,
+      "virtualKeyCode": 79,
+      "down": false
+    },
+    {
+      "kind": "wait",
+      "delayMs": 300
     }
   ]
 }
