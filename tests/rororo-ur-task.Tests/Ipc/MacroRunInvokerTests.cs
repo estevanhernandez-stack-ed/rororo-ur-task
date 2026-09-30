@@ -640,4 +640,104 @@ public class MacroRunInvokerTests
             $"bridge playback {r.PlaybackId} 'ClearAt (2 points)': finished",
         }, lines);
     }
+
+    // ---------- SweepPath ----------
+
+    private static SweepPathRequest SweepAt(string target = "123", int step = 50) => new(
+        "1.0", "SweepPath", "626labs.ur-ocr", target, new ClearAtClient(800, 599),
+        new[] { new SweepPoint(450, 300), new SweepPoint(450, 250), new SweepPoint(400, 250), new SweepPoint(450, 300) },
+        step, 400, new ClearAtGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30));
+
+    [Fact]
+    public async Task SweepPath_refuses_a_malformed_call_before_the_busy_check()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), busy: true);
+        var r = await inv.SweepPathAsync(SweepAt(step: 7), default);
+        Assert.Equal((false, "refused", "SweepPath needs a step of 8 to 240 px; got 7."), (r.Ok, r.Reason, r.Detail));
+    }
+
+    [Fact]
+    public async Task SweepPath_refuses_while_busy()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), busy: true);
+        var r = await inv.SweepPathAsync(SweepAt(), default);
+        Assert.Equal((false, "busy"), (r.Ok, r.Reason));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+    }
+
+    [Fact]
+    public async Task SweepPath_refuses_an_account_that_is_not_running()
+    {
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null));
+        var r = await inv.SweepPathAsync(SweepAt(target: "999"), default);
+        Assert.Equal((false, "no-targets-resolved", "Account 999 is not running."), (r.Ok, r.Reason, r.Detail));
+    }
+
+    [Fact]
+    public async Task SweepPath_plays_one_unsaved_sweep_on_the_target()
+    {
+        Macro? played = null;
+        IReadOnlyList<AccountRegistry.AccountInfo>? on = null;
+        var inv = ClearAtInvoker(
+            (m, t, _, _) => { played = m; on = t; return Task.FromResult<SequenceResult?>(null); },
+            saved: new[] { NewMacro("saved", "Farm") });
+
+        var r = await inv.SweepPathAsync(SweepAt(target: "456"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.True(r.Ok);
+        Assert.Equal(new long[] { 456 }, on!.Select(a => a.RobloxUserId));
+        Assert.Equal(("SweepPath (4 points)", SweepPathMacro.IdPrefix + r.PlaybackId), (played!.Name, played.Id));
+        Assert.Equal(400, Assert.IsType<SweepStep>(Assert.Single(played.Steps!)).DwellMs);
+        Assert.NotNull(played.Guard);
+        Assert.Equal(new[] { "saved" }, inv.ListMacros().Select(m => m.Id)); // never saved, never listed
+        Assert.Equal("finished", Status(inv, r.PlaybackId).State);
+    }
+
+    [Fact]
+    public async Task SweepPath_is_stopped_by_StopMacro_like_any_playback()
+    {
+        var inv = ClearAtInvoker(async (_, _, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return null; });
+
+        var r = await inv.SweepPathAsync(SweepAt(), default);
+        Assert.Equal("running", Status(inv, r.PlaybackId).State);
+        inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", r.PlaybackId, null, "626labs.ur-ocr"));
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal("stopped", Status(inv, r.PlaybackId).State);
+    }
+
+    [Fact]
+    public async Task SweepPath_and_ClearAt_share_the_single_flight_rule()
+    {
+        var gate = new TaskCompletionSource();
+        var inv = ClearAtInvoker(async (_, _, _, _) => { await gate.Task; return null; });
+
+        var sweep = await inv.SweepPathAsync(SweepAt(), default);
+        var clear = await inv.ClearAtAsync(ClearAt(), default);
+        var again = await inv.SweepPathAsync(SweepAt(), default);
+
+        Assert.True(sweep.Ok);
+        Assert.Equal(("busy", "busy"), (clear.Reason, again.Reason));
+        Assert.Equal(1, inv.ActivePlaybackCount);
+        gate.TrySetResult();
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+    }
+
+    [Fact]
+    public async Task SweepPath_logs_its_start_its_guard_and_how_it_ended()
+    {
+        var lines = new List<string>();
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(null), log: lines);
+
+        var r = await inv.SweepPathAsync(SweepAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal(new[]
+        {
+            $"bridge playback {r.PlaybackId} 'SweepPath (4 points)' on alt-123: from 450,300, 50 px steps, 400 ms a point",
+            "SweepPath guard at (55,289), expecting #FF135A ±30",
+            $"bridge playback {r.PlaybackId} 'SweepPath (4 points)': finished",
+        }, lines);
+    }
 }

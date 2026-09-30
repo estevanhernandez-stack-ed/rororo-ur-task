@@ -125,6 +125,31 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     }
 
     /// <summary>
+    /// The SweepPath bridge call (ore-stop sweep spec): the path becomes an in-memory macro of one
+    /// sweep step, played through <see cref="Start"/> exactly like a saved macro, so the single-flight
+    /// rule, GetPlayback, StopMacro and Esc need nothing new. Never written to the store, so ListMacros
+    /// never shows it. Order: malformed, busy, account not running, play.
+    /// </summary>
+    public Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct)
+    {
+        // Shape first: a malformed call is refused as malformed even while something is playing.
+        if (SweepPathMacro.Validate(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+        if (_isBusy() || !_playbacks.IsEmpty)
+            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+
+        var targets = ResolveTargets(new[] { request.Target! });
+        if (targets.Count == 0)
+            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+
+        var playbackId = Guid.NewGuid().ToString("N");
+        var macro = SweepPathMacro.Build(request, SweepPathMacro.IdPrefix + playbackId);
+        _log(SweepPathMacro.StartLine(playbackId, macro, targets[0].DisplayName, request));
+        _log(SweepPathMacro.GuardLine(request));
+        return Task.FromResult(Start(playbackId, macro, targets, interAltDelayMs: null, repeat: false, ct));
+    }
+
+    /// <summary>
     /// Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not block the
     /// caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in the detached playback
     /// are swallowed here — they surface on the Ur Task playback side. The playback registers under

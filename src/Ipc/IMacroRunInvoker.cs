@@ -14,6 +14,11 @@ internal interface IMacroRunInvoker
     /// <see cref="RunAsync"/>; the macro is built in memory and never saved.</summary>
     Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct);
 
+    /// <summary>One continuous hold along a path on one account, as ONE playback (bridge 1.x,
+    /// additive). Same single-flight rule, playback id, StopMacro and GetPlayback as
+    /// <see cref="RunAsync"/>; the macro is built in memory and never saved.</summary>
+    Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct);
+
     /// <summary>Enumerate the macro library (id + display name) for name resolution.</summary>
     IReadOnlyList<MacroSummary> ListMacros();
 
