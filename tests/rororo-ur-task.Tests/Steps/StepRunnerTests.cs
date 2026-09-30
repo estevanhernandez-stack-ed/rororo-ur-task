@@ -1685,6 +1685,22 @@ public class StepRunnerTests
     }
 
     [Fact]
+    public async Task A_long_dwell_still_samples_the_guard_every_1500_ms()
+    {
+        // At a 5 s dwell the every-3-points sample would first come at 10150. The dot turns white
+        // at 2000; the timed sample inside the first dwell (due at 1650, then 3150) sees it by 3150,
+        // goes back to the start and lets go there. Point 3 (400,250) is never reached.
+        var log = new List<string>();
+        var io = Guarded(new FakeIo { Screen = (_, _, _) => Rock }, io => io.NowMs < 2000);
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1, dwellMs: 5000) }, Ctx(log, guard: Guard), io, default);
+
+        Assert.Equal((0, SweepGuardStop), (r.StepIndex, r.Reason));
+        Assert.True(io.Ups.Single().TimestampMs <= 3150 + StepTiming.PollMs, $"released at {io.Ups.Single().TimestampMs}");
+        Assert.Equal((450, 300), (io.Ups.Single().X, io.Ups.Single().Y));
+        Assert.DoesNotContain(io.Sent, e => e.Kind == MacroEventKind.MouseMove && (e.X, e.Y) == (400, 250));
+    }
+
+    [Fact]
     public async Task Losing_the_foreground_mid_sweep_releases_in_place_and_aborts()
     {
         // At (450,250) from 550; the dwell's poll at 750 finds another window in front.
