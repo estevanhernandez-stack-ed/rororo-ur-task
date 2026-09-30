@@ -35,7 +35,8 @@
     "pitchTravelPx": 280,
     "dragMs": 400,
     "countBackPx": 40,
-    "countBackMs": 200
+    "countBackMs": 200,
+    "zoom": { "inMs": 3000, "outMs": 1000, "measuredOn": "2026-09-30" }
   },
   "turn": { "holdMs": 500, "measuredOn": "2026-09-28" }
 }

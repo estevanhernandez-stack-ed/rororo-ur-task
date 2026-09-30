@@ -210,6 +210,20 @@ $camSteps.Add([ordered]@{ kind = 'drag'; delayMs = 0; button = 2; startX = $sx; 
 if ([int]$cam.countBackPx -gt 0) {
     $camSteps.Add([ordered]@{ kind = 'drag'; delayMs = 150; button = 2; startX = $sx; startY = $sy + $dy; dx = 0; dy = -([int]$cam.countBackPx); durationMs = [int]$cam.countBackMs })
 }
+# Zoom: hold I to the nearest zoom, then O for outMs. Zoom speed is fixed, so from the nearest zoom
+# a set hold lands on the same distance whatever the zoom was (a fresh client starts close in, which
+# reads as a dark frame). Measured 2026-09-30 at the top of Mine #8: two 900 ms holds matched frame
+# for frame. From the farthest zoom it would not: in a shaft the camera is pushed in by the walls,
+# so the first second of zooming in shows nothing.
+if ($null -ne $cam.zoom) {
+    $VkI = 0x49
+    $VkO = 0x4F
+    $camSteps.Add([ordered]@{ kind = 'key'; delayMs = 150; virtualKeyCode = $VkI; down = $true })
+    $camSteps.Add([ordered]@{ kind = 'key'; delayMs = [int]$cam.zoom.inMs; virtualKeyCode = $VkI; down = $false })
+    $camSteps.Add([ordered]@{ kind = 'key'; delayMs = 150; virtualKeyCode = $VkO; down = $true })
+    $camSteps.Add([ordered]@{ kind = 'key'; delayMs = [int]$cam.zoom.outMs; virtualKeyCode = $VkO; down = $false })
+    $camSteps.Add([ordered]@{ kind = 'wait'; delayMs = 300 })
+}
 Write-Macro (Macro 'Camera top-down' $camSteps.ToArray())
 
 # ---- Go to Top: press it, let the teleport land, Auto Mine on ----

@@ -37,6 +37,7 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 
 ### Changed
 
+- **Camera top-down also sets the zoom.** After the pitch drag it holds I to the nearest zoom, then O for `camera.zoom.outMs` (1000 ms, measured 2026-09-30 at the top of Mine #8: two 900 ms holds matched frame for frame). A fresh client starts zoomed in close, which Ur OCR reads as a dark frame; Ur OCR now runs this macro at the start of its pulse and after every Go to Top. Only the example macro changes: regenerate from `measured.json` and copy `0e5a0000-0000-4000-8000-000000000003.json` into your macros folder.
 - **Abort moved from `Ctrl+Shift+A` to `Ctrl+Shift+F12`.** Typing relayed through Mouse Without
   Borders or Chrome Remote Desktop can leave Ctrl and Shift held down, and the next "a" typed then
   arrives as Ctrl+Shift+A. On 2026-09-30 that stopped Ur OCR's pulse loop three times while

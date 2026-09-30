@@ -168,6 +168,25 @@ public class OreStopExampleMacrosTests
     }
 
     [Fact]
+    public void Camera_top_down_then_zooms_all_the_way_in_and_out_by_the_measured_hold()
+    {
+        // A fresh client starts close in, which the pulse reads as a dark frame (live 2026-09-30).
+        const int VkI = 0x49, VkO = 0x4F;
+        var (macros, m) = Load();
+        var zoom = m.GetProperty("camera").GetProperty("zoom");
+        var steps = Assert.Single(macros, x => x.Name == "Camera top-down").Steps!;
+        var tail = steps.SkipWhile(s => s is DragStep).ToList();
+        Assert.Equal(5, tail.Count);
+
+        var keys = tail.Take(4).Select(s => Assert.IsType<KeyStep>(s)).ToList();
+        Assert.Equal((VkI, true), (keys[0].VirtualKeyCode, keys[0].Down));
+        Assert.Equal((zoom.GetProperty("inMs").GetInt32(), VkI, false), (keys[1].DelayMs, keys[1].VirtualKeyCode, keys[1].Down));
+        Assert.Equal((VkO, true), (keys[2].VirtualKeyCode, keys[2].Down));
+        Assert.Equal((zoom.GetProperty("outMs").GetInt32(), VkO, false), (keys[3].DelayMs, keys[3].VirtualKeyCode, keys[3].Down));
+        Assert.IsType<WaitStep>(tail[4]);
+    }
+
+    [Fact]
     public void Camera_turn_left_holds_the_Left_arrow_key_then_releases_and_settles()
     {
         const int VkLeft = 0x25;
