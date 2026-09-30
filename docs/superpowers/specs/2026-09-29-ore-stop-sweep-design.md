@@ -1,6 +1,6 @@
 # Ore stop: sweep the stone, target the ore
 
-**Status:** DRAFT for Este's review (written overnight 2026-09-29). Not approved and not built.
+**Status:** Design decisions recorded 2026-09-29 (Este answered the four questions). Waiting on the live drag measurement before a plan. Not built.
 **Builds on:** `2026-09-28-ore-stop-pulse-design.md` (the pulse, ClearAt, the ore finder, the guard).
 
 ## Why
@@ -31,7 +31,7 @@ pass: turn the camera, then ride a burst.
 ## The path
 
 - Square rings around the character centre (400,310), from the first ring outward, one block (the
-  pass's block size) per step, out to about 5 blocks. The centre block is excluded, and the path
+  pass's block size) per step, out to 4 blocks (Este, 2026-09-29: slightly tighter than reach). The centre block is excluded, and the path
   never crosses it (the ring-to-ring step goes outward, not through the middle). It's the same grid the finder already lays, visited in spiral
   order, not nearest-first.
 - HUD points are skipped (the same HudMask). The path jumps over them with the button still held;
@@ -39,7 +39,7 @@ pass: turn the camera, then ride a burst.
 - **The button comes up only on the start block** (the first-ring block the sweep began on). A release is a click, and
   a click on a player or a chest opens a popup. The start block is the one place a release can't
   land on something else.
-- The dwell per point starts at about 400 ms and is a setting. The main breaks a bottom-layer block
+- The dwell per point is a per-account setting, default 400 ms. The main breaks a bottom-layer block
   in about 0.3 s; a weaker account needs longer.
 
 ## Safety
@@ -68,9 +68,19 @@ hold, move the pointer across a row of 3-4 blocks at 400 ms each, release on the
 compare the frames before and after. Also measure how many blocks break per 400 ms dwell, on the
 main and on ItsJustEstePapa.
 
-## Questions for Este
+## Decisions (Este, 2026-09-29)
 
-1. Sweep only the stone and keep targeting ore as now? (This draft says yes.)
-2. The dwell per block: start at 400 ms, or tune it per account?
-3. Sweep radius: the full reach (about 5-6 blocks), or tighter?
-4. Should a sweep also run on the ride down (layers above the target), or only at the target?
+1. **Sweep the stone only; ore keeps its careful path** (ClearAt: outline check, growing holds, one
+   block per spot). Unchanged from the draft.
+2. **Dwell is per account.** Default 400 ms, with a per-account override, because pickaxe strength
+   varies by account: the main breaks a bottom-layer block in about 0.3 s, and a weaker account needs
+   longer.
+3. **Radius slightly tighter than full reach:** out to 4 blocks (reach is about 5-6), so the path
+   stays on blocks the character can surely mine. Tunable after the live measurement.
+4. **At the target layer only, never on the ride down.** A sweep needs Auto Mine OFF (the loop
+   already turns it off at the target and back on afterwards), so it can't run while Auto Mine rides
+   the shaft. The target layer is the user's choice: set it to the top layer to sweep there, or
+   choose to go all the way down to the bottom.
+
+**Still first, before a plan:** the live measurement above. If a held, moving pointer doesn't mine
+each block it passes over, this design changes shape.
