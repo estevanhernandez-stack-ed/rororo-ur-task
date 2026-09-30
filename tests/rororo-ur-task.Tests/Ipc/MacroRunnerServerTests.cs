@@ -343,4 +343,71 @@ public class MacroRunnerServerTests
             (resp.Ok, resp.Reason, resp.Detail));
         Assert.Equal(0, invoker.ActivePlaybackCount);
     }
+
+    // ---------- SweepPath ----------
+
+    private const string SweepJson =
+        "{\"contractVersion\":\"1.0\",\"method\":\"SweepPath\",\"callerPluginId\":\"626labs.ur-ocr\",\"target\":\"123\"," +
+        "\"client\":{\"w\":800,\"h\":599},\"path\":[{\"x\":450,\"y\":300},{\"x\":450,\"y\":250},{\"x\":400,\"y\":250},{\"x\":450,\"y\":300}]," +
+        "\"step\":50,\"dwellMs\":400,\"guard\":{\"x\":55,\"y\":289,\"w\":3,\"h\":3,\"expect\":{\"r\":255,\"g\":19,\"b\":90},\"tolerance\":30}}";
+
+    [Fact]
+    public async Task SweepPath_Dispatches_AndReturnsAck()
+    {
+        var invoker = new FakeInvoker { Next = RunMacroResponse.Accepted("01SWP") };
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker), SweepJson);
+
+        Assert.Equal("{\"ok\":true,\"playbackId\":\"01SWP\",\"queued\":false}", respJson);
+        Assert.Equal(("123", 4, 50, 400), (invoker.SeenSweep!.Target, invoker.SeenSweep.Path!.Count, invoker.SeenSweep.Step, invoker.SeenSweep.DwellMs));
+        Assert.Null(invoker.Seen);          // not routed as a RunMacro
+        Assert.Null(invoker.SeenClearAt);   // nor as a ClearAt
+    }
+
+    [Fact]
+    public async Task SweepPath_MissingCallerPluginId_RefusedWithoutDispatch()
+    {
+        var invoker = new FakeInvoker();
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker),
+            SweepJson.Replace("\"callerPluginId\":\"626labs.ur-ocr\",", ""));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "refused", "Missing callerPluginId."), (resp.Ok, resp.Reason, resp.Detail));
+        Assert.Null(invoker.SeenSweep);
+    }
+
+    [Fact]
+    public async Task SweepPath_UnsupportedVersion_RefusedVersionMismatch()
+    {
+        var invoker = new FakeInvoker();
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker), SweepJson.Replace("\"1.0\"", "\"2.0\""));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "version-mismatch"), (resp.Ok, resp.Reason));
+        Assert.Null(invoker.SeenSweep);
+    }
+
+    // End to end with the real invoker: a path that does not close is refused on the wire with the
+    // sentence Ur OCR logs, and nothing starts.
+    [Fact]
+    public async Task SweepPath_over_the_pipe_refuses_a_path_that_does_not_end_on_its_start()
+    {
+        var alt = new AccountRegistry.AccountInfo(1123, 123, "alt-123", "acct-123");
+        var invoker = new MacroRunInvoker(
+            loadMacros: Array.Empty<Macro>,
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(null));
+
+        var respJson = await RoundTripJsonAsync(new MacroRunnerServer(invoker),
+            SweepJson.Replace("{\"x\":450,\"y\":300}],", "{\"x\":450,\"y\":350}],"));
+        var resp = JsonSerializer.Deserialize<RunMacroResponse>(respJson, BridgeContract.Json)!;
+
+        Assert.Equal((false, "refused", "SweepPath must end on its start block at 450,300, where the button comes up; it ends at 450,350."),
+            (resp.Ok, resp.Reason, resp.Detail));
+        Assert.Equal(0, invoker.ActivePlaybackCount);
+    }
 }

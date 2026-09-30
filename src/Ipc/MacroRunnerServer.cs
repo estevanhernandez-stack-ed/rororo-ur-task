@@ -71,7 +71,7 @@ internal sealed class MacroRunnerServer
 
     /// <summary>
     /// Process exactly one request/response over an already-connected stream. Bridge 1.x grew
-    /// heterogeneous methods (ListMacros/StopMacro/GetPlayback/ClearAt beside RunMacro), so the frame is peeked as a
+    /// heterogeneous methods (ListMacros/StopMacro/GetPlayback/ClearAt/SweepPath beside RunMacro), so the frame is peeked as a
     /// method envelope first, then deserialized per method — each branch serializes its own
     /// response type. Refusal order is unchanged: empty → version-mismatch → unknown method →
     /// missing callerPluginId → invoker.
@@ -141,6 +141,15 @@ internal sealed class MacroRunnerServer
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
                     return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
                 return Bytes(await _invoker.ClearAtAsync(req, ct).ConfigureAwait(false));
+            }
+            case BridgeContract.MethodSweepPath:
+            {
+                var req = JsonSerializer.Deserialize<SweepPathRequest>(frame, BridgeContract.Json);
+                if (req is null)
+                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                if (string.IsNullOrWhiteSpace(req.CallerPluginId))
+                    return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
+                return Bytes(await _invoker.SweepPathAsync(req, ct).ConfigureAwait(false));
             }
             default:
                 return Bytes(RunMacroResponse.Refused("refused", $"Unknown method '{env.Method}'."));
