@@ -110,6 +110,25 @@ public sealed record ClearAtRequest(
     int? MaxMsPerPoint = null,
     ClearAtGuard? Guard = null);
 
+/// <summary>
+/// One continuous hold along a path (bridge 1.x, additive; ore-stop sweep spec, "The Ur Task side").
+/// Path is in Client pixels, on a Step px lattice anchored at Path[0] (the start block beside the
+/// character), and ends on Path[0] again, where the button comes up. DwellMs is the wait at each
+/// point. Guard is the pixel that must keep its colour while the button is down; it is required.
+/// Answered with a <see cref="RunMacroResponse"/>; GetPlayback, StopMacro and Esc treat it like any
+/// RunMacro playback.
+/// </summary>
+public sealed record SweepPathRequest(
+    string ContractVersion,
+    string Method,
+    string? CallerPluginId,
+    string? Target,                    // decimal user id
+    ClearAtClient? Client,
+    IReadOnlyList<SweepPoint>? Path,
+    int Step,
+    int DwellMs,
+    ClearAtGuard? Guard);
+
 internal static class BridgeContract
 {
     public const string Method = "RunMacro";          // back-compat alias
@@ -118,6 +137,7 @@ internal static class BridgeContract
     public const string MethodStopMacro = "StopMacro";
     public const string MethodGetPlayback = "GetPlayback";
     public const string MethodClearAt = "ClearAt";
+    public const string MethodSweepPath = "SweepPath";
 
     public static readonly JsonSerializerOptions Json = new()
     {
