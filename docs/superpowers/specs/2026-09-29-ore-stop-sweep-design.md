@@ -94,5 +94,5 @@ one under it), 400 ms per block, released on the start block:
 - Blocks at this zoom are about 150-180 px, not the pulse's default 50 px: the path's step must
   come from the pass's measured block size, as the design already says.
 
-Frames and the test script: `%LOCALAPPDATA%ƖLabs\ore-stop-sweep6-09-29-drag\`. The design
+Frames and the test script: `%LOCALAPPDATA%\626Labs\ore-stop-sweep\2026-09-29-drag\`. The design
 stands as written.
