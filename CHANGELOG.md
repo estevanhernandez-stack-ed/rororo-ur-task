@@ -11,7 +11,7 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   block beside your character, moves the pointer one block at a time along a path Ur OCR sends
   (a real mouse move each time, waiting `dwellMs` on every block), and lets go only back on the
   block it started on, so the release can't click a player or a chest. While the button is down
-  it checks the Auto Mine dot every 3 blocks: if a menu or a profile covers it, the pointer goes
+  it checks the Auto Mine dot every 3 blocks, and at least every 1.5 s however long the dwell: if a menu or a profile covers it, the pointer goes
   back to the start block, lets go there, and the playback stops as `check-failed`. Losing focus
   lets go at once, as every hold does; Esc and `StopMacro` go back to the start block first. It
   rides the same single-flight rule, playback id, `GetPlayback`, `StopMacro` and Esc as
