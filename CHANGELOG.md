@@ -2,6 +2,14 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **A macro from a newer Ur Task is refused instead of run.** It shows as a load failure that
+  says to update Ur Task. Before, an older Ur Task loaded it as an empty macro, started playing
+  it and never finished, so a keep-alive looked like it was running while it kept nobody awake.
+
 ## 0.9.0 — 2026-09-27
 
 ### Added
