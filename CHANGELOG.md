@@ -2,6 +2,24 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.12.0 — unreleased
+
+### Added
+
+- **Ur OCR can sweep the stone around you in one hold.** Clearing stone block by block paid a
+  look before and after every block. `SweepPath`, a new bridge call, presses the left button on a
+  block beside your character, moves the pointer one block at a time along a path Ur OCR sends
+  (a real mouse move each time, waiting `dwellMs` on every block), and lets go only back on the
+  block it started on, so the release can't click a player or a chest. While the button is down
+  it checks the Auto Mine dot every 3 blocks: if a menu or a profile covers it, the pointer goes
+  back to the start block, lets go there, and the playback stops as `check-failed`. Losing focus
+  lets go at once, as every hold does; Esc and `StopMacro` go back to the start block first. It
+  rides the same single-flight rule, playback id, `GetPlayback`, `StopMacro` and Esc as
+  `RunMacro`, is never saved or listed, and logs "SweepPath (N points)" and "swept N points in
+  S s". A path must start and end on the same block, move a whole number of `step` px at a time,
+  stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
+  a sentence. Additive on bridge contract 1.0.
+
 ## 0.11.0 — unreleased
 
 ### Added
