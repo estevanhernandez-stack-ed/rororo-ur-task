@@ -109,7 +109,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         // Single RUN/STOP toggle for the routine strip button — mirrors
         // TogglePlayStopCommand. Stopping always routes through TriggerAbort
-        // (the same Esc/Ctrl+Shift+A abort surface) rather than calling
+        // (the same Esc/Ctrl+Shift+F12 abort surface) rather than calling
         // _activeRecipeRunner.Abort() directly, because a routine can be a
         // looping recipe (_runner active) OR a loadout mid-position
         // (_sequence active) — TriggerAbort's Abort case already covers both.
