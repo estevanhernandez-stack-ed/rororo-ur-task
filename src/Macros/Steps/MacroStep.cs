@@ -124,6 +124,11 @@ public static class StepTiming
     /// (spec: "sampled every few points"). At the default 400 ms dwell that is every 1.2 s.</summary>
     public const int SweepGuardEveryPoints = 3;
 
+    /// <summary>However long the dwell, a held sweep never goes longer than this without sampling
+    /// the guard: at a 5 s dwell, every 3 points alone would leave a menu under the held button for
+    /// 15 s. Above the default's 1.2 s so a 400 ms sweep samples exactly as before.</summary>
+    public const int SweepGuardMaxGapMs = 1500;
+
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
     {

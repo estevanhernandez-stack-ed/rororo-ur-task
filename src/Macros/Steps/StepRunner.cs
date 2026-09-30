@@ -599,7 +599,8 @@ internal static class StepRunner
     /// which the bridge made sure is Path[0] again. A release is a click, and the start block is the
     /// one place a click can't land on a player or a chest.
     /// <para>The guard is sampled before the press and before every
-    /// <see cref="StepTiming.SweepGuardEveryPoints"/>-th point while held. A change goes back to the
+    /// <see cref="StepTiming.SweepGuardEveryPoints"/>-th point while held, and inside a dwell whenever
+    /// <see cref="StepTiming.SweepGuardMaxGapMs"/> has passed without a sample. A change goes back to the
     /// start block, lets go there, and stops the playback as a failed check. The foreground is checked
     /// before every input and every <see cref="StepTiming.PollMs"/> of a dwell; losing it lets go in
     /// place through RunAsync's finally, as every hold does. Esc, StopMacro and a window it can no
@@ -623,16 +624,23 @@ internal static class StepRunner
         heldButtons.Add(s.Button);
         var pressedAt = io.NowMs;
         var reached = 1;
+        var guardedAt = io.NowMs;
+        void Sample()
+        {
+            guardedAt = io.NowMs;
+            if (GuardBroken(ctx, io, index, name) is { } seen)
+                throw new StopException(GuardStopText(who, ctx.Guard!, seen), index);
+        }
+        void SampleIfDue() { if (io.NowMs - guardedAt >= StepTiming.SweepGuardMaxGapMs) Sample(); }
         try
         {
-            await DwellAsync(io, s.DwellMs, ct);
+            await DwellAsync(io, s.DwellMs, ct, SampleIfDue);
             for (int k = 1; k < path.Count; k++)
             {
-                if (k % StepTiming.SweepGuardEveryPoints == 0 && GuardBroken(ctx, io, index, name) is { } seen)
-                    throw new StopException(GuardStopText(who, ctx.Guard!, seen), index);
+                if (k % StepTiming.SweepGuardEveryPoints == 0) Sample();
                 SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, path[k].X, path[k].Y, 0, 0));
                 reached++;
-                if (k < path.Count - 1) await DwellAsync(io, s.DwellMs, ct); // the last point is where it lets go
+                if (k < path.Count - 1) await DwellAsync(io, s.DwellMs, ct, SampleIfDue); // the last point is where it lets go
             }
             SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, path[^1].X, path[^1].Y, s.Button, 0));
             heldButtons.Remove(s.Button);
@@ -650,14 +658,15 @@ internal static class StepRunner
     }
 
     /// <summary>Waits <paramref name="ms"/> with the button down, checking the foreground every
-    /// <see cref="StepTiming.PollMs"/>.</summary>
-    private static async Task DwellAsync(IStepIo io, int ms, CancellationToken ct)
+    /// <see cref="StepTiming.PollMs"/>, and running <paramref name="onPoll"/> at each check.</summary>
+    private static async Task DwellAsync(IStepIo io, int ms, CancellationToken ct, Action? onPoll = null)
     {
         var start = io.NowMs;
         while (io.NowMs - start < ms)
         {
             await io.Delay((int)Math.Min(StepTiming.PollMs, ms - (io.NowMs - start)), ct);
             GuardForeground(io);
+            onPoll?.Invoke();
         }
     }
 
