@@ -88,7 +88,8 @@ Every Ur OCR source file moves to `src/Vision/<same subfolder>/`, with the names
 - **N1** Merging the two sets of bridge DTOs into one. The adapter maps them. A later cleanup can
   remove Vision's copy.
 - **N2** A one-window UI with tabs.
-- **N3** The preset or pack file format (next, once merged).
+- **N3** A preset or pack file format. Not planned (Este, 2026-09-30). The Space Mine setup is
+  archived for reuse if a mining event comes back.
 - **N4** Any change to Ur MCP, RoRoRo (the host) or the pipe contract.
 - **N5** Releasing, tagging, merging to main, or archiving the Ur-OCR repo. Those are Este's calls.
 - **N6** Any change to pulse, trigger or playback behaviour. Every behaviour test passes unchanged,
