@@ -30,14 +30,15 @@ internal static class SweepPathMacro
 
     /// <summary>Null when the call can play; otherwise one sentence naming the first problem, before
     /// the ack. Every hop must be a whole number of steps (the lattice anchored at the start) and go
-    /// somewhere, and the path must end on its start block, where the button comes up.</summary>
+    /// somewhere, and the path must end on its start block, where the button comes up. A free path
+    /// skips the lattice rule and nothing else; its step may be 0 (omitted), or 8 to 240 as usual.</summary>
     public static string? Validate(SweepPathRequest r)
     {
         if (ClearAtMacro.TargetProblem(r.Target, "SweepPath") is { } targetProblem) return targetProblem;
         if (r.Client is not { W: >= 1, H: >= 1 } client) return "SweepPath needs the client size the path was measured in.";
         var count = r.Path?.Count ?? 0;
         if (count is < 3 or > MaxPoints) return Inv($"SweepPath takes 3 to {MaxPoints} points; got {count}.");
-        if (r.Step is < MinStep or > MaxStep) return Inv($"SweepPath needs a step of {MinStep} to {MaxStep} px; got {r.Step}.");
+        if (!(r.FreePath && r.Step == 0) && r.Step is < MinStep or > MaxStep) return Inv($"SweepPath needs a step of {MinStep} to {MaxStep} px; got {r.Step}.");
         if (r.DwellMs is < MinDwellMs or > MaxDwellMs)
             return Inv($"SweepPath needs a dwellMs of {MinDwellMs} to {MaxDwellMs}; got {r.DwellMs}.");
         if (r.Guard is not { } g) return "SweepPath needs a guard: the pixel it watches while the button is down.";
@@ -51,7 +52,7 @@ internal static class SweepPathMacro
             if (p is null) return Inv($"SweepPath point {i + 1} is empty.");
             if (p.X < 0 || p.Y < 0 || p.X >= client.W || p.Y >= client.H)
                 return Inv($"SweepPath point {i + 1} at {p.X},{p.Y} is outside the {client.W}x{client.H} client.");
-            if ((p.X - start.X) % r.Step != 0 || (p.Y - start.Y) % r.Step != 0)
+            if (!r.FreePath && ((p.X - start.X) % r.Step != 0 || (p.Y - start.Y) % r.Step != 0))
                 return Inv($"SweepPath point {i + 1} at {p.X},{p.Y} is not a whole number of {r.Step} px steps from the start at {start.X},{start.Y}.");
             if (i > 0 && path[i - 1] is { } prev && prev.X == p.X && prev.Y == p.Y)
                 return Inv($"SweepPath point {i + 1} repeats point {i}; every move must go to another block.");
@@ -81,7 +82,7 @@ internal static class SweepPathMacro
 
     /// <summary>The ur-task.log line when a SweepPath is accepted. The end line is the usual bridge line.</summary>
     public static string StartLine(string playbackId, Macro macro, string account, SweepPathRequest r)
-        => Inv($"bridge playback {playbackId} '{macro.Name}' on {account}: from {r.Path![0].X},{r.Path[0].Y}, {r.Step} px steps, {r.DwellMs} ms a point");
+        => Inv($"bridge playback {playbackId} '{macro.Name}' on {account}: from {r.Path![0].X},{r.Path[0].Y}, {(r.FreePath ? "free path" : Inv($"{r.Step} px steps"))}, {r.DwellMs} ms a point");
 
     /// <summary>The guard it watches. Call only after <see cref="Validate"/> returned null.</summary>
     public static string GuardLine(SweepPathRequest r)

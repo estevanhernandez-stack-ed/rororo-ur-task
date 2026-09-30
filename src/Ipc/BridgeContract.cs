@@ -121,6 +121,10 @@ public sealed record ClearAtRequest(
 /// point. Guard is the pixel that must keep its colour while the button is down; it is required.
 /// Answered with a <see cref="RunMacroResponse"/>; GetPlayback, StopMacro and Esc treat it like any
 /// RunMacro playback.
+/// <para>FreePath (0.12.0, additive): true skips ONLY the lattice rule, so the points may sit
+/// anywhere inside the client (Ur OCR's ore sweep, whose points are wherever the ore is), and Step
+/// may be omitted or 0. Every other rule stays. False, the default and what an older caller sends
+/// by leaving it out, is the lattice path exactly as before. A false is not written.</para>
 /// </summary>
 public sealed record SweepPathRequest(
     string ContractVersion,
@@ -131,7 +135,8 @@ public sealed record SweepPathRequest(
     IReadOnlyList<SweepPoint>? Path,
     int Step,
     int DwellMs,
-    ClearAtGuard? Guard);
+    ClearAtGuard? Guard,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FreePath = false);
 
 internal static class BridgeContract
 {

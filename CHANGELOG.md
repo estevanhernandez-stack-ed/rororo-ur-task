@@ -19,6 +19,14 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   S s". The request carries `step`, the block size in px, as a new field. A path must start and end on
   the same block, move a whole number of `step` px at a time, stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
   a sentence. Additive on bridge contract 1.0.
+- **A sweep can follow the ore, not just the block grid.** `SweepPath` takes an optional
+  `freePath: true`. It skips one rule, that every point sits a whole number of `step` px from the
+  start, so Ur OCR can sweep the ore it found in one hold instead of a jump and two looks per
+  spot (24 ore took 35 s point by point with boosters breaking each in 0.3 s). `step` may then be
+  left out or 0. Every other rule stays: inside the client, start and end on the same point, 3 to
+  256 points, no point repeating the one before, a guard, a `dwellMs` of 50 to 5000. The start
+  line says "free path" where it would name the step. Left out or false, a path is refused off
+  the lattice exactly as before. Additive on bridge contract 1.0.
 - **A finished ClearAt says which spots were empty.** `GetPlayback` on a finished ClearAt now
   carries `noOutline`: the 1-based points that showed no outline, `[]` when every point had one.
   A point counts when it logged "no outline, skipped", and also when it logged "no outline on a
