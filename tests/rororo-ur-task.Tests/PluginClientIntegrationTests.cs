@@ -199,15 +199,16 @@ public class PluginClientIntegrationTests
 
     private sealed class NoOpLauncher : IPluginLaunchInvoker
     {
-        public Task<(bool ok, string? failureReason, int processId)> RequestLaunchAsync(string accountId)
-            => Task.FromResult<(bool, string?, int)>((false, "test stub", 0));
+        // RoRoRo v1.32 (host PR #223) added a machine-readable reasonCode to both launch results.
+        public Task<(bool ok, string? failureReason, int processId, string? reasonCode)> RequestLaunchAsync(string accountId)
+            => Task.FromResult<(bool, string?, int, string?)>((false, "test stub", 0, null));
 
         // Brought into conformance with the host's IPluginLaunchInvoker, which
         // grew launch-to-target + current-server queries in RoRoRo v1.7.0.0.
         // Mirrors ROROROblox.PluginTestHarness's reference stub.
-        public Task<(bool ok, string? failureReason, int processId)> RequestLaunchTargetAsync(
+        public Task<(bool ok, string? failureReason, int processId, string? reasonCode)> RequestLaunchTargetAsync(
             string accountId, string? shareUrl, long? followUserId)
-            => Task.FromResult<(bool, string?, int)>((false, "test stub", 0));
+            => Task.FromResult<(bool, string?, int, string?)>((false, "test stub", 0, null));
 
         public Task<CurrentServerInfo?> GetCurrentServerAsync()
             => Task.FromResult<CurrentServerInfo?>(null);
