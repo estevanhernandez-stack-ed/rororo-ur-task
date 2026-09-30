@@ -219,6 +219,26 @@ public class MacroRunInvokerTests
         Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 0, 2000));
     }
 
+    [Theory]
+    [InlineData(true, "Aborted (StopMacro from 626labs.ur-ocr).")]
+    [InlineData(false, "Abort ignored — nothing playing (StopMacro from 626labs.ur-ocr).")]
+    public void StopMacro_logs_the_caller(bool playing, string line)
+    {
+        var lines = new List<string>();
+        var invoker = new MacroRunInvoker(
+            loadMacros: Array.Empty<Macro>,
+            snapshot: Array.Empty<AccountRegistry.AccountInfo>,
+            resolveForegroundUserId: () => null,
+            isBusy: () => false,
+            playWithResult: (m, t, d, ct) => Task.FromResult<SequenceResult?>(null),
+            abort: () => playing,
+            log: lines.Add);
+
+        invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", null, null, "626labs.ur-ocr"));
+
+        Assert.Equal(new[] { line }, lines);
+    }
+
     [Fact]
     public void StopMacro_NoActivePlayback_ReturnsZero()
     {

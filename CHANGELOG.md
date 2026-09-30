@@ -35,6 +35,18 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   saved macro, a failed or stopped ClearAt, a running one) leaves the field out, so older callers
   see no change. Additive on bridge contract 1.0.
 
+### Changed
+
+- **An abort says what did it.** The log said only "Aborted." or "Abort ignored — nothing
+  playing.", and on 2026-09-30 there were 8 aborts nobody could explain, one of them stopping Ur
+  OCR's ore-stop pulse mid-sweep with nobody at the keyboard. The line now names the source: the
+  key (`Esc`, registered only while something plays, or `Ctrl+Shift+A`) with the window in front
+  at that moment, its title, pid and process, as in
+  `Aborted (Esc; foreground 'Roblox' pid 6808 RobloxPlayerBeta).`; a button in Ur Task's window
+  (`Aborted (Stop button; foreground ...).`); or a bridge call, `Aborted (StopMacro from
+  626labs.ur-ocr).`, which logged nothing before. Windows' hotkey message does not say whether a
+  key press was injected by another program, so the line can't say that.
+
 ## 0.11.0 — unreleased
 
 ### Added

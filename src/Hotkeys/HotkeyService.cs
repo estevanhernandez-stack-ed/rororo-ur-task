@@ -57,7 +57,21 @@ internal sealed class HotkeyService : IDisposable
     private Exception? _startError;
     private volatile bool _running;
 
-    public event Action<HotkeyKind>? HotkeyPressed;
+    /// <summary>A registered hotkey fired: its kind, and where it came from (AbortLog.Source): the
+    /// key's name, and for an abort key also what was in front at that moment, read on this pump
+    /// thread as the WM_HOTKEY arrives. WM_HOTKEY does not say whether the press was injected.</summary>
+    public event Action<HotkeyKind, string>? HotkeyPressed;
+
+    /// <summary>The key a hotkey id stands for, as the log names it.</summary>
+    internal static string KeyName(int id) => id switch
+    {
+        ID_RECORD_TOGGLE => "Ctrl+Shift+R",
+        ID_PLAY => "Ctrl+Shift+P",
+        ID_ABORT_BARE => "Esc",
+        ID_ABORT_CHORD => "Ctrl+Shift+A",
+        ID_RUN_ROUTINE => "Ctrl+Shift+L",
+        _ => $"hotkey {id}",
+    };
 
     /// <summary>
     /// VK codes the service has registered as chord hotkeys. MacroRecorder consults
@@ -183,7 +197,8 @@ internal sealed class HotkeyService : IDisposable
                 }
                 if (msg.message == WM_HOTKEY)
                 {
-                    var kind = msg.wParam.ToInt32() switch
+                    var id = msg.wParam.ToInt32();
+                    var kind = id switch
                     {
                         ID_RECORD_TOGGLE => HotkeyKind.RecordToggle,
                         ID_PLAY => HotkeyKind.Play,
@@ -194,7 +209,13 @@ internal sealed class HotkeyService : IDisposable
                     };
                     if (kind is not null)
                     {
-                        try { HotkeyPressed?.Invoke(kind.Value); }
+                        try
+                        {
+                            var source = kind == HotkeyKind.Abort
+                                ? AbortLog.Source(KeyName(id), PluginHost.Win32Focus.DescribeForeground())
+                                : KeyName(id);
+                            HotkeyPressed?.Invoke(kind.Value, source);
+                        }
                         catch { /* swallow — handler exceptions shouldn't kill the pump */ }
                     }
                 }

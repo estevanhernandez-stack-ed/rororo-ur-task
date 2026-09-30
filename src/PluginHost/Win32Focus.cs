@@ -24,6 +24,22 @@ internal static class Win32Focus
     /// <summary>The window that currently owns the foreground. IntPtr.Zero if none.</summary>
     public static IntPtr CaptureForeground() => GetForegroundWindow();
 
+    /// <summary>What is in front right now, for the abort line: its title, pid and process name
+    /// (Hotkeys.AbortLog.Foreground). Best-effort: a process that exits meanwhile reads as gone.</summary>
+    public static string DescribeForeground()
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return Hotkeys.AbortLog.Foreground(hwnd, null, 0, null);
+        var text = new System.Text.StringBuilder(256);
+        _ = GetWindowTextW(hwnd, text, text.Capacity);
+        _ = GetWindowThreadProcessId(hwnd, out var pid);
+        string? process = null;
+        try { using var p = Process.GetProcessById((int)pid); process = p.ProcessName; }
+        catch (ArgumentException) { }
+        catch (InvalidOperationException) { }
+        return Hotkeys.AbortLog.Foreground(hwnd, text.ToString(), (int)pid, process);
+    }
+
     /// <summary>
     /// Put the foreground back where we found it after a keep-alive tap. Uses the same
     /// foreground-lock dance as AttachAndFocus — restoring focus while the user is idle
@@ -93,6 +109,8 @@ internal static class Win32Focus
     private static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]

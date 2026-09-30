@@ -42,7 +42,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         Toasts = new ObservableCollection<ToastItem>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
-        StopCommand = new RelayCommand(_runtime.TriggerAbort);
+        StopCommand = new RelayCommand(() => _runtime.TriggerAbort("Stop button"));
         ToggleCompactCommand = new RelayCommand(() => IsCompact = !IsCompact);
 
         // Assignment commands
@@ -118,7 +118,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             {
                 if (IsRoutineRunning)
                 {
-                    _runtime.TriggerAbort();
+                    _runtime.TriggerAbort("routine Run/Stop button");
                     return;
                 }
                 if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
@@ -143,7 +143,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             () => Assignments.Count > 0 && !IsRunnerActive);
 
         StopAssignmentsCommand = new RelayCommand(
-            () => _runtime.TriggerAbort(),
+            () => _runtime.TriggerAbort("Stop assignments button"),
             () => IsRunnerActive);
 
         // Single PLAY/STOP toggle — bound to the unified button. When runner is
@@ -155,7 +155,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             {
                 if (IsRunnerActive)
                 {
-                    _runtime.TriggerAbort();
+                    _runtime.TriggerAbort("Play/Stop button");
                     return;
                 }
                 var mismatched = Assignments.Where(r => r.HasGameMismatch).ToList();
