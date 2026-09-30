@@ -24,6 +24,14 @@ public class MacroRunnerServerTests
             return Task.FromResult(Next);
         }
 
+        public SweepPathRequest? SeenSweep { get; private set; }
+
+        public Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct)
+        {
+            SeenSweep = request;
+            return Task.FromResult(Next);
+        }
+
         public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
         {
             Seen = request;
