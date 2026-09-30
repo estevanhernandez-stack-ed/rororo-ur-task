@@ -196,7 +196,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         // Abort the in-flight SequencePlayer pass so cancellation takes effect immediately,
         // not just at the next loop boundary. Single-flight today, so this stops the active
         // pass; Abort() is idempotent-safe and returns false when nothing is running.
-        _abort();
+        var aborted = _abort();
+        _log(Hotkeys.AbortLog.Line(stopped > 0 || aborted, Hotkeys.AbortLog.StopMacro(request.CallerPluginId)));
 
         return StopMacroResponse.Done(stopped);
     }

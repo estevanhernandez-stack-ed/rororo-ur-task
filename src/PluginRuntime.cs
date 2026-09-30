@@ -304,8 +304,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// <summary>Fire the round-robin assignment loop. Ctrl+Shift+P hotkey + PLAY ASSIGNMENTS button share this path.</summary>
     public void TriggerPlayAssignments() => OnHotkey(HotkeyKind.Play);
 
-    /// <summary>Invoke the Esc path (abort).</summary>
-    public void TriggerAbort() => OnHotkey(HotkeyKind.Abort);
+    /// <summary>Invoke the Esc path (abort) from a button in Ur Task's window. The log names the
+    /// source and what was in front (AbortLog).</summary>
+    public void TriggerAbort(string source = "Ur Task button")
+        => OnHotkey(HotkeyKind.Abort, Hotkeys.AbortLog.Source(source, PluginHost.Win32Focus.DescribeForeground()));
 
     // ---------- Assignment commands ----------
 
@@ -651,7 +653,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     // ---------- Hotkey handlers ----------
 
-    private void OnHotkey(HotkeyKind kind)
+    /// <param name="source">Where the press came from (AbortLog.Source); the abort line names it.</param>
+    private void OnHotkey(HotkeyKind kind, string? source = null)
     {
         switch (kind)
         {
@@ -736,7 +739,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             case HotkeyKind.Abort:
                 bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
                     | (_activeRecipeRunner?.Abort() ?? false);
-                Log(aborted ? "Aborted." : "Abort ignored — nothing playing.");
+                Log(Hotkeys.AbortLog.Line(aborted, source ?? "unknown source"));
                 break;
 
             case HotkeyKind.RunRoutine:
