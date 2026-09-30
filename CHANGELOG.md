@@ -16,8 +16,8 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   lets go at once, as every hold does; Esc and `StopMacro` go back to the start block first. It
   rides the same single-flight rule, playback id, `GetPlayback`, `StopMacro` and Esc as
   `RunMacro`, is never saved or listed, and logs "SweepPath (N points)" and "swept N points in
-  S s". A path must start and end on the same block, move a whole number of `step` px at a time,
-  stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
+  S s". The request carries `step`, the block size in px, as a new field. A path must start and end on
+  the same block, move a whole number of `step` px at a time, stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
   a sentence. Additive on bridge contract 1.0.
 
 ## 0.11.0 — unreleased
