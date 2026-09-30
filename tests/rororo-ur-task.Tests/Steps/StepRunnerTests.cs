@@ -1231,6 +1231,28 @@ public class StepRunnerTests
     }
 
     [Fact]
+    public async Task ClearAt_steps_name_the_points_that_showed_no_outline()
+    {
+        // Ur OCR remembers these and stops sending them (ore-stop pulse, fix 1). 1-based, like the
+        // "step N" in the log; a mined point is never listed.
+        var io = LiveBlock(breaksAfter: 2); // an outlined block at 400,244; rock everywhere else
+        var r = await StepRunner.RunAsync(
+            ClearAtSteps(null, (150, 150, "stone 1"), (400, 244, "ore 2"), (600, 400, "stone 3")), Ctx(), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(new[] { 1, 3 }, r.NoOutline);
+    }
+
+    [Fact]
+    public async Task ClearAt_steps_that_all_break_name_no_point()
+    {
+        var io = LiveBlock(breaksAfter: 2);
+        var r = await StepRunner.RunAsync(ClearAtSteps(null, (400, 244, "ore 1")), Ctx(), io, default);
+
+        Assert.Empty(r.NoOutline!);
+    }
+
+    [Fact]
     public async Task ClearAt_steps_that_all_miss_the_outline_read_skipped_by_reach()
     {
         var io = new FakeIo { Screen = (_, x, y) => LavaAt(x, y) };
@@ -1421,6 +1443,8 @@ public class StepRunnerTests
         Assert.Contains("step 1 'a' outline seen (400 near-white px over a baseline of 0, needs 60)", log);
         Assert.Contains("step 1 'a' no outline on a fresh baseline, stopped", log);
         Assert.DoesNotContain(log, l => l.Contains("broke"));
+        // It pressed, but the block never broke: the spot is as empty as a skip, so it is named.
+        Assert.Equal(new[] { 1 }, r.NoOutline);
     }
 
     [Fact]

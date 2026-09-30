@@ -557,6 +557,64 @@ public class MacroRunInvokerTests
     }
 
     [Fact]
+    public async Task A_finished_ClearAt_names_the_points_that_showed_no_outline()
+    {
+        var alt = Alt(123);
+        var pass = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, NoOutline: new[] { 1, 3 }) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(pass));
+
+        var r = await inv.ClearAtAsync(ClearAt(points: 3), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, r.PlaybackId);
+        Assert.Equal(("finished", (string?)null), (status.State, status.Reason));
+        Assert.Equal(new[] { 1, 3 }, status.NoOutline);
+    }
+
+    [Fact]
+    public async Task A_finished_ClearAt_with_every_point_mined_names_an_empty_list()
+    {
+        var alt = Alt(123);
+        var pass = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(pass));
+
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Equal(Array.Empty<int>(), Status(inv, r.PlaybackId).NoOutline);
+    }
+
+    [Fact]
+    public async Task A_failed_ClearAt_names_no_points()
+    {
+        // Only a finished pass says which spots were empty; a stopped one never looked at the rest.
+        var alt = Alt(123);
+        var pass = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Aborted, "guard moved", 1, NoOutline: new[] { 1 }) }, 0, 1, 0, TimeSpan.Zero);
+        var inv = ClearAtInvoker((_, _, _, _) => Task.FromResult<SequenceResult?>(pass));
+
+        var r = await inv.ClearAtAsync(ClearAt(), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, r.PlaybackId);
+        Assert.Equal("failed", status.State);
+        Assert.Null(status.NoOutline);
+    }
+
+    [Fact]
+    public async Task A_saved_macro_never_names_no_outline_points()
+    {
+        var alt = Alt(123);
+        var m = NewMacro(Guid.NewGuid().ToString(), "Mine spot N");
+        var pass = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, NoOutline: new[] { 1 }) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = BuildWithResult(m, alt, (_, _, _, _) => Task.FromResult<SequenceResult?>(pass));
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-ocr"), default);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        Assert.Null(Status(inv, run.PlaybackId).NoOutline);
+    }
+
+    [Fact]
     public async Task ClearAt_logs_its_guard_once_at_the_start_and_plays_it()
     {
         Macro? played = null;

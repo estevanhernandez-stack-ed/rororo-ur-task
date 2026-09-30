@@ -56,6 +56,8 @@ internal static class StepRunner
     {
         public bool Pressed;
         public int ReachSkips;
+        /// <summary>1-based steps whose reach hold showed no outline (<see cref="PlaybackResult.NoOutline"/>).</summary>
+        public readonly List<int> NoOutline = new();
     }
 
     /// <summary>
@@ -165,7 +167,8 @@ internal static class StepRunner
                         break;
                 }
             }
-            return tally.ReachSkips > 0 && !tally.Pressed ? PlaybackResult.CompletedSkippedByReach() : PlaybackResult.Completed();
+            var done = tally.ReachSkips > 0 && !tally.Pressed ? PlaybackResult.CompletedSkippedByReach() : PlaybackResult.Completed();
+            return done with { NoOutline = tally.NoOutline.ToArray() };
         }
         catch (InputBlockedException b)
         {
@@ -412,13 +415,13 @@ internal static class StepRunner
         {
             var (seen0, area0) = await AwaitOutlineAsync(r0, baseline, io, name, index, ct);
             LogOutline(ctx, index, label, seen0, area0.Count, r0.Need, baseline);
-            if (!seen0) { tally.ReachSkips++; return; }
+            if (!seen0) { tally.ReachSkips++; tally.NoOutline.Add(index + 1); return; }
             Func<Task<int>>? fresh = shared is null ? null : () =>
             {
                 shared.Frame = null; // a fresh park and frame, kept for the rest of the pass
                 return SharedBaselineAsync(shared, r0, io, client, ctx, index, label, name, ct);
             };
-            var broke = await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, fresh, ct);
+            var broke = await PlayReachHoldsAsync(h, r0, baseline, area0, at, index, label, name, ctx, io, heldButtons, fresh, tally, ct);
             if (broke && shared is not null) shared.Frame = null; // the scene nearby changed: a fresh frame next
             return;
         }
@@ -482,9 +485,10 @@ internal static class StepRunner
     /// <see cref="FreshBaselineBeforeHold"/> it parks, takes a fresh baseline, jumps back and looks
     /// again. No outline over the fresh baseline stops the point: it pressed, so it is no skip.</para>
     /// <para>True when the block broke; false when the step ended at its MaxMs limit or on the
-    /// fresh-baseline check.</para>
+    /// fresh-baseline check. The fresh-baseline stop also names the step in
+    /// <see cref="RunTally.NoOutline"/>: nothing broke there.</para>
     /// </summary>
-    private static async Task<bool> PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, Func<Task<int>>? freshBaseline, CancellationToken ct)
+    private static async Task<bool> PlayReachHoldsAsync(HoldStep h, ReachPlan r, int baseline, NearWhiteArea before, (int X, int Y) at, int index, string label, string name, StepContext ctx, IStepIo io, HashSet<int> heldButtons, Func<Task<int>>? freshBaseline, RunTally tally, CancellationToken ct)
     {
         long pressedMs = 0, holdStart = -1;
         int holds = 0, nextHoldMs = StepTiming.FirstHoldMs;
@@ -500,7 +504,7 @@ internal static class StepRunner
                     baseline = await freshBaseline();
                     await JumpAsync(io, at, ct);
                     var (still, area) = await AwaitOutlineAsync(r, baseline, io, name, index, ct);
-                    if (!still) { outcome = "no outline on a fresh baseline, stopped"; break; }
+                    if (!still) { outcome = "no outline on a fresh baseline, stopped"; tally.NoOutline.Add(index + 1); break; }
                     before = area;
                     CheckGuard(ctx, io, index, name); // the park and look took time: look again
                 }

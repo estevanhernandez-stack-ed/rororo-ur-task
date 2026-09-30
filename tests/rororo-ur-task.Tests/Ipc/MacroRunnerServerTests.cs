@@ -285,6 +285,33 @@ public class MacroRunnerServerTests
         "\"client\":{\"w\":800,\"h\":599},\"points\":[{\"x\":412,\"y\":288,\"label\":\"ore 1\"}]," +
         "\"outline\":{\"w\":50,\"h\":50,\"minCount\":60,\"whiteMin\":225},\"maxMsPerPoint\":null}";
 
+    // Pin for Ur OCR's no-outline memory (ore-stop pulse, fix 1): a finished ClearAt names the
+    // 1-based points that showed no outline as "noOutline". Every other reply keeps its old shape,
+    // because a null list is not written (the pins above).
+    [Fact]
+    public async Task GetPlayback_over_the_pipe_names_a_finished_ClearAt_s_no_outline_points()
+    {
+        var alt = new AccountRegistry.AccountInfo(1123, 123, "alt-123", "acct-123");
+        var invoker = new MacroRunInvoker(
+            loadMacros: () => Array.Empty<Macro>(),
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(new SequenceResult(
+                new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null, NoOutline: new[] { 1 }) }, 1, 0, 0, TimeSpan.Zero)));
+        var server = new MacroRunnerServer(invoker);
+
+        var ack = JsonSerializer.Deserialize<RunMacroResponse>(await RoundTripJsonAsync(server, ClearAtJson), BridgeContract.Json)!;
+        Assert.True(ack.Ok);
+        for (int i = 0; i < 200 && invoker.ActivePlaybackCount > 0; i++) await Task.Delay(10);
+        Assert.Equal(0, invoker.ActivePlaybackCount);
+
+        var respJson = await RoundTripJsonAsync(server,
+            $"{{\"contractVersion\":\"1.0\",\"method\":\"GetPlayback\",\"playbackId\":\"{ack.PlaybackId}\",\"callerPluginId\":\"626labs.ur-ocr\"}}");
+
+        Assert.Equal("{\"ok\":true,\"state\":\"finished\",\"noOutline\":[1]}", respJson);
+    }
+
     [Fact]
     public async Task ClearAt_Dispatches_AndReturnsAck()
     {

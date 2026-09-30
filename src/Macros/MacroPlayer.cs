@@ -711,6 +711,15 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
 
     public static PlaybackResult CompletedSkippedByReach() => new(PlaybackOutcome.Completed, null) { SkippedByReach = true };
 
+    /// <summary>
+    /// The 1-based steps whose reach hold showed no outline: "no outline, skipped", or "no outline
+    /// on a fresh baseline, stopped" (it pressed, but the block never broke, so the spot is as
+    /// empty as a skip). Only StepRunner sets it, on a Completed run, empty when every reach hold
+    /// saw an outline. For a ClearAt these are its point numbers; the bridge reports them on a
+    /// finished ClearAt as GetPlaybackResponse.NoOutline so Ur OCR stops re-sending the spots.
+    /// </summary>
+    public IReadOnlyList<int>? NoOutline { get; init; }
+
     /// <summary>Stopped by a check: a colour that never showed, a window it could not see, or a
     /// box outside the window. Only check failures carry a StepIndex (0-based), so GetPlayback's
     /// failed/check-failed always means a check. Foreground loss and cancellation use
