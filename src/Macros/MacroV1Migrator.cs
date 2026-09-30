@@ -29,6 +29,15 @@ public static class MacroV1Migrator
 
         var schemaVersion = root.TryGetProperty("schemaVersion", out var sv) ? sv.GetInt32() : 1;
 
+        // A macro from a newer Ur Task keeps its moves in fields this build has never heard of, so
+        // it would load as an empty macro and "play" nothing. Refuse it by name instead: callers
+        // report a thrown load as a load failure, and the macro never reaches a runner.
+        if (schemaVersion > Macro.CurrentSchemaVersion)
+        {
+            throw new InvalidOperationException(
+                $"Made by a newer version of Ur Task (macro schema {schemaVersion}; this version reads up to {Macro.CurrentSchemaVersion}). Update Ur Task to use it.");
+        }
+
         if (schemaVersion >= 2)
         {
             var m = JsonSerializer.Deserialize<Macro>(json, JsonOptions)
