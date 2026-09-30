@@ -96,3 +96,22 @@ one under it), 400 ms per block, released on the start block:
 
 Frames and the test script: `%LOCALAPPDATA%\626Labs\ore-stop-sweep\2026-09-29-drag\`. The design
 stands as written.
+
+## Later inputs (Este, relayed by the controller, 2026-09-29, after the drag run)
+
+5. **The drag measurement is confounded.** The main's special pickaxe shoots power balls that break
+   blocks on their own, so the scene change in the drag runs cannot all be credited to the pointer.
+   "A held, moving pointer mines every block it passes" stays the working assumption; it is not yet
+   a measured fact. The design is not rewritten around this. The Ur OCR plan's live task measures
+   the pointer's share on its own: a sweep over a patch well away from the character, each swept
+   point's change compared with control points the pointer never passes over, in the same run.
+   Power balls also touch the "broke nothing" rule: a power ball that breaks a block on the path
+   reads as progress.
+6. **Near-camera blocks.** The blocks nearest the camera sit toward the bottom of the window and are
+   hard to hit at any distance from the character. On that side only (screen-down from the centre),
+   the path's rows continue past ring 4 toward the bottom edge of the client, stopping a margin short
+   of it (a named constant, 12 px) and still skipping HUD points. The other three sides stay at
+   ring 4. A per-account toggle stored with the dwell, default on. Note for the build: today's
+   HudMask masks everything below y 470 of the 599 px client across the full width (the hotbar
+   line), so the extension adds at most one row until that band is narrowed to the hotbar's real
+   extent, which the live task measures.
