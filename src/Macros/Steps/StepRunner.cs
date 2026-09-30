@@ -637,6 +637,7 @@ internal static class StepRunner
             SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, path[^1].X, path[^1].Y, s.Button, 0));
             heldButtons.Remove(s.Button);
         }
+        // Deliberately broad: any exception while the button is down goes back to the start block before it is rethrown.
         catch (Exception e)
         {
             // A lost foreground lets RunAsync's finally release in place, as every hold does.

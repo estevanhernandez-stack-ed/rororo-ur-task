@@ -1718,6 +1718,24 @@ public class StepRunnerTests
     }
 
     [Fact]
+    public async Task A_capture_that_fails_mid_sweep_goes_back_to_the_start_to_release()
+    {
+        // Only the capture fails, from 1000: the sample before point 4 (at 1350) cannot see the
+        // window, but the target is still in front and sends still work, so it can go back to release.
+        var log = new List<string>();
+        var io = Guarded(new FakeIo { Screen = (_, _, _) => Rock }, _ => true);
+        io.OnDelay = () => { if (io.NowMs >= 1000) io.CaptureWorks = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(log, guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal((0, "CElCPapa: step 1 'SweepPath' could not see the window."), (r.StepIndex, r.Reason));
+        Assert.Equal(new[] { (MacroEventKind.MouseMove, 450, 300), (MacroEventKind.MouseUp, 450, 300) },
+            io.Sent.TakeLast(2).Select(e => (e.Kind, e.X, e.Y)));
+        Assert.Empty(io.Released);
+        Assert.Contains("swept 3 of 9 points in 1.2 s, then the playback ended; released on the start block", log);
+    }
+
+    [Fact]
     public async Task Sweep_points_scale_with_the_window()
     {
         // Measured at 800x599, played at 1000x749: 400,300 lands at 500,375 and 480,240 at 600,300.
