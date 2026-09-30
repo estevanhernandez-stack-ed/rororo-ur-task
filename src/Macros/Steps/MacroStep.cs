@@ -41,6 +41,19 @@ public sealed record HoldStep(
     int DelayMs, string Id, string? Label, int X, int Y, int Button = 1,
     HoldCheck? Check = null, int? MaxMs = null, OutlineCheck? Reach = null) : MacroStep(DelayMs);
 
+/// <summary>A point of a <see cref="SweepStep"/> path, in the macro's recorded client pixels. The
+/// SweepPath bridge call sends these as <c>{ "x": .., "y": .. }</c>.</summary>
+public sealed record SweepPoint(int X, int Y);
+
+/// <summary>
+/// One continuous hold along a path (ore-stop sweep spec, "The Ur Task side"): the button goes down
+/// on Path[0], the pointer moves to each later point with one real mouse move and waits DwellMs
+/// there, and the button comes up on the last point, which the bridge made sure is Path[0] again.
+/// Whatever block is under the pointer while the button is down gets mined, so nothing is looked at.
+/// Built in memory for a SweepPath call and never saved, so it has no JSON kind.
+/// </summary>
+public sealed record SweepStep(int DelayMs, IReadOnlyList<SweepPoint> Path, int DwellMs, int Button = 1) : MacroStep(DelayMs);
+
 /// <summary>Button held while the mouse moves by (Dx, Dy) from the start point.</summary>
 public sealed record DragStep(int DelayMs, int Button, int StartX, int StartY, int Dx, int Dy, int DurationMs) : MacroStep(DelayMs);
 
@@ -107,6 +120,10 @@ public static class StepTiming
     /// leaves the edges where they were, within a few pixels.</summary>
     public const int OutlineMoveTolerancePx = 6;
 
+    /// <summary>While a sweep holds the button, the guard is sampled before every this-many-th point
+    /// (spec: "sampled every few points"). At the default 400 ms dwell that is every 1.2 s.</summary>
+    public const int SweepGuardEveryPoints = 3;
+
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
     {
@@ -114,6 +131,7 @@ public static class StepTiming
         FirstMatchStep => JumpWiggleMs + PressHoldMs,
         // An open hold's length is unknowable, so it counts as nothing: the estimate is a floor.
         HoldStep h => JumpWiggleMs + (h.MaxMs ?? 0),
+        SweepStep w => JumpWiggleMs + (long)w.DwellMs * Math.Max(0, (w.Path?.Count ?? 0) - 1),
         DragStep d => JumpWiggleMs + d.DurationMs,
         WheelStep => JumpWiggleMs,
         PointerMoveStep p => p.DurationMs,
@@ -174,6 +192,13 @@ public static class StepValidator
                     if (h.Check.Tolerance < 1) return $"{name} has a hold tolerance below 1.";
                     if (h.MaxMs is < 1) return $"{name} has a maxMs below 1.";
                     if (ReachProblem(h.Reach, name) is { } rerr) return rerr;
+                    break;
+                }
+                case SweepStep s:
+                {
+                    if (s.Path is null || s.Path.Count < 2) return $"Step {n} is a sweep with fewer than 2 points.";
+                    if (s.Path.Any(p => p is null)) return $"Step {n} is a sweep with an empty point.";
+                    if (s.DwellMs < 1) return $"Step {n} is a sweep with a dwell below 1 ms.";
                     break;
                 }
             }

@@ -140,6 +140,9 @@ internal static class StepRunner
                     case HoldStep h:
                         await PlayHoldAsync(h, i, ctx, io, heldButtons, tally, shared, ct);
                         break;
+                    case SweepStep s:
+                        await PlaySweepAsync(s, i, ctx, io, heldButtons, ct);
+                        break;
                     case DragStep d:
                         await PlayDragAsync(d, ctx, io, heldButtons, ct);
                         break;
@@ -566,14 +569,107 @@ internal static class StepRunner
     /// profile covers the game. Released buttons stay released; RunAsync's finally lets go of any
     /// still down. No guard: nothing is sampled.
     /// </summary>
-    private static void CheckGuard(StepContext ctx, IStepIo io, int index, string name)
+    private static void CheckGuard(StepContext ctx, IStepIo io, int index, string name, string who = "ClearAt")
     {
-        if (ctx.Guard is not { } g) return;
+        if (GuardBroken(ctx, io, index, name) is { } seen) throw new StopException(GuardStopText(who, ctx.Guard!, seen), index);
+    }
+
+    /// <summary>The colour the guard box shows when it has moved past its tolerance; null when it
+    /// holds or there is no guard. The box is placed and scaled like a reach box. A box it cannot
+    /// see stops the step, as any capture does.</summary>
+    private static Rgb? GuardBroken(StepContext ctx, IStepIo io, int index, string name)
+    {
+        if (ctx.Guard is not { } g) return null;
         var rect = PointMath.ScaledRect(Place(ctx, (g.X, g.Y)), new CheckBox(0, 0, g.W, g.H), ctx.RecordedClient, ctx.ActualClient);
         var seen = SampleGuarded(io, rect) ?? throw new StopException($"{name} could not see the window.", index);
-        if (seen.DistanceTo(g.Expect) <= g.Tolerance) return;
-        throw new StopException(string.Create(CultureInfo.InvariantCulture,
-            $"ClearAt stopped: the guard at ({g.X},{g.Y}) isn't the expected colour (saw {seen.Hex}); something may be over the game (a menu or a player's profile)."), index);
+        return seen.DistanceTo(g.Expect) <= g.Tolerance ? null : seen;
+    }
+
+    private static string GuardStopText(string who, ScreenGuard g, Rgb seen) => string.Create(CultureInfo.InvariantCulture,
+        $"{who} stopped: the guard at ({g.X},{g.Y}) isn't the expected colour (saw {seen.Hex}); something may be over the game (a menu or a player's profile).");
+
+    // ---------- sweep (ore-stop sweep spec, "The Ur Task side") ----------
+
+    /// <summary>
+    /// One continuous hold along a path. Whatever block is under the pointer while the button is down
+    /// gets mined, so there is no per-point look, baseline or park. After the usual jump the button
+    /// goes down on Path[0], the start block beside the character; the pointer moves to each later
+    /// point with one real mouse move (Roblox ignores a bare cursor jump; a hop over the HUD is the
+    /// same single straight input) and waits DwellMs there; the button comes up on the last point,
+    /// which the bridge made sure is Path[0] again. A release is a click, and the start block is the
+    /// one place a click can't land on a player or a chest.
+    /// <para>The guard is sampled before the press and before every
+    /// <see cref="StepTiming.SweepGuardEveryPoints"/>-th point while held. A change goes back to the
+    /// start block, lets go there, and stops the playback as a failed check. The foreground is checked
+    /// before every input and every <see cref="StepTiming.PollMs"/> of a dwell; losing it lets go in
+    /// place through RunAsync's finally, as every hold does. Esc, StopMacro and a window it can no
+    /// longer see also go back to the start block to let go, when the target is still in front.</para>
+    /// </summary>
+    private static async Task PlaySweepAsync(SweepStep s, int index, StepContext ctx, IStepIo io, HashSet<int> heldButtons, CancellationToken ct)
+    {
+        const string who = "SweepPath";
+        var name = $"{ctx.AccountName}: step {index + 1} '{who}'";
+        var client = io.ClientSize() ?? throw new StopException($"{name} could not see the window.", index);
+        var path = s.Path.Select(p => Place(ctx, (p.X, p.Y))).ToList();
+        if (path.Any(p => p.X < 0 || p.Y < 0 || p.X >= client.W || p.Y >= client.H))
+            throw new StopException($"{name} has a point outside the window.", index);
+        var start = path[0];
+
+        await io.Delay(s.DelayMs, ct);
+        CheckGuard(ctx, io, index, name, who);   // nothing is down yet: a covered game gets no input at all
+        await JumpAsync(io, start, ct);          // Roblox drops a press after focus unless it saw movement
+        CheckGuard(ctx, io, index, name, who);   // the jump took a wiggle: look again before the press
+        SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseDown, 0, start.X, start.Y, s.Button, 0));
+        heldButtons.Add(s.Button);
+        var pressedAt = io.NowMs;
+        var reached = 1;
+        try
+        {
+            await DwellAsync(io, s.DwellMs, ct);
+            for (int k = 1; k < path.Count; k++)
+            {
+                if (k % StepTiming.SweepGuardEveryPoints == 0 && GuardBroken(ctx, io, index, name) is { } seen)
+                    throw new StopException(GuardStopText(who, ctx.Guard!, seen), index);
+                SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseMove, 0, path[k].X, path[k].Y, 0, 0));
+                reached++;
+                if (k < path.Count - 1) await DwellAsync(io, s.DwellMs, ct); // the last point is where it lets go
+            }
+            SendGuarded(io, new MacroEvent(0, MacroEventKind.MouseUp, 0, path[^1].X, path[^1].Y, s.Button, 0));
+            heldButtons.Remove(s.Button);
+        }
+        catch (Exception e)
+        {
+            // A lost foreground lets RunAsync's finally release in place, as every hold does.
+            var onStart = e is not InputBlockedException && ReleaseOnStart(io, start, s.Button, heldButtons);
+            ctx.Log(string.Create(CultureInfo.InvariantCulture,
+                $"swept {reached} of {path.Count} points in {(io.NowMs - pressedAt) / 1000.0:F1} s, then the playback ended{(onStart ? "; released on the start block" : "")}"));
+            throw;
+        }
+        ctx.Log(string.Create(CultureInfo.InvariantCulture, $"swept {path.Count} points in {(io.NowMs - pressedAt) / 1000.0:F1} s"));
+    }
+
+    /// <summary>Waits <paramref name="ms"/> with the button down, checking the foreground every
+    /// <see cref="StepTiming.PollMs"/>.</summary>
+    private static async Task DwellAsync(IStepIo io, int ms, CancellationToken ct)
+    {
+        var start = io.NowMs;
+        while (io.NowMs - start < ms)
+        {
+            await io.Delay((int)Math.Min(StepTiming.PollMs, ms - (io.NowMs - start)), ct);
+            GuardForeground(io);
+        }
+    }
+
+    /// <summary>Best effort and never a wait (the token may already be cancelled): with the target
+    /// still in front, move to the start block and let go there. False when it could not; RunAsync's
+    /// finally then lets go wherever the pointer is.</summary>
+    private static bool ReleaseOnStart(IStepIo io, (int X, int Y) start, int button, HashSet<int> heldButtons)
+    {
+        if (!heldButtons.Contains(button) || !io.TargetInForeground()) return false;
+        if (!io.Send(new MacroEvent(0, MacroEventKind.MouseMove, 0, start.X, start.Y, 0, 0))) return false;
+        if (!io.Send(new MacroEvent(0, MacroEventKind.MouseUp, 0, start.X, start.Y, button, 0))) return false;
+        heldButtons.Remove(button);
+        return true;
     }
 
     // ---------- reach (the white outline) ----------

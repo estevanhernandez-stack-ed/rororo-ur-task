@@ -1606,4 +1606,148 @@ public class StepRunnerTests
         Assert.Single(io.Downs);
         Assert.DoesNotContain(io.CaptureRects, c => c == (55, 289, 3, 3));
     }
+
+    // ---------- sweep (ore-stop sweep spec, "The Ur Task side") ----------
+
+    private static SweepStep Sweep((int X, int Y)[] path, int dwellMs = 400)
+        => new(0, path.Select(p => new SweepPoint(p.X, p.Y)).ToList(), dwellMs);
+
+    /// <summary>Ring 1 around 400,300 at 50 px, from the east block and back to it: 9 points.</summary>
+    private static readonly (int X, int Y)[] Ring1 =
+    {
+        (450, 300), (450, 250), (400, 250), (350, 250), (350, 300), (350, 350), (400, 350), (450, 350), (450, 300),
+    };
+
+    private const string SweepGuardStop = "SweepPath stopped: the guard at (55,289) isn't the expected colour (saw #F5F5F5); "
+        + "something may be over the game (a menu or a player's profile).";
+
+    [Fact]
+    public async Task A_sweep_presses_on_the_start_moves_through_every_point_and_releases_on_the_start()
+    {
+        // Jump 0..150, press at 150, dwell 400 at each point but the last: moves at 550, 950, 1350,
+        // and the release right on arrival at the closing point.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Rock };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(new[] { (450, 300), (450, 250), (400, 250), (450, 300) }) },
+            Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.False(r.SkippedByReach);
+        var down = Assert.Single(io.Downs);
+        Assert.Equal((450, 300, 150L, 1), (down.X, down.Y, down.TimestampMs, down.MouseButton));
+        Assert.Equal(new[] { (450, 250, 550L), (400, 250, 950L), (450, 300, 1350L) },
+            io.Sent.Where(e => e.Kind == MacroEventKind.MouseMove && e.TimestampMs >= 150).Select(e => (e.X, e.Y, e.TimestampMs)));
+        var up = Assert.Single(io.Ups);
+        Assert.Equal((450, 300, 1350L), (up.X, up.Y, up.TimestampMs));
+        Assert.Empty(io.Released); // it let go itself; the finally had nothing to do
+        Assert.Contains("swept 4 points in 1.2 s", log);
+    }
+
+    [Fact]
+    public async Task A_guard_change_mid_sweep_goes_back_to_the_start_releases_there_and_stops()
+    {
+        // Pressed at 150, moves at 550 and 950; the dot turns white at 1000 and the sample before
+        // point 4 (at 1350) sees it. Point 4 (350,250) is never reached.
+        var log = new List<string>();
+        var io = Guarded(new FakeIo { Screen = (_, _, _) => Rock }, io => io.NowMs < 1000);
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(log, guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal((0, SweepGuardStop), (r.StepIndex, r.Reason));
+        Assert.Equal((450, 300), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.Equal(new[] { (MacroEventKind.MouseMove, 450, 300), (MacroEventKind.MouseUp, 450, 300) },
+            io.Sent.TakeLast(2).Select(e => (e.Kind, e.X, e.Y)));
+        Assert.DoesNotContain(io.Sent, e => e.Kind == MacroEventKind.MouseMove && (e.X, e.Y) == (350, 250));
+        Assert.Empty(io.Released);
+        Assert.Contains("swept 3 of 9 points in 1.2 s, then the playback ended; released on the start block", log);
+    }
+
+    [Fact]
+    public async Task A_guard_covered_before_the_press_sends_nothing_at_all()
+    {
+        var io = Guarded(new FakeIo { Screen = (_, _, _) => Rock }, _ => false);
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(guard: Guard), io, default);
+
+        Assert.Equal((0, SweepGuardStop), (r.StepIndex, r.Reason));
+        Assert.Empty(io.Sent);
+    }
+
+    [Fact]
+    public async Task The_guard_is_sampled_every_3_points_while_held()
+    {
+        // Twice before the press, then before points 4 and 7 of 9.
+        var io = Guarded(new FakeIo { Screen = (_, _, _) => Rock }, _ => true);
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(guard: Guard), io, default);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Equal(4, io.CaptureRects.Count(c => c == (55, 289, 3, 3)));
+        Assert.Equal((450, 300), (io.Ups.Single().X, io.Ups.Single().Y));
+    }
+
+    [Fact]
+    public async Task Losing_the_foreground_mid_sweep_releases_in_place_and_aborts()
+    {
+        // At (450,250) from 550; the dwell's poll at 750 finds another window in front.
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Rock };
+        io.OnDelay = () => { if (io.NowMs >= 700) io.Foreground = false; };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(log), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Foreground shifted away from CElCPapa at step 1/1.", r.Reason);
+        Assert.Equal(new[] { 1 }, io.Released); // RunAsync's finally, where the pointer is
+        Assert.Equal((450, 250), (io.Ups.Single().X, io.Ups.Single().Y));
+        Assert.Contains("swept 2 of 9 points in 0.6 s, then the playback ended", log);
+    }
+
+    [Fact]
+    public async Task Esc_mid_sweep_goes_back_to_the_start_block_to_release()
+    {
+        using var cts = new CancellationTokenSource();
+        var log = new List<string>();
+        var io = new FakeIo { Screen = (_, _, _) => Rock };
+        io.OnDelay = () => { if (io.NowMs >= 700) cts.Cancel(); };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(Ring1) }, Ctx(log), io, cts.Token);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal("Playback cancelled.", r.Reason);
+        Assert.Equal(new[] { (MacroEventKind.MouseMove, 450, 300), (MacroEventKind.MouseUp, 450, 300) },
+            io.Sent.TakeLast(2).Select(e => (e.Kind, e.X, e.Y)));
+        Assert.Empty(io.Released);
+        Assert.Contains("swept 2 of 9 points in 0.6 s, then the playback ended; released on the start block", log);
+    }
+
+    [Fact]
+    public async Task Sweep_points_scale_with_the_window()
+    {
+        // Measured at 800x599, played at 1000x749: 400,300 lands at 500,375 and 480,240 at 600,300.
+        var io = new FakeIo { Client = (1000, 749), Screen = (_, _, _) => Rock };
+        await StepRunner.RunAsync(new MacroStep[] { Sweep(new[] { (400, 300), (400, 240), (480, 240), (400, 300) }) },
+            Ctx(actual: (1000, 749)), io, default);
+
+        Assert.Equal((500, 375), (io.Downs.Single().X, io.Downs.Single().Y));
+        Assert.Equal(new[] { (500, 300), (600, 300), (500, 375) },
+            io.Sent.Where(e => e.Kind == MacroEventKind.MouseMove && e.TimestampMs >= StepTiming.JumpWiggleMs).Select(e => (e.X, e.Y)));
+        Assert.Equal((500, 375), (io.Ups.Single().X, io.Ups.Single().Y));
+    }
+
+    [Fact]
+    public async Task A_sweep_point_outside_the_live_window_stops_before_any_input()
+    {
+        var io = new FakeIo { Client = (500, 599), Screen = (_, _, _) => Rock };
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(new[] { (450, 300), (550, 300), (450, 300) }) }, Ctx(), io, default);
+
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Equal((0, "CElCPapa: step 1 'SweepPath' has a point outside the window."), (r.StepIndex, r.Reason));
+        Assert.Empty(io.Sent);
+    }
+
+    [Fact]
+    public async Task A_sweep_with_fewer_than_2_points_is_refused_before_playing()
+    {
+        var r = await StepRunner.RunAsync(new MacroStep[] { Sweep(new[] { (450, 300) }) }, Ctx(), new FakeIo(), default);
+
+        Assert.Equal(PlaybackOutcome.Refused, r.Outcome);
+        Assert.Equal("Step 1 is a sweep with fewer than 2 points.", r.Reason);
+    }
 }
