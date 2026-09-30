@@ -27,7 +27,8 @@ public sealed record AltOutcome(
     PlaybackOutcome Outcome,                     // Completed | Refused | Aborted | Skipped (sequence aborted)
     string? Reason,
     int? StepIndex = null,                       // 0-based step that stopped a v4 macro
-    bool SkippedByReach = false);                // Completed, but pressed nothing: reach checks skipped (PlaybackResult.SkippedByReach)
+    bool SkippedByReach = false,                 // Completed, but pressed nothing: reach checks skipped (PlaybackResult.SkippedByReach)
+    IReadOnlyList<int>? NoOutline = null);       // 1-based reach steps that showed no outline (PlaybackResult.NoOutline)
 
 public sealed record SequenceResult(
     IReadOnlyList<AltOutcome> PerAlt,

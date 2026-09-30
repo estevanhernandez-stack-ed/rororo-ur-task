@@ -65,13 +65,17 @@ public sealed record GetPlaybackRequest(
 /// <summary>State is running | finished | stopped | failed. On failed, Reason is a short code
 /// (check-failed, refused, aborted, error) and Detail is the sentence Claude shows. On finished,
 /// Reason is null, or "skipped" when the playback pressed nothing because reach checks skipped
-/// on every alt (0.11.0, additive; Ur MCP ignores the reason of a finished run).</summary>
+/// on every alt (0.11.0, additive; Ur MCP ignores the reason of a finished run).
+/// <para>NoOutline (0.12.0, additive): on a finished ClearAt only, the 1-based points that showed
+/// no outline, empty when every point had one. Null everywhere else, and a null is not written,
+/// so every other reply keeps its old shape.</para></summary>
 public sealed record GetPlaybackResponse(
     bool Ok,
     string? State,
     string? Reason,
     string? Detail,
-    int? StepIndex)
+    int? StepIndex,
+    int[]? NoOutline = null)
 {
     public static GetPlaybackResponse Refused(string reason, string? detail = null) => new(false, null, reason, detail, null);
 }

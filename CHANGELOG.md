@@ -19,6 +19,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   S s". The request carries `step`, the block size in px, as a new field. A path must start and end on
   the same block, move a whole number of `step` px at a time, stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
   a sentence. Additive on bridge contract 1.0.
+- **A finished ClearAt says which spots were empty.** `GetPlayback` on a finished ClearAt now
+  carries `noOutline`: the 1-based points that showed no outline, `[]` when every point had one.
+  A point counts when it logged "no outline, skipped", and also when it logged "no outline on a
+  fresh baseline, stopped": it pressed, but nothing broke there. Ur OCR remembers those spots and
+  stops sending them pass after pass, where each one cost about 0.6 s. Every other reply (a
+  saved macro, a failed or stopped ClearAt, a running one) leaves the field out, so older callers
+  see no change. Additive on bridge contract 1.0.
 
 ## 0.11.0 — unreleased
 

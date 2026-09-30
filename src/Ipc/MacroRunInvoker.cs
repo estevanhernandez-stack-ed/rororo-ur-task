@@ -279,7 +279,15 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         catch (Exception ex) { state = PlaybackState.Failed; reason = "error"; detail = ex.Message; }
         finally
         {
-            _registry.Finished(playbackId, state, reason, detail, stepIndex);
+            // A finished ClearAt names the points that showed no outline, so Ur OCR stops
+            // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
+            // macro's steps are not caller points, and a failed or stopped pass never looked at
+            // the rest. A repeat reports its last pass, like everything else here.
+            var noOutline = state == PlaybackState.Finished && ClearAtMacro.SharesBaseline(macro.Id)
+                            && last?.PerAlt is { Count: > 0 } played
+                ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
+                : null;
+            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline);
             // Same state string GetPlayback returns, and before the removal below, so anything
             // waiting for the playback to leave the active set finds the line already written.
             _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));

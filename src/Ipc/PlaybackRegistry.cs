@@ -10,7 +10,7 @@ internal sealed class PlaybackRegistry
 {
     public static readonly TimeSpan Retention = TimeSpan.FromMinutes(10);
 
-    private sealed record Entry(PlaybackState State, string? Reason, string? Detail, int? StepIndex, DateTimeOffset? EndedAt);
+    private sealed record Entry(PlaybackState State, string? Reason, string? Detail, int? StepIndex, DateTimeOffset? EndedAt, int[]? NoOutline = null);
 
     private readonly Func<DateTimeOffset> _now;
     private readonly ConcurrentDictionary<string, Entry> _entries = new();
@@ -24,8 +24,9 @@ internal sealed class PlaybackRegistry
         _entries[id] = new Entry(PlaybackState.Running, null, null, null, null);
     }
 
-    public void Finished(string id, PlaybackState state, string? reason, string? detail, int? stepIndex)
-        => _entries[id] = new Entry(state, reason, detail, stepIndex, _now());
+    /// <param name="noOutline">A finished ClearAt's no-outline points (GetPlaybackResponse.NoOutline); null otherwise.</param>
+    public void Finished(string id, PlaybackState state, string? reason, string? detail, int? stepIndex, int[]? noOutline = null)
+        => _entries[id] = new Entry(state, reason, detail, stepIndex, _now(), noOutline);
 
     public GetPlaybackResponse Get(string? id)
     {
@@ -34,7 +35,7 @@ internal sealed class PlaybackRegistry
             return GetPlaybackResponse.Refused("refused", "Name the playback id that RunMacro returned.");
         if (!_entries.TryGetValue(id, out var e))
             return GetPlaybackResponse.Refused("unknown-playback", $"No playback with id '{id}'. Finished playbacks are kept for 10 minutes.");
-        return new GetPlaybackResponse(true, e.State.ToString().ToLowerInvariant(), e.Reason, e.Detail, e.StepIndex);
+        return new GetPlaybackResponse(true, e.State.ToString().ToLowerInvariant(), e.Reason, e.Detail, e.StepIndex, e.NoOutline);
     }
 
     private void Prune()
