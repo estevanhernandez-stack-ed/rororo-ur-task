@@ -41,11 +41,7 @@ internal static class ClearAtMacro
     /// refused before the ack instead of failing after it.</summary>
     public static string? Validate(ClearAtRequest r)
     {
-        if (string.IsNullOrWhiteSpace(r.Target)) return "ClearAt needs a target account.";
-        if (!long.TryParse(r.Target, NumberStyles.None, CultureInfo.InvariantCulture, out var userId) || userId <= 0)
-            return r.Target.Length <= MaxEchoedTargetLength && r.Target.All(char.IsAsciiDigit)
-                ? $"ClearAt target '{r.Target}' is not a decimal user id."
-                : "ClearAt needs a decimal user id; got an invalid target.";
+        if (TargetProblem(r.Target, "ClearAt") is { } targetProblem) return targetProblem;
         if (r.Client is not { W: >= 1, H: >= 1 } client) return "ClearAt needs the client size the points were measured in.";
         var count = r.Points?.Count ?? 0;
         if (count is < 1 or > MaxPoints) return Inv($"ClearAt takes 1 to {MaxPoints} points; got {count}.");
@@ -99,17 +95,31 @@ internal static class ClearAtMacro
     public static string? GuardLine(ClearAtRequest r)
         => r.Guard is { Expect: { } e } g ? Inv($"ClearAt guard at ({g.X},{g.Y}), expecting {e.Hex} ±{g.Tolerance}") : null;
 
-    /// <summary>The guard's own rules: a colour, a box of 1 to <see cref="CheckBox.MaxSide"/> px a side
-    /// inside the client, and a tolerance of 1 to <see cref="MaxGuardTolerance"/>.</summary>
-    private static string? ValidateGuard(ClearAtGuard g, ClearAtClient client)
+    /// <summary>The target rules every one-account bridge call shares, with <paramref name="who"/>
+    /// naming the call in the sentence. A refused target is echoed only when it is all digits and
+    /// short; anything else could carry a forged log line.</summary>
+    internal static string? TargetProblem(string? target, string who)
     {
-        if (g.Expect is not { } e) return "ClearAt has a guard with no expected colour.";
-        if (e.R is < 0 or > 255 || e.G is < 0 or > 255 || e.B is < 0 or > 255) return "ClearAt has a guard colour outside 0 to 255.";
+        if (string.IsNullOrWhiteSpace(target)) return $"{who} needs a target account.";
+        if (!long.TryParse(target, NumberStyles.None, CultureInfo.InvariantCulture, out var userId) || userId <= 0)
+            return target.Length <= MaxEchoedTargetLength && target.All(char.IsAsciiDigit)
+                ? $"{who} target '{target}' is not a decimal user id."
+                : $"{who} needs a decimal user id; got an invalid target.";
+        return null;
+    }
+
+    /// <summary>The guard's own rules: a colour, a box of 1 to <see cref="CheckBox.MaxSide"/> px a side
+    /// inside the client, and a tolerance of 1 to <see cref="MaxGuardTolerance"/>. Shared with
+    /// SweepPath; <paramref name="who"/> names the call in the sentence.</summary>
+    internal static string? ValidateGuard(ClearAtGuard g, ClearAtClient client, string who = "ClearAt")
+    {
+        if (g.Expect is not { } e) return $"{who} has a guard with no expected colour.";
+        if (e.R is < 0 or > 255 || e.G is < 0 or > 255 || e.B is < 0 or > 255) return $"{who} has a guard colour outside 0 to 255.";
         if (g.W is < 1 or > CheckBox.MaxSide || g.H is < 1 or > CheckBox.MaxSide)
-            return Inv($"ClearAt has a guard box outside 1 to {CheckBox.MaxSide} px a side.");
-        if (g.Tolerance is < 1 or > MaxGuardTolerance) return Inv($"ClearAt has a guard tolerance outside 1 to {MaxGuardTolerance}.");
+            return Inv($"{who} has a guard box outside 1 to {CheckBox.MaxSide} px a side.");
+        if (g.Tolerance is < 1 or > MaxGuardTolerance) return Inv($"{who} has a guard tolerance outside 1 to {MaxGuardTolerance}.");
         if (!PointMath.InsideClient((g.X, g.Y, g.W, g.H), (client.W, client.H)))
-            return Inv($"ClearAt has a guard at {g.X},{g.Y} outside the {client.W}x{client.H} client.");
+            return Inv($"{who} has a guard at {g.X},{g.Y} outside the {client.W}x{client.H} client.");
         return null;
     }
 
