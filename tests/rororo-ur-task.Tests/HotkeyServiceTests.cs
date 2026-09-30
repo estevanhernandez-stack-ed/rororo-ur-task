@@ -9,7 +9,7 @@ public class HotkeyServiceTests
     {
         var svc = new HotkeyService();
         // Start should not throw — registers Ctrl+Shift+R, Ctrl+Shift+P,
-        // Ctrl+Shift+L, Ctrl+Shift+A. Bare Esc is registered on demand, not here.
+        // Ctrl+Shift+L, Ctrl+Shift+F12. Bare Esc is registered on demand, not here.
         svc.Start();
 
         try
@@ -34,11 +34,12 @@ public class HotkeyServiceTests
     }
 
     [Fact]
-    public void ChordHotkeyVkCodes_ContainsAbortChord_A()
+    public void ChordHotkeyVkCodes_ContainsAbortChord_F12()
     {
-        // Ctrl+Shift+A is the always-on abort hotkey — the recorder must filter
+        // Ctrl+Shift+F12 is the always-on abort hotkey — the recorder must filter
         // it like the other chords so it isn't baked into a macro.
-        Assert.Contains(0x41, HotkeyService.ChordHotkeyVkCodes); // VK_A
+        Assert.Contains(0x7B, HotkeyService.ChordHotkeyVkCodes); // VK_F12
+        Assert.DoesNotContain(0x41, HotkeyService.ChordHotkeyVkCodes); // VK_A: relayed typing produced Ctrl+Shift+A
     }
 
     [Fact]

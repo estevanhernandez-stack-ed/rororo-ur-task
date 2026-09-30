@@ -10,7 +10,7 @@ namespace Labs626.UrTask;
 /// <summary>
 /// Owns all the moving parts (gRPC client, account registry, foreground
 /// watcher, macro recorder + player + store, auto-stop coordinator,
-/// hotkeys) and wires the Ctrl+Shift+R / Ctrl+Shift+P / Ctrl+Shift+A (+ bare Esc
+/// hotkeys) and wires the Ctrl+Shift+R / Ctrl+Shift+P / Ctrl+Shift+F12 (+ bare Esc
 /// while playing) hotkey handlers. The ViewModel
 /// observes this runtime — runtime knows nothing about UI.
 ///
@@ -172,7 +172,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 TryStartClaim(p.AllAssignments);
             // Stopped fires exactly once, right before AssignmentRunner.RunAsync's own
             // finally clears _activeCts — same moment for every termination path
-            // (toggle-stop, Esc/Ctrl+Shift+A abort, host-lost, recipe preemption all
+            // (toggle-stop, Esc/Ctrl+Shift+F12 abort, host-lost, recipe preemption all
             // route through _runner.Abort() cancelling the loop's token). Release the
             // claim here instead of duplicating a Stop() call at every abort call site.
             else if (p.Phase == AssignmentPhase.Stopped)
@@ -389,7 +389,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// a prior active run is aborted first. Progress is surfaced through the same
     /// Log/StatusLogged pipe the rest of playback uses (no separate recipe status
     /// UI — reuses the existing activity feed instead of inventing a new one).
-    /// The bare-Esc / Ctrl+Shift+A abort chord (see <see cref="OnHotkey"/>) also
+    /// The bare-Esc / Ctrl+Shift+F12 abort chord (see <see cref="OnHotkey"/>) also
     /// aborts the active recipe run — RunAsync's own delegates are literally
     /// _sequence.PlayAsync / _runner.RunAsync, so this is the same abort surface
     /// callers already know, not a new one.
@@ -444,7 +444,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
         _activeRecipeRunner = runner;
         RecipeRunningChanged?.Invoke();
-        _hotkeys.EnableAbortKey(); // Esc/Ctrl+Shift+A aborts for the whole recipe run
+        _hotkeys.EnableAbortKey(); // Esc/Ctrl+Shift+F12 aborts for the whole recipe run
 
         _ = Task.Run(async () =>
         {
@@ -572,7 +572,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+A abort (Esc also aborts while playing).");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing).");
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -711,7 +711,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 // just because it happens to have a macro attached.
                 var activeCount = assignments.Count(a => a.Role == CadenceRole.Active);
                 var keepAliveCount = assignments.Count(a => a.Role == CadenceRole.KeepAlive);
-                Log($"Playing assignments — {activeCount} active, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+A to stop.");
+                Log($"Playing assignments — {activeCount} active, {keepAliveCount} keep-alive. Esc or Ctrl+Shift+F12 to stop.");
 
                 _hotkeys.EnableAbortKey(); // Esc aborts for the whole runner session, incl. keep-alive gaps
                 // Claim publication happens off _runner's own Started progress event

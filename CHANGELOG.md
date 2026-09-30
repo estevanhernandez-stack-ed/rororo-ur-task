@@ -37,10 +37,15 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 
 ### Changed
 
+- **Abort moved from `Ctrl+Shift+A` to `Ctrl+Shift+F12`.** Typing relayed through Mouse Without
+  Borders or Chrome Remote Desktop can leave Ctrl and Shift held down, and the next "a" typed then
+  arrives as Ctrl+Shift+A. On 2026-09-30 that stopped Ur OCR's pulse loop three times while
+  nobody pressed the chord; the abort log caught each one as an injected key with Roblox in
+  front. Typing never produces F12. Bare `Esc` still aborts while something plays.
 - **An abort says what did it.** The log said only "Aborted." or "Abort ignored — nothing
   playing.", and on 2026-09-30 there were 8 aborts nobody could explain, one of them stopping Ur
   OCR's ore-stop pulse mid-sweep with nobody at the keyboard. The line now names the source: the
-  key (`Esc`, registered only while something plays, or `Ctrl+Shift+A`) with the window in front
+  key (`Esc`, registered only while something plays, or `Ctrl+Shift+F12`) with the window in front
   at that moment, its title, pid and process, as in
   `Aborted (Esc; foreground 'Roblox' pid 6808 RobloxPlayerBeta).`; a button in Ur Task's window
   (`Aborted (Stop button; foreground ...).`); or a bridge call, `Aborted (StopMacro from

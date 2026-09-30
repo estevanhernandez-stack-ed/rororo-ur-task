@@ -13,8 +13,8 @@ public class AbortLogTests
     {
         Assert.Equal("Aborted (Esc; foreground 'Roblox' pid 6808 RobloxPlayerBeta).",
             AbortLog.Line(true, AbortLog.Source("Esc", Roblox)));
-        Assert.Equal("Aborted (Ctrl+Shift+A; foreground 'Roblox' pid 6808 RobloxPlayerBeta).",
-            AbortLog.Line(true, AbortLog.Source("Ctrl+Shift+A", Roblox)));
+        Assert.Equal("Aborted (Ctrl+Shift+F12; foreground 'Roblox' pid 6808 RobloxPlayerBeta).",
+            AbortLog.Line(true, AbortLog.Source("Ctrl+Shift+F12", Roblox)));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class AbortLogTests
 
     [Theory]
     [InlineData(3, "Esc")]
-    [InlineData(4, "Ctrl+Shift+A")]
+    [InlineData(4, "Ctrl+Shift+F12")]
     [InlineData(1, "Ctrl+Shift+R")]
     [InlineData(2, "Ctrl+Shift+P")]
     [InlineData(5, "Ctrl+Shift+L")]

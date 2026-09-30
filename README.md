@@ -64,11 +64,11 @@ Two buttons in the recorder window operate on all running alts:
 |---|---|---|
 | `Ctrl+Shift+R` | Start recording (or stop if already recording). | Global |
 | `Ctrl+Shift+P` | Play assignments — run the round-robin loop across all running alts. Press again to stop. | Global |
-| `Ctrl+Shift+A` | Abort current playback. | Global |
+| `Ctrl+Shift+F12` | Abort current playback. | Global |
 | `Ctrl+Shift+M` | Toggle compact mode (always-on-top strip). | Window-level |
 | `Esc` | Abort current playback — but only while a macro is playing, so Esc stays yours the rest of the time. | Global (during playback only) |
 
-**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, abort is `Ctrl+Shift+A`; bare `Esc` still aborts but is only claimed while a macro is playing, so it no longer intercepts Esc system-wide. Per-macro PLAY buttons in the recorder UI show the updated labels.
+**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, bare `Esc` still aborts but is only claimed while a macro is playing, so it no longer intercepts Esc system-wide. As of **v0.12.0**, the abort chord is `Ctrl+Shift+F12` instead of `Ctrl+Shift+A`: if you type through Mouse Without Borders or Chrome Remote Desktop, Ctrl and Shift can get stuck down on the way, and your next "a" would stop the macro. Per-macro PLAY buttons in the recorder UI show the updated labels.
 
 ## Troubleshooting
 
