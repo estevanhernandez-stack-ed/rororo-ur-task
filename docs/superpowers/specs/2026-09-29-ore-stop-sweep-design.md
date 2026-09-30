@@ -1,6 +1,6 @@
 # Ore stop: sweep the stone, target the ore
 
-**Status:** Design decisions recorded 2026-09-29 (Este answered the four questions). Waiting on the live drag measurement before a plan. Not built.
+**Status:** Design decisions recorded 2026-09-29 (Este answered the four questions). Live drag measurement PASSED 2026-09-29; ready for a plan. Not built.
 **Builds on:** `2026-09-28-ore-stop-pulse-design.md` (the pulse, ClearAt, the ore finder, the guard).
 
 ## Why
@@ -82,5 +82,17 @@ main and on ItsJustEstePapa.
    the shaft. The target layer is the user's choice: set it to the top layer to sweep there, or
    choose to go all the way down to the bottom.
 
-**Still first, before a plan:** the live measurement above. If a held, moving pointer doesn't mine
-each block it passes over, this design changes shape.
+**Measured 2026-09-29, Dunder-MiffLan, the main at 100%: a held, moving pointer DOES mine each
+block it passes over.** Three runs, top-down camera, three blocks beside the character (never the
+one under it), 400 ms per block, released on the start block:
+
+- Run 1 (shaft walls, blue layer): every point's outline box changed and three "New Item!" drops
+  appeared; the shaft walls opened. (Este confirmed it was not a mine reset.)
+- Run 3 (bottom floor, a pixel-change measure with the pointer parked away): the three dragged
+  points changed by 45, 101 and 81 (0-765 scale) against a noise of 0 and two undragged controls
+  of 0. Rewards were about double a run that broke less.
+- Blocks at this zoom are about 150-180 px, not the pulse's default 50 px: the path's step must
+  come from the pass's measured block size, as the design already says.
+
+Frames and the test script: `%LOCALAPPDATA%ƖLabs\ore-stop-sweep6-09-29-drag\`. The design
+stands as written.
