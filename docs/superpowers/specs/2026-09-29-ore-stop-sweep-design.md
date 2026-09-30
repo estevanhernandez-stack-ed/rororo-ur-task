@@ -115,3 +115,20 @@ stands as written.
    HudMask masks everything below y 470 of the 599 px client across the full width (the hotbar
    line), so the extension adds at most one row until that band is narrowed to the hotbar's real
    extent, which the live task measures.
+
+## Re-measured without power balls (2026-09-30)
+
+Este swapped to a fire pickaxe, which shoots no power balls, so the drag run's confound (item 5) could
+be tested directly. The main was 45 m into Mine #8's lava layer, in a shaft, with Auto Mine off. The
+pointer was held for 600 ms at each of three points along the left wall. All three showed an outline
+before the drag. Patch change after the drag was 244, 136 and 80, against noise of 0 to 2 and two
+controls at 0. The frames show those wall blocks gone, the layer behind them exposed, and a gem
+collected (+188). **A held, moving pointer breaks blocks on its own.** The sweep's premise stands.
+
+Frames: `%LOCALAPPDATA%\626Labs\ore-stop-sweep\2026-09-29-drag\fire2-*.png`.
+
+Two things this run also showed:
+- The ride leaves the character in a shaft whose walls are about 100 px blocks at this camera. The
+  top-down camera macro cannot turn there, and at the mine's bottom the floor is unbreakable.
+- At 160 px blocks the ring's near row sits on the hotbar line, y 470. Ur OCR now counts that line as
+  HUD (cbc1a03, local), so at this zoom the sweep covers only the row above the character and its sides.
