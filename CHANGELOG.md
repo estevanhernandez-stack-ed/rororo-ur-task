@@ -2,6 +2,18 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Turbo keep-alive.** An opt-in toggle next to the cadence presets. When any keep-alive window
+  comes due, every keep-alive window due in the next two minutes is jumped in one quick sweep,
+  so you are interrupted once instead of once per window. A small corner card counts down 3, 2, 1
+  first and never takes focus; Ctrl+Shift+F12 stops the sweep. Each window gets its Space the
+  moment it is confirmed in front (capped at 300ms), not after a fixed second, and your own
+  window comes back once at the end. Off by default; with it off, keep-alive works exactly as
+  before.
+
 ## 0.9.1 — 2026-09-29
 
 ### Fixed

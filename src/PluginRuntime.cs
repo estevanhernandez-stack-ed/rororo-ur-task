@@ -79,6 +79,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     public bool RecordKeyboardOnly { get; set; } = true;
 
+    /// <summary>
+    /// Turbo keep-alive, forwarded straight to the cadence runner (which the recipe
+    /// loop shares). Hydrated from prefs in the constructor and kept in sync by the
+    /// UI toggle; the runner reads it at every keep-alive decision, so a mid-run flip
+    /// applies from the next sweep.
+    /// </summary>
+    public bool TurboKeepAlive
+    {
+        get => _runner.TurboKeepAlive;
+        set => _runner.TurboKeepAlive = value;
+    }
+
     public PluginRuntime()
     {
         Accounts = new AccountRegistry();
@@ -105,7 +117,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
-        _runner = new AssignmentRunner(_player, _foreground);
+        _runner = new AssignmentRunner(_player, _foreground) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).

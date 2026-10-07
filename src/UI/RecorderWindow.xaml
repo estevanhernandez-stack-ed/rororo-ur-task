@@ -794,6 +794,15 @@
                                                     ToolTip="Set every alt to Active — round-robins back-to-back"
                                                     FontSize="9"
                                                     Padding="9,4" />
+                                            <CheckBox IsChecked="{Binding IsTurboKeepAlive, Mode=TwoWay}"
+                                                      VerticalAlignment="Center"
+                                                      Margin="14,0,6,0"
+                                                      ToolTip="Jumps every waiting window in one quick sweep instead of one at a time. A short countdown warns you first." />
+                                            <TextBlock Text="Turbo keep-alive"
+                                                       FontSize="9"
+                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip="Jumps every waiting window in one quick sweep instead of one at a time. A short countdown warns you first." />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
