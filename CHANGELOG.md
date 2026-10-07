@@ -13,6 +13,13 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   it was playing when you took over. The state lives in a small flag file next to the logs, so it
   holds across a restart, and scripts can see it. The log says "Break-glass ON" and "Break-glass
   OFF", with what was stopped.
+- **Turbo keep-alive.** An opt-in toggle next to the cadence presets. When any keep-alive window
+  comes due, every keep-alive window due in the next two minutes is jumped in one quick sweep,
+  so you are interrupted once instead of once per window. A small corner card counts down 3, 2, 1
+  first and never takes focus; Ctrl+Shift+F12 stops the sweep. Each window gets its Space the
+  moment it is confirmed in front (capped at 300ms), not after a fixed second, and your own
+  window comes back once at the end. Off by default; with it off, keep-alive works exactly as
+  before.
 
 ## 0.12.0 — 2026-10-25
 

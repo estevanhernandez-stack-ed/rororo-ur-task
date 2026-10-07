@@ -19,6 +19,16 @@ internal sealed record CadenceDeps(
     Action SendKeepAlive,
     Func<AccountRegistry.AccountInfo, long> KeepAliveIntervalMs)
 {
+    /// <summary>
+    /// Turbo keep-alive's pre-sweep warning: (secondsLeft, windowCount). Called with
+    /// 3, 2, 1 one second apart, then with 0 to hide, on every exit path including a
+    /// cancelled countdown. Init-only with a no-op default so every existing
+    /// positional construction (and every test that never turns turbo on) is unchanged.
+    /// The real one drives <see cref="UI.TurboSweepToast"/>, a topmost window that
+    /// never takes focus.
+    /// </summary>
+    public Action<int, int> SweepCountdown { get; init; } = (_, _) => { };
+
     public static CadenceDeps Real
     {
         get
@@ -42,7 +52,16 @@ internal sealed record CadenceDeps(
                 RestoreForeground: h => Win32Focus.RestoreForeground(h),
                 SendKeepAlive: () => AssignmentRunner.SendSpaceKeepAlive(),
                 KeepAliveIntervalMs: alt => (long)KeepAliveIntervals
-                    .For(alt.PlaceId, alt.PlaceName, prefsLazy.Value).TotalMilliseconds);
+                    .For(alt.PlaceId, alt.PlaceName, prefsLazy.Value).TotalMilliseconds)
+            {
+                SweepCountdown = (secondsLeft, windowCount) =>
+                {
+                    if (secondsLeft == AssignmentRunner.TurboCountdownSeconds)
+                        Diagnostics.DiagLog.Write(
+                            $"turbo keep-alive: sweeping {windowCount} window(s) in {secondsLeft}s");
+                    UI.TurboSweepToast.Update(secondsLeft, windowCount);
+                },
+            };
         }
     }
 }
@@ -59,6 +78,17 @@ internal sealed class AssignmentRunner
     private const int KeepAliveDelayMs = 200;       // after Space, small wait before moving on
     private const int FocusRetryBackoffMs = 30_000; // spec: bounded 30s retry on a stuck focus
 
+    // Turbo keep-alive. One warned sweep services every keep-alive alt due within
+    // the batch window, and each alt costs a polled foreground confirm instead of a
+    // fixed 1s settle. The safety invariant does not move: no input until the
+    // foreground is verified to be the target alt; a cap expiry takes the same
+    // 30s backoff a failed verify always has.
+    internal const int TurboCountdownSeconds = 3;      // warning before every sweep
+    internal const long TurboBatchWindowMs = 120_000;  // pull in alts due within 2 min
+    internal const int TurboPollIntervalMs = 15;       // foreground re-check cadence
+    internal const int TurboConfirmCapMs = 300;        // give up (no input) after this
+    internal const int TurboPostKeyMs = 40;            // let the Space register before moving on
+
     // The runner is the last line of defense against a hijack loop: a user-editable
     // interval override of 0 (or negative) reads as "always due" and reproduces the
     // original ~1.2s spin; a pathologically huge one overflows Task.Delay's int cast
@@ -71,6 +101,18 @@ internal sealed class AssignmentRunner
     private readonly IForegroundWatcher _foreground;
     private readonly CadenceDeps _deps;
     private CancellationTokenSource? _activeCts;
+    private volatile bool _turboKeepAlive;
+
+    /// <summary>
+    /// Turbo keep-alive (user preference). Read at every keep-alive decision, so
+    /// flipping it mid-run takes effect at the next sweep without a restart. Off is
+    /// exactly the pre-turbo path: one alt at a time, 1s settle, restore per alt.
+    /// </summary>
+    public bool TurboKeepAlive
+    {
+        get => _turboKeepAlive;
+        set => _turboKeepAlive = value;
+    }
 
     public AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground)
         : this(player, foreground, CadenceDeps.Real) { }
@@ -347,6 +389,27 @@ internal sealed class AssignmentRunner
                             break;
                         }
 
+                        if (TurboKeepAlive)
+                        {
+                            // Turbo: the scheduler picked one alt; sweep every
+                            // keep-alive due within the batch window along with it,
+                            // so the user is interrupted once, not once per alt. The
+                            // deadline logic that chose WHEN to sweep is untouched —
+                            // pulling an alt forward only ever taps it earlier, which
+                            // is the safe direction against the idle floor. Every
+                            // swept alt counts as gap-fitted, same as svc.Alt above,
+                            // so the forward-progress guard still holds for them.
+                            var horizon = now + TurboBatchWindowMs;
+                            var batch = scheduled
+                                .Where(a => a.IsKeepAlive && (ReferenceEquals(a, svc.Alt) || a.DueAtMs <= horizon))
+                                .OrderBy(a => a.DueAtMs)
+                                .ToList();
+                            foreach (var a in batch) gapFittedSinceActivePass.Add(a);
+                            await ServiceKeepAliveSweepAsync(
+                                batch, AdvancePass, indexOf, assignments.Count, ct).ConfigureAwait(false);
+                            break;
+                        }
+
                         // Genuinely overdue (never starved), or this is its first look
                         // since the last Active pass — service it for real.
                         await ServiceKeepAliveAsync(
@@ -515,6 +578,120 @@ internal sealed class AssignmentRunner
             {
                 _deps.RestoreForeground(prior);
             }
+        }
+    }
+
+    /// <summary>
+    /// Turbo keep-alive: one warned sweep across <paramref name="batch"/>.
+    ///
+    /// 1. Countdown. <see cref="CadenceDeps.SweepCountdown"/> gets 3, 2, 1 a second
+    ///    apart, then 0 (hide) on every exit, cancellation included. Nothing has been
+    ///    taken yet, so a cancel here restores nothing.
+    /// 2. Capture the user's foreground ONCE, after the countdown — whatever they
+    ///    are on at the moment the sweep actually starts.
+    /// 3. Per alt: Focus, then poll <see cref="IForegroundWatcher.ResolveForegroundAccount"/>
+    ///    every <see cref="TurboPollIntervalMs"/> up to <see cref="TurboConfirmCapMs"/>.
+    ///    The moment it reads the target alt, send Space and wait
+    ///    <see cref="TurboPostKeyMs"/>. Cap expiry = the same 30s backoff and
+    ///    streak a failed verify takes on the normal path, and NO input.
+    /// 4. Restore the captured foreground ONCE, in a finally, if any focus was
+    ///    actually taken — the same gate <see cref="ServiceKeepAliveAsync"/> uses.
+    ///
+    /// Owns DueAtMs and ConsecutiveFocusFailures for every alt it reaches, exactly
+    /// like <see cref="ServiceKeepAliveAsync"/>. An alt the sweep never reaches
+    /// (cancelled first) keeps its old DueAtMs; the loop is exiting anyway.
+    /// </summary>
+    private async Task ServiceKeepAliveSweepAsync(
+        IReadOnlyList<ScheduledAlt> batch,
+        Func<ScheduledAlt, int> advancePass,
+        IReadOnlyDictionary<ScheduledAlt, int> indexOf,
+        int total,
+        CancellationToken ct)
+    {
+        if (batch.Count == 0) return;
+
+        try
+        {
+            for (int s = TurboCountdownSeconds; s > 0; s--)
+            {
+                _deps.SweepCountdown(s, batch.Count);
+                await _deps.Sleep(1000, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { return; }   // finally hides; nothing was taken
+        finally
+        {
+            try { _deps.SweepCountdown(0, batch.Count); } catch { /* a toast must never break the sweep */ }
+        }
+        if (ct.IsCancellationRequested) return;
+
+        var prior = _deps.CaptureForeground();
+        var anyFocusTaken = false;
+        try
+        {
+            foreach (var alt in batch)
+            {
+                if (ct.IsCancellationRequested) return;   // Abort hotkey: stop between alts
+
+                var asn = alt.Assignment;
+                var cycle = advancePass(alt);
+                var index = indexOf[alt];
+                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
+
+                if (!_deps.Focus(asn.Alt.Pid).ok)
+                {
+                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                    alt.ConsecutiveFocusFailures++;
+                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    continue;   // nothing stolen by THIS alt; the sweep moves on
+                }
+                anyFocusTaken = true;
+
+                bool confirmed;
+                try { confirmed = await PollForegroundIsAsync(asn.Alt.RobloxUserId, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+
+                if (!confirmed)
+                {
+                    // Safety invariant: the foreground never read as this alt within
+                    // the cap — send nothing, back off, warn on the streak crossing.
+                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                    alt.ConsecutiveFocusFailures++;
+                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    continue;
+                }
+                if (ct.IsCancellationRequested) return;   // last check before input
+
+                EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
+                _deps.SendKeepAlive();
+                alt.ConsecutiveFocusFailures = 0;
+                alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;
+
+                try { await _deps.Sleep(TurboPostKeyMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
+        finally
+        {
+            if (anyFocusTaken) _deps.RestoreForeground(prior);
+        }
+    }
+
+    /// <summary>
+    /// Polled foreground confirm for turbo: true the moment the foreground resolves
+    /// to <paramref name="robloxUserId"/>, false once <see cref="TurboConfirmCapMs"/>
+    /// has passed without a match. Checks immediately, then every
+    /// <see cref="TurboPollIntervalMs"/>. Throws on cancellation.
+    /// </summary>
+    private async Task<bool> PollForegroundIsAsync(long robloxUserId, CancellationToken ct)
+    {
+        var startMs = _deps.ClockMs();
+        while (true)
+        {
+            var fg = _foreground.ResolveForegroundAccount();
+            if (fg is not null && fg.RobloxUserId == robloxUserId) return true;
+            if (_deps.ClockMs() - startMs >= TurboConfirmCapMs) return false;
+            await _deps.Sleep(TurboPollIntervalMs, ct).ConfigureAwait(false);
         }
     }
 
