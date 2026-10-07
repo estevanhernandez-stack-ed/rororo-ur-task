@@ -166,12 +166,12 @@ public class TurboKeepAliveTests
 
         Assert.NotEmpty(rig.Taps);
         var focusToTap = rig.TapTimes[0] - rig.Focused[0].at;
-        Assert.InRange(focusToTap, 45, 45 + AssignmentRunner.TurboPollIntervalMs);
+        Assert.InRange(focusToTap, 45 + AssignmentRunner.TurboSettleMs, 45 + AssignmentRunner.TurboPollIntervalMs + AssignmentRunner.TurboSettleMs);
         Assert.True(focusToTap < 1000, $"turbo took {focusToTap}ms from focus to Space; the 1s settle is back");
 
         // Whole per-alt cost: focus to restore = confirm + post-key wait.
         var focusToRestore = rig.Restored[0].at - rig.Focused[0].at;
-        Assert.True(focusToRestore <= 45 + AssignmentRunner.TurboPollIntervalMs + AssignmentRunner.TurboPostKeyMs,
+        Assert.True(focusToRestore <= 45 + AssignmentRunner.TurboPollIntervalMs + AssignmentRunner.TurboSettleMs + AssignmentRunner.TurboPostKeyMs,
             $"per-alt sweep cost was {focusToRestore}ms");
     }
 

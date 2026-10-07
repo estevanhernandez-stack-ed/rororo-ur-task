@@ -88,6 +88,8 @@ internal sealed class AssignmentRunner
     internal const int TurboPollIntervalMs = 15;       // foreground re-check cadence
     internal const int TurboConfirmCapMs = 300;        // give up (no input) after this
     internal const int TurboPostKeyMs = 40;            // let the Space register before moving on
+    internal const int TurboSettleMs = 40;             // after the confirm, before the key: Roblox can drop a key
+                                                       // that lands the same frame its window comes forward (Este 22:08)
 
     // The runner is the last line of defense against a hijack loop: a user-editable
     // interval override of 0 (or negative) reads as "always due" and reproduces the
@@ -655,6 +657,17 @@ internal sealed class AssignmentRunner
                 {
                     // Safety invariant: the foreground never read as this alt within
                     // the cap — send nothing, back off, warn on the streak crossing.
+                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                    alt.ConsecutiveFocusFailures++;
+                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    continue;
+                }
+                try { await _deps.Sleep(TurboSettleMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                // Re-check after the settle: the user (or another window) can take the foreground in those ms.
+                var settled = _foreground.ResolveForegroundAccount();
+                if (settled is null || settled.RobloxUserId != asn.Alt.RobloxUserId)
+                {
                     alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
                     alt.ConsecutiveFocusFailures++;
                     EmitFocusFailureWarning(alt, cycle, index, total, asn);
