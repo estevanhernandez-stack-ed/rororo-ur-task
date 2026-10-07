@@ -22,6 +22,13 @@ internal sealed class UserPreferences
     public bool AcceptPluginRunRequests { get; set; } = true; // default: true (sibling plugins like Ur-OCR can fire macros)
 
     /// <summary>
+    /// Turbo keep-alive: sweep every due keep-alive window in one warned pass with a
+    /// polled foreground confirm, instead of one alt at a time behind a fixed 1s
+    /// settle. Default off — the sweep jumps windows fast, so it is opt-in.
+    /// </summary>
+    public bool TurboKeepAlive { get; set; }
+
+    /// <summary>
     /// Per-game keep-alive fire interval overrides, in MINUTES, keyed by Roblox
     /// PlaceId. Beats the shipped table in <see cref="Macros.KeepAliveIntervals"/>.
     /// Empty by default — populated only by the user or from observed presence data,

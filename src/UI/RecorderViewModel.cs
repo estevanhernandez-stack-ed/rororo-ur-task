@@ -175,6 +175,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // Hydrate keyboard-only toggle from prefs onto the runtime so the first
         // recording obeys the saved preference.
         _runtime.RecordKeyboardOnly = _prefs.KeyboardOnlyRecording;
+        _runtime.TurboKeepAlive = _prefs.TurboKeepAlive;
 
         // Task 8 next-due countdown: low-frequency tick only — this is a
         // minutes-scale countdown (11-17 min fire intervals), not a stopwatch.
@@ -487,6 +488,26 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             _prefs.Save();
             OnPropertyChanged();
             OnPropertyChanged(nameof(ShowMouseRecordingWarning));
+        }
+    }
+
+    // ---------- Turbo keep-alive toggle ----------
+
+    /// <summary>
+    /// Turbo keep-alive: one warned sweep across every due keep-alive window instead
+    /// of one window at a time. Persisted via <see cref="UserPreferences"/>; applies
+    /// to a running loop from its next sweep.
+    /// </summary>
+    public bool IsTurboKeepAlive
+    {
+        get => _runtime.TurboKeepAlive;
+        set
+        {
+            if (_runtime.TurboKeepAlive == value) return;
+            _runtime.TurboKeepAlive = value;
+            _prefs.TurboKeepAlive = value;
+            _prefs.Save();
+            OnPropertyChanged();
         }
     }
 
