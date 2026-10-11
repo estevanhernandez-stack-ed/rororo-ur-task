@@ -219,6 +219,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         _runtime.MacrosChanged += () =>
         {
             _allMacros = _runtime.Store.LoadAll().Macros;
+            ReloadArchived();
             RefreshMacroList();
         };
         _runtime.CurrentlyPlayingMacroChanged += _ =>
@@ -746,6 +747,85 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public bool HasMacros => Macros.Count > 0;
     public bool HasNoMacros => Macros.Count == 0;
 
+    /// <summary>True when the library list has anything to draw: a group header,
+    /// a macro card or an archived row.</summary>
+    public bool HasLibraryRows => LibraryRows.Count > 0;
+    public bool HasNoLibraryRows => LibraryRows.Count == 0;
+
+    /// <summary>What the empty library says: the first-run hint when there are no
+    /// macros at all, otherwise that search or PLAYING NOW hid everything.</summary>
+    public string EmptyLibraryText => _allMacros.Count == 0 && !(_showArchived && _archivedMacros.Count > 0)
+        ? "Hit Ctrl+Shift+R or RECORD to capture your first macro"
+        : "No macros match. Clear the search or turn off PLAYING NOW.";
+
+    // ---------- Grouped library: search, groups, archive ----------
+
+    /// <summary>
+    /// The rows the library list draws, in order: a <see cref="MacroGroupHeader"/>
+    /// per group, then that group's <see cref="Macro"/> cards unless it's collapsed,
+    /// then (with Show archived on) an archive header and <see cref="ArchivedMacroRow"/>s.
+    /// <see cref="Macros"/> stays the flat list of visible macros, collapsed groups
+    /// included, for EXPORT and the status line.
+    /// </summary>
+    public ObservableCollection<object> LibraryRows { get; } = new();
+
+    private const string ArchiveGroupKey = "archive:";
+
+    private string _searchText = string.Empty;
+    /// <summary>Live search box text. Stacks with PLAYING NOW; see <see cref="MacroSearch"/>.</summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            value ??= string.Empty;
+            if (_searchText == value) return;
+            _searchText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasSearchText));
+            RefreshMacroList();
+        }
+    }
+
+    public bool HasSearchText => _searchText.Length > 0;
+
+    private IReadOnlyList<Macro> _archivedMacros = Array.Empty<Macro>();
+
+    private bool _showArchived;
+    /// <summary>Show archived macros greyed out at the bottom of the list, each with Restore.</summary>
+    public bool ShowArchived
+    {
+        get => _showArchived;
+        set
+        {
+            if (_showArchived == value) return;
+            _showArchived = value;
+            OnPropertyChanged();
+            ReloadArchived();
+            RefreshMacroList();
+        }
+    }
+
+    private void ReloadArchived()
+    {
+        _archivedMacros = _showArchived ? _runtime.Store.LoadArchived().Macros : Array.Empty<Macro>();
+    }
+
+    /// <summary>Collapse or expand a group (or the archived section) and remember it in ui-prefs.json.</summary>
+    public void ToggleGroup(MacroGroupHeader header)
+    {
+        if (header is null) return;
+        var collapsed = _prefs.CollapsedMacroGroups;
+        var existing = collapsed.FindIndex(k => string.Equals(k, header.Key, StringComparison.OrdinalIgnoreCase));
+        if (existing >= 0) collapsed.RemoveAt(existing);
+        else collapsed.Add(header.Key);
+        _prefs.Save();
+        RefreshMacroList();
+    }
+
+    private bool IsCollapsed(string key)
+        => _prefs.CollapsedMacroGroups.Any(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+
     // ---------- v0.6: game-aware library ----------
 
     private IReadOnlyList<Macro> _allMacros = Array.Empty<Macro>();
@@ -768,19 +848,51 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     private IReadOnlySet<long> CurrentPlaceIds()
         => Assignments.Select(r => r.Alt.PlaceId).Where(id => id > 0).ToHashSet();
 
-    /// <summary>Rebuild the visible macro list: playing-now filter, then game-band + recency sort.</summary>
+    /// <summary>
+    /// Rebuild the visible library: PLAYING NOW filter, then search, then groups
+    /// from the names (<see cref="MacroLibrary"/>). Archived macros take the search
+    /// but not PLAYING NOW, so Restore can always find them.
+    /// </summary>
     private void RefreshMacroList()
     {
         var current = CurrentPlaceIds();
         var visible = _isPlayingNowFilter
             ? MacroGameFilter.FilterPlayingNow(_allMacros, current)
             : _allMacros;
+        var groups = MacroLibrary.Group(MacroSearch.Filter(visible, _searchText));
 
         Macros.Clear();
-        foreach (var m in MacroGameFilter.Sort(visible, current))
-            Macros.Add(m);
+        LibraryRows.Clear();
+        foreach (var group in groups)
+        {
+            var collapsed = IsCollapsed(group.Name);
+            LibraryRows.Add(new MacroGroupHeader(group.Name, group.Name, group.Macros.Count, collapsed));
+            foreach (var m in group.Macros)
+            {
+                Macros.Add(m);
+                if (!collapsed) LibraryRows.Add(m);
+            }
+        }
+
+        if (_showArchived)
+        {
+            var archived = MacroLibrary.Group(MacroSearch.Filter(_archivedMacros, _searchText))
+                .SelectMany(g => g.Macros)
+                .ToList();
+            if (archived.Count > 0)
+            {
+                var collapsed = IsCollapsed(ArchiveGroupKey);
+                LibraryRows.Add(new MacroGroupHeader("Archived", ArchiveGroupKey, archived.Count, collapsed, isArchive: true));
+                if (!collapsed)
+                    foreach (var m in archived) LibraryRows.Add(new ArchivedMacroRow(m));
+            }
+        }
+
         OnPropertyChanged(nameof(HasMacros));
         OnPropertyChanged(nameof(HasNoMacros));
+        OnPropertyChanged(nameof(HasLibraryRows));
+        OnPropertyChanged(nameof(HasNoLibraryRows));
+        OnPropertyChanged(nameof(EmptyLibraryText));
         OnPropertyChanged(nameof(StatusMeta));
     }
 
@@ -806,6 +918,57 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         if (macro is null) return;
         _runtime.Store.Delete(macro.Id);
+        _runtime.RaiseMacrosChanged();
+    }
+
+    /// <summary>Alts this macro is paired with and saved recipes that use it, for the
+    /// Delete and Archive warnings.</summary>
+    public MacroUsageInfo GetUsage(Macro macro)
+    {
+        var pairings = _runtime.AllAssignments
+            .Select(kv => (
+                AltName: Assignments.FirstOrDefault(r => r.Alt.Pid == kv.Key)?.Alt.DisplayName ?? $"pid {kv.Key}",
+                MacroId: kv.Value?.Id));
+        IReadOnlyList<Recipe> recipes;
+        try { recipes = _runtime.Recipes.LoadAll().Recipes; }
+        catch { recipes = Array.Empty<Recipe>(); }
+        return MacroUsage.Find(macro.Id, pairings, recipes);
+    }
+
+    /// <summary>Move a macro into macros\archive\. It drops out of the library, the
+    /// action bridge and the MCP until restored.</summary>
+    public void ArchiveMacro(Macro macro)
+    {
+        if (macro is null) return;
+        try
+        {
+            if (_runtime.Store.Archive(macro.Id))
+                LogStatus($"Archived '{macro.Name ?? "(unnamed)"}'.");
+            else
+                LogStatus($"Couldn't archive '{macro.Name ?? "(unnamed)"}': its file is gone.");
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't archive '{macro.Name ?? "(unnamed)"}': {ex.Message}");
+        }
+        _runtime.RaiseMacrosChanged();
+    }
+
+    /// <summary>Move an archived macro back into the library.</summary>
+    public void RestoreMacro(Macro macro)
+    {
+        if (macro is null) return;
+        try
+        {
+            if (_runtime.Store.Restore(macro.Id))
+                LogStatus($"Restored '{macro.Name ?? "(unnamed)"}'.");
+            else
+                LogStatus($"Couldn't restore '{macro.Name ?? "(unnamed)"}': a macro with the same id is already in the library.");
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't restore '{macro.Name ?? "(unnamed)"}': {ex.Message}");
+        }
         _runtime.RaiseMacrosChanged();
     }
 
@@ -841,8 +1004,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     /// </summary>
     public void ImportMacros(IEnumerable<string> filePaths)
     {
+        // The whole library, not the visible list: search, PLAYING NOW and collapsed
+        // groups must not let an import take a name a hidden macro already has.
         var takenNames = new HashSet<string>(
-            Macros.Select(m => m.Name).Where(n => !string.IsNullOrWhiteSpace(n))!,
+            _allMacros.Select(m => m.Name).Where(n => !string.IsNullOrWhiteSpace(n))!,
             StringComparer.OrdinalIgnoreCase);
         var imported = 0;
 

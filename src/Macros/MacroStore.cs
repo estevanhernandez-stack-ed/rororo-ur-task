@@ -43,18 +43,35 @@ public sealed class MacroStore
 
     public string Directory => _directory;
 
+    /// <summary>Archived macros live one level down, in <c>macros\archive\</c>.</summary>
+    public string ArchiveDirectory => Path.Combine(_directory, "archive");
+
     /// <summary>
     /// Load every macro file in the directory. Returns successes and failures
     /// separately so the UI can surface invalid files without breaking the load.
     /// v0.1 macros are auto-migrated to v2 via <see cref="MacroV1Migrator"/>;
     /// the migration is sticky — the next save persists in v2 shape.
     /// </summary>
-    public LoadResult LoadAll()
+    public LoadResult LoadAll() => LoadFrom(_directory);
+
+    /// <summary>
+    /// Load the macros in <see cref="ArchiveDirectory"/>. Empty when nothing has been
+    /// archived yet; the folder is created on the first archive, not here.
+    /// </summary>
+    public LoadResult LoadArchived()
+        => System.IO.Directory.Exists(ArchiveDirectory)
+            ? LoadFrom(ArchiveDirectory)
+            : new LoadResult(Array.Empty<Macro>(), Array.Empty<LoadFailure>());
+
+    // Top level only (EnumerateFiles' default). LoadAll must never see the archive
+    // subfolder: that is what keeps archived macros out of the library, the action
+    // bridge's ListMacros and the MCP's list_macros.
+    private static LoadResult LoadFrom(string directory)
     {
         var loaded = new List<Macro>();
         var failures = new List<LoadFailure>();
 
-        foreach (var path in System.IO.Directory.EnumerateFiles(_directory, "*.json"))
+        foreach (var path in System.IO.Directory.EnumerateFiles(directory, "*.json"))
         {
             try
             {
@@ -96,6 +113,37 @@ public sealed class MacroStore
         var target = PathFor(macroId);
         if (File.Exists(target)) File.Delete(target);
     }
+
+    /// <summary>
+    /// Move <c>&lt;id&gt;.json</c> into <see cref="ArchiveDirectory"/>. Archiving is a file
+    /// move, not a flag, so every reader of the top level (library, bridge, MCP) drops
+    /// the macro without learning anything new. A stale archived copy with the same id
+    /// is replaced. Returns false when there is no live macro with that id.
+    /// </summary>
+    public bool Archive(string macroId)
+    {
+        var source = PathFor(macroId);
+        if (!File.Exists(source)) return false;
+        System.IO.Directory.CreateDirectory(ArchiveDirectory);
+        File.Move(source, ArchivedPathFor(macroId), overwrite: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Move an archived macro back to the top level. Never overwrites a live macro
+    /// with the same id: returns false then, and when nothing is archived under that id.
+    /// </summary>
+    public bool Restore(string macroId)
+    {
+        var source = ArchivedPathFor(macroId);
+        var target = PathFor(macroId);
+        if (!File.Exists(source) || File.Exists(target)) return false;
+        File.Move(source, target);
+        return true;
+    }
+
+    private string ArchivedPathFor(string macroId)
+        => Path.Combine(ArchiveDirectory, Path.GetFileName(PathFor(macroId)));
 
     private string PathFor(string macroId)
     {

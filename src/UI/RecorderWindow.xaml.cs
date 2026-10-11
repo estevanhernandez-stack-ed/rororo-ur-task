@@ -135,11 +135,88 @@ public partial class RecorderWindow : Window
         if (sender is MenuItem mi && mi.Tag is Macro macro
             && DataContext is RecorderViewModel vm)
         {
-            var dlg = new DeleteMacroConfirmDialog(macro.Name ?? "(unnamed)") { Owner = this };
+            var dlg = new DeleteMacroConfirmDialog(macro.Name ?? "(unnamed)", DescribeUsage(vm.GetUsage(macro))) { Owner = this };
             if (dlg.ShowDialog() == true)
             {
                 vm.DeleteMacro(macro);
             }
+        }
+    }
+
+    /// <summary>
+    /// Archive moves the file into macros\archive\. An unused macro goes straight
+    /// there (Restore undoes it); one that is paired or used in a recipe asks first,
+    /// naming where, like Delete does.
+    /// </summary>
+    private void OnMacroArchiveClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not Macro macro
+            || DataContext is not RecorderViewModel vm) return;
+
+        var usage = vm.GetUsage(macro);
+        if (usage.IsUsed)
+        {
+            var message = $"Archive macro \"{macro.Name ?? "(unnamed)"}\"? It's in use.\n\n"
+                + DescribeUsage(usage)
+                + "\n\nPaired alts keep playing it until you clear the pairing. "
+                + "Recipes that use it stop at that step until you restore it.";
+            var dlg = new ArchiveMacroConfirmDialog(message) { Owner = this };
+            if (dlg.ShowDialog() != true) return;
+        }
+        vm.ArchiveMacro(macro);
+    }
+
+    private void OnMacroRestoreClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.Tag is Macro macro
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.RestoreMacro(macro);
+        }
+    }
+
+    /// <summary>"Paired with: a, b." and "Used in recipes: x." lines, or null when unused.</summary>
+    private static string? DescribeUsage(MacroUsageInfo usage)
+    {
+        if (!usage.IsUsed) return null;
+        var lines = new List<string>();
+        if (usage.PairedAlts.Count > 0) lines.Add($"Paired with: {string.Join(", ", usage.PairedAlts)}.");
+        if (usage.Recipes.Count > 0) lines.Add($"Used in recipes: {string.Join(", ", usage.Recipes)}.");
+        return string.Join("\n", lines);
+    }
+
+    // ── Library search + groups ────────────────────────────────────────────
+
+    /// <summary>Ctrl+F (window-local CommandBinding): jump to the search box.</summary>
+    private void OnFindExecuted(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (DataContext is RecorderViewModel { IsCompact: true }) return;
+        MacroSearchBox.Focus();
+        MacroSearchBox.SelectAll();
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Esc inside the search box clears it. A local KeyDown on the TextBox only;
+    /// a global bare-Esc hotkey hijacked Esc system-wide once (v0.3.1).
+    /// </summary>
+    private void OnMacroSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || DataContext is not RecorderViewModel vm) return;
+        if (vm.SearchText.Length > 0)
+        {
+            vm.SearchText = string.Empty;
+            e.Handled = true;
+        }
+    }
+
+    private void OnGroupHeaderClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is MacroGroupHeader header
+            && DataContext is RecorderViewModel vm)
+        {
+            vm.ToggleGroup(header);
+            e.Handled = true;
         }
     }
 
