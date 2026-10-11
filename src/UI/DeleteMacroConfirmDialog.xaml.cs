@@ -5,10 +5,13 @@ namespace Labs626.UrTask.UI;
 
 public partial class DeleteMacroConfirmDialog : Window
 {
-    public DeleteMacroConfirmDialog(string macroName)
+    /// <param name="usageNote">Where the macro is in use (paired alts, recipes), or null.
+    /// Shown under the question so a delete never silently breaks a pairing or recipe.</param>
+    public DeleteMacroConfirmDialog(string macroName, string? usageNote = null)
     {
         InitializeComponent();
-        MessageText.Text = $"Delete macro \"{macroName}\"?\nThis can't be undone.";
+        MessageText.Text = $"Delete macro \"{macroName}\"?\nThis can't be undone."
+            + (string.IsNullOrWhiteSpace(usageNote) ? "" : "\n\n" + usageNote);
         Loaded += (_, _) => { Activate(); Focus(); Keyboard.Focus(this); };
     }
 

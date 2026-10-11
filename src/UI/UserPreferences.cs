@@ -22,6 +22,13 @@ internal sealed class UserPreferences
     public bool AcceptPluginRunRequests { get; set; } = true; // default: true (sibling plugins like Ur-OCR can fire macros)
 
     /// <summary>
+    /// Macro library groups the user has collapsed, by group key (the WHERE part of the
+    /// names, case-insensitive; the archived section uses its own key). Empty by default:
+    /// every group starts open.
+    /// </summary>
+    public List<string> CollapsedMacroGroups { get; set; } = new();
+
+    /// <summary>
     /// Per-game keep-alive fire interval overrides, in MINUTES, keyed by Roblox
     /// PlaceId. Beats the shipped table in <see cref="Macros.KeepAliveIntervals"/>.
     /// Empty by default — populated only by the user or from observed presence data,
