@@ -2,6 +2,31 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Search the macro library.** A search box sits above the list and filters as you type. Every
+  word has to match, in any order, against the name, the game it was recorded in or its
+  `[account]` tag, so `trade ok` finds `self-trade ok`. It stacks with PLAYING NOW. Ctrl+F jumps
+  to the box while Ur Task has focus; Esc in the box clears it.
+- **Groups from the names you already write.** Names in the `WHERE | ROUTE n/N | what` shape group
+  under their WHERE (`PLZ`, `HW Z4`, `ANY`), with a count. Route steps read in run order
+  (`booth 1/3, 2/3, 3/3`), then the rest by name. Names without ` | ` go to Ungrouped at the
+  bottom. Click a header to collapse it; Ur Task remembers which are collapsed. Nothing in the
+  macro files changed.
+- **Archive instead of delete.** Archive in a macro's menu moves its file into `macros\archive\`.
+  It drops out of the library, the action bridge and the MCP's `list_macros`. Show archived lists
+  them greyed out, each with Restore. Archiving a macro that is paired with an alt or used in a
+  recipe asks first and names where.
+
+### Changed
+
+- **The library is ordered by group, not by recency.** The game band now only drives the PLAYING
+  NOW filter.
+- **Delete names where a macro is in use** (paired alts, recipes) before you confirm.
+- An import now dedupes names against the whole library, not just the macros currently showing.
+
 ## 0.12.0 — unreleased
 
 ### Added

@@ -2,31 +2,13 @@ namespace Labs626.UrTask.Macros;
 
 /// <summary>
 /// Pure game-awareness logic for the macro library (v0.6). Kept static and
-/// WPF-free so the view model stays a thin binding layer and the ordering /
-/// filtering / mismatch rules are unit-testable.
+/// WPF-free so the view model stays a thin binding layer and the filtering /
+/// mismatch rules are unit-testable. Library ORDER no longer lives here: since
+/// the grouped library it comes from the names (see <see cref="MacroLibrary"/>),
+/// and the game band survives only as the PLAYING NOW filter below.
 /// </summary>
 public static class MacroGameFilter
 {
-    /// <summary>
-    /// Library ordering: macros scoped to a game someone is currently playing
-    /// float first, then everything game-agnostic (all-games override or no
-    /// stamp), then game-scoped macros for games nobody is running. Recency
-    /// (newest first) orders within each band — the pre-v0.6 behavior.
-    /// </summary>
-    public static IReadOnlyList<Macro> Sort(IEnumerable<Macro> macros, IReadOnlySet<long> currentPlaceIds)
-    {
-        return macros
-            .OrderBy(m => Band(m, currentPlaceIds))
-            .ThenByDescending(m => m.RecordedAtUnixMs)
-            .ToList();
-    }
-
-    private static int Band(Macro m, IReadOnlySet<long> currentPlaceIds)
-    {
-        if (!m.IsGameScoped) return 1;
-        return currentPlaceIds.Contains(m.RecordedPlaceId!.Value) ? 0 : 2;
-    }
-
     /// <summary>
     /// PLAYING NOW filter: keep macros matching a currently-played game plus
     /// everything game-agnostic. With no games running (empty set), the filter

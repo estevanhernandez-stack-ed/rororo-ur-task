@@ -36,6 +36,7 @@ public class ModalDefaultButtonSafetyTests
     public static TheoryData<string, string> ConsequentialButtons() => new()
     {
         { "DeleteMacroConfirmDialog.xaml", "DELETE" },  // destroys a recording the user made
+        { "ArchiveMacroConfirmDialog.xaml", "ARCHIVE" }, // breaks pairings and recipes that use it
         { "MultiWindowConfirmDialog.xaml", "PLAY" },    // drives live game clients
     };
 
@@ -57,6 +58,10 @@ public class ModalDefaultButtonSafetyTests
         => Assert.Equal("CANCEL", DefaultButtonLabel("DeleteMacroConfirmDialog.xaml"));
 
     [Fact]
+    public void ArchiveConfirm_DefaultsToCancel()
+        => Assert.Equal("CANCEL", DefaultButtonLabel("ArchiveMacroConfirmDialog.xaml"));
+
+    [Fact]
     public void MultiWindowConfirm_DefaultsToCancel()
         => Assert.Equal("CANCEL", DefaultButtonLabel("MultiWindowConfirmDialog.xaml"));
 
@@ -74,6 +79,7 @@ public class ModalDefaultButtonSafetyTests
 
     [Theory]
     [InlineData("DeleteMacroConfirmDialog.xaml")]
+    [InlineData("ArchiveMacroConfirmDialog.xaml")]
     [InlineData("MultiWindowConfirmDialog.xaml")]
     [InlineData("RenameMacroDialog.xaml")]
     public void EachModal_HasExactlyOneDefaultButton(string modalFile)
@@ -85,6 +91,7 @@ public class ModalDefaultButtonSafetyTests
     /// </summary>
     [Theory]
     [InlineData("DeleteMacroConfirmDialog.xaml")]
+    [InlineData("ArchiveMacroConfirmDialog.xaml")]
     [InlineData("MultiWindowConfirmDialog.xaml")]
     [InlineData("RenameMacroDialog.xaml")]
     public void EachModal_CanBeDismissedWithEscape(string modalFile)
@@ -104,6 +111,7 @@ public class ModalDefaultButtonSafetyTests
     /// </summary>
     [Theory]
     [InlineData("DeleteMacroConfirmDialog.xaml.cs")]
+    [InlineData("ArchiveMacroConfirmDialog.xaml.cs")]
     [InlineData("MultiWindowConfirmDialog.xaml.cs")]
     public void ConfirmDialogs_DoNotConfirmOnEnterInCodeBehind(string codeBehind)
     {

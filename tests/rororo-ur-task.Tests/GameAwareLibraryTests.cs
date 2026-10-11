@@ -127,23 +127,6 @@ public class GameAwareLibraryTests
     private static readonly IReadOnlySet<long> Playing = new HashSet<long> { 10, 20 };
 
     [Fact]
-    public void Sort_CurrentGameFirst_ThenAgnostic_ThenOtherGames_RecencyWithin()
-    {
-        var macros = new[]
-        {
-            MakeMacro("other-game", placeId: 99, recordedAt: 900),
-            MakeMacro("agnostic-old", recordedAt: 100),
-            MakeMacro("current-old", placeId: 10, recordedAt: 200),
-            MakeMacro("all-games", placeId: 99, allGames: true, recordedAt: 300),
-            MakeMacro("current-new", placeId: 20, recordedAt: 800),
-        };
-
-        var sorted = MacroGameFilter.Sort(macros, Playing).Select(m => m.Name).ToArray();
-
-        Assert.Equal(new[] { "current-new", "current-old", "all-games", "agnostic-old", "other-game" }, sorted);
-    }
-
-    [Fact]
     public void FilterPlayingNow_HidesOnlyMismatchedGameScoped()
     {
         var macros = new[]
