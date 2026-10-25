@@ -103,4 +103,30 @@ public class MissReporterTests
         r.ExpectReset("alt1", at, 14);
         Assert.Equal(2, _log.Count);
     }
+
+    [Fact]
+    public void A_landing_just_before_the_group_opened_prevents_the_collapse()
+    {
+        var r = New();
+        r.Landed(null, "alt1");
+        _wall += TimeSpan.FromSeconds(2);
+        foreach (var n in new[] { "alt2", "alt3", "alt4" })
+            r.Missed(n, new Miss(MissCause.FocusRefused, null), 1);
+        r.FlushMinute(force: true);
+        Assert.Equal(3, _log.Count);
+        Assert.DoesNotContain(_log, l => l.Contains("every due account"));
+    }
+
+    [Fact]
+    public void A_reset_time_already_past_says_was_due_and_rearm_allows_another_warning()
+    {
+        var r = New();
+        r.ExpectReset("alt1", _wall - TimeSpan.FromMinutes(3), 17);
+        Assert.Equal(new[] { "keep-alive: alt1 has had no input for 17 min; a reset or kick was due around 13:57" }, _log);
+        r.ExpectReset("alt1", _wall, 17);
+        Assert.Single(_log);
+        r.Rearm("alt1");
+        r.ExpectReset("alt1", _wall + TimeSpan.FromMinutes(1), 15);
+        Assert.Equal(2, _log.Count);
+    }
 }

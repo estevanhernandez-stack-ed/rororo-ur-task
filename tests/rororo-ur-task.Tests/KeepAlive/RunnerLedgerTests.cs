@@ -59,7 +59,8 @@ public class RunnerLedgerTests
     /// <param name="inFront">who reads as the foreground; default is whoever was just focused.</param>
     /// <param name="focus">the Focus seam; default is a clean success that brings the window forward.</param>
     private static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
-        string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null)
+        string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null,
+        Action<Rig, long>? onSleep = null)
     {
         Rig rig = null!;
         var cts = new CancellationTokenSource();
@@ -76,6 +77,7 @@ public class RunnerLedgerTests
             Sleep: (ms, ct) =>
             {
                 if (ct.IsCancellationRequested) return Task.FromCanceled(ct);
+                onSleep?.Invoke(rig, ms);
                 if (ms > 0) rig.NowMs += ms;
                 if (rig.NowMs >= runForMs) cts.Cancel();
                 return Task.CompletedTask;
@@ -253,5 +255,24 @@ public class RunnerLedgerTests
         Assert.Equal(0, rig.Sent);
         Assert.Equal(MissCause.FocusRefused, rig.Ledger.Get(1)!.LastMiss!.Cause);
         Assert.Contains("turbo keep-alive: skipped alt1, focus failed; retry in 30s", rig.Log);
+    }
+
+    [Fact]
+    public async Task Input_stamped_on_the_ledger_from_outside_defers_the_keep_alive()
+    {
+        var a = Alt(1);
+        var fired = false;
+        var rig = Build(startMs: 10 * Min, runForMs: 20 * Min, onSleep: (r, ms) =>
+        {
+            if (fired || ms < Min) return;
+            fired = true;
+            r.Ledger.StampLanded(1, InputSource.Macro);   // e.g. a macro's keys, at 10:00
+        });
+        rig.StampAt(a, 2 * Min);                            // would be due at 11:00
+
+        await rig.Run(a);
+
+        Assert.DoesNotContain(rig.Focused, f => f.at < 19 * Min);
+        Assert.Contains(rig.Focused, f => f.at == 19 * Min);
     }
 }

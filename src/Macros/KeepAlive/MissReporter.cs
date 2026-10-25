@@ -22,6 +22,7 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
     private readonly HashSet<string> _resetAnnounced = new();
     private DateTimeOffset _groupStart;
     private bool _landedInGroup;
+    private DateTimeOffset? _lastLandedAt;
 
     /// <summary>The words for a cause, as the spec table gives them.</summary>
     public static string CauseText(Miss miss) => miss.Cause switch
@@ -58,6 +59,7 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
             if (_pending.Any(p => p.Name == name)) FlushLocked(lines);
             else if (_pending.Count > 0) _landedInGroup = true;
             _resetAnnounced.Remove(name);
+            _lastLandedAt = wallNow();
 
             if (before is { ConsecutiveMisses: > 0 })
             {
@@ -79,7 +81,12 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
             var now = wallNow();
             if (_pending.Count > 0 && (now - _groupStart >= GroupWindow || _pending.Any(p => p.Name == name)))
                 FlushLocked(lines);
-            if (_pending.Count == 0) { _groupStart = now; _landedInGroup = false; }
+            if (_pending.Count == 0)
+            {
+                _groupStart = now;
+                // A landing in the minute before the group opened is part of the same round of due accounts.
+                _landedInGroup = _lastLandedAt is { } landed && now - landed <= GroupWindow;
+            }
             _pending.Add((name, miss));
         }
         Write(lines);
@@ -99,12 +106,22 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
     /// <summary>The account will be reset or kicked before another retry can land. Said once per idle stretch.</summary>
     public void ExpectReset(string name, DateTimeOffset at, int idleMinutes)
     {
+        bool past;
         lock (_gate)
         {
             if (!_resetAnnounced.Add(name)) return;
+            past = at < wallNow();
         }
-        log($"keep-alive: {name} has had no input for {idleMinutes} min; expect a reset or kick around " +
-            at.ToString("HH:mm", CultureInfo.InvariantCulture));
+        var when = at.ToString("HH:mm", CultureInfo.InvariantCulture);
+        log(past
+            ? $"keep-alive: {name} has had no input for {idleMinutes} min; a reset or kick was due around {when}"
+            : $"keep-alive: {name} has had no input for {idleMinutes} min; expect a reset or kick around {when}");
+    }
+
+    /// <summary>New input reached the account from somewhere other than a keep-alive landing: the next idle stretch may warn again.</summary>
+    public void Rearm(string name)
+    {
+        lock (_gate) _resetAnnounced.Remove(name);
     }
 
     private void FlushLocked(List<string> lines)

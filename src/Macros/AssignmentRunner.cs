@@ -382,6 +382,7 @@ internal sealed class AssignmentRunner
                 return cycle;
             }
 
+            var lastSeenInput = new Dictionary<long, long?>();
             var activeCursor = 0;
             var activeCount = scheduled.Count(a => !a.IsKeepAlive);   // fixed for the run — the
                                                                        // role mix doesn't change mid-loop
@@ -412,6 +413,7 @@ internal sealed class AssignmentRunner
             while (!ct.IsCancellationRequested)
             {
                 _reporter.FlushMinute();
+                RefreshDueFromLedger(scheduled, lastSeenInput);
                 var now = _deps.ClockMs();
                 var rotated = Rotated(scheduled, activeCursor);
                 var decision = CadenceScheduler.Decide(rotated, now, NextActivePassCostMs(scheduled, activeCursor));
@@ -573,6 +575,25 @@ internal sealed class AssignmentRunner
         return playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
     }
 
+    /// <summary>
+    /// The ledger is the source of truth: input stamped by anyone else (host activity, a macro's keys)
+    /// defers a keep-alive. Only ever moves a due time later, so a 30s miss backoff is not pulled earlier.
+    /// New input also re-arms the once-per-stretch reset warning.
+    /// </summary>
+    private void RefreshDueFromLedger(List<ScheduledAlt> scheduled, Dictionary<long, long?> lastSeen)
+    {
+        foreach (var alt in scheduled)
+        {
+            if (!alt.IsKeepAlive) continue;
+            var userId = alt.Assignment.Alt.RobloxUserId;
+            if (_ledger.Get(userId) is not { LastInputMs: { } last }) continue;
+            alt.DueAtMs = Math.Max(alt.DueAtMs, _ledger.DueAtMs(userId));
+            if (lastSeen.TryGetValue(userId, out var seen) && seen is { } s && last > s)
+                _reporter.Rearm(alt.Assignment.Alt.DisplayName);
+            lastSeen[userId] = last;
+        }
+    }
+
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
     /// <summary>The alt's limit from the deps, or derived from its (clamped) interval when the deps give none.</summary>
@@ -660,7 +681,11 @@ internal sealed class AssignmentRunner
             restoreNeeded = !refused;
 
             try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException)
+            {
+                restoreNeeded = true;   // a refusal may still have brought the window forward: hand it back
+                return;
+            }
 
             // Safety invariant (unchanged from v0.6): never synthesize input unless the
             // foreground really is the alt we aimed at. AttachAndFocus reports ok=true
@@ -788,7 +813,7 @@ internal sealed class AssignmentRunner
 
                 bool confirmed;
                 try { confirmed = await PollForegroundIsAsync(asn.Alt.RobloxUserId, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
+                catch (OperationCanceledException) { anyFocusTaken = true; return; }   // a refusal may still have moved it
 
                 if (!confirmed)
                 {
