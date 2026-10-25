@@ -245,9 +245,11 @@ internal sealed class AssignmentRunner
     }
 
     /// <summary>An account left. Its ledger history stays for GetStatus until the plugin restarts.</summary>
-    public void RemoveAssignment(long robloxUserId)
+    public void RemoveAssignment(long robloxUserId, int pid)
     {
-        _membership.Enqueue(cur => _scheduled = cur.Where(x => x.Assignment.Alt.RobloxUserId != robloxUserId).ToList());
+        // Only the exiting window's own entry: a relaunch can announce the new pid before the old one exits.
+        _membership.Enqueue(cur => _scheduled = cur.Where(x =>
+            x.Assignment.Alt.RobloxUserId != robloxUserId || x.Assignment.Alt.Pid != pid).ToList());
         TryApplyMembership();
     }
 
@@ -274,18 +276,19 @@ internal sealed class AssignmentRunner
     {
         var alt = a.Alt;
         var coerced = a.Role == CadenceRole.KeepAlive ? a : a with { Role = CadenceRole.KeepAlive };
+        var existing = cur.FirstOrDefault(x => x.Assignment.Alt.RobloxUserId == alt.RobloxUserId);
+        if (existing is not null)
+        {
+            // The same account relaunched: new window identity only. Role, macro, interval and limit stay.
+            existing.Assignment = existing.Assignment with { Alt = alt };
+            if (existing.IsKeepAlive) _ledger.Track(alt, existing.Limit!);
+            return;
+        }
         var intervalMs = Math.Clamp(_deps.KeepAliveIntervalMs(alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs);
         var limit = LimitFor(alt, intervalMs);
         var now = _deps.ClockMs();
         _ledger.Track(alt, limit);   // keeps an off flag set earlier this session
         lock (_trackedAtMs) _trackedAtMs.TryAdd(alt.RobloxUserId, now);
-
-        var existing = cur.FirstOrDefault(x => x.Assignment.Alt.RobloxUserId == alt.RobloxUserId);
-        if (existing is not null)
-        {
-            existing.Assignment = coerced;   // the same account relaunched: new window, same schedule slot
-            return;
-        }
         var due = _ledger.DueAtMs(alt.RobloxUserId);
         var scheduled = new ScheduledAlt
         {
@@ -374,7 +377,7 @@ internal sealed class AssignmentRunner
             // something — the overwhelmingly common case hands the original Assignment
             // straight through unmodified, preserving reference identity for callers
             // (e.g. AssignmentProgress.Current) that key off it.
-            var initialScheduledd = assignments.Select(a =>
+            var initialScheduled = assignments.Select(a =>
             {
                 var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
                 var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
@@ -388,14 +391,14 @@ internal sealed class AssignmentRunner
                     Limit = coerced.Role == CadenceRole.KeepAlive ? LimitFor(coerced.Alt, intervalMs) : null,
                 };
             }).ToList();
-            _scheduled = initialScheduledd;   // from here the schedule is replaced, never edited in place (see AddAssignment)
+            _scheduled = initialScheduled;   // from here the schedule is replaced, never edited in place (see AddAssignment)
 
             // The ledger decides who is due: each keep-alive alt is due at its real last input plus its
             // deadline, so starting the loop resets nobody. An alt with no history is due now, and the
             // ones due now start StartSpreadMs apart in assignment order, never all in the same second.
             var startMs = _deps.ClockMs();
             var spreadIndex = 0;
-            foreach (var alt in initialScheduledd)
+            foreach (var alt in initialScheduled)
             {
                 if (!alt.IsKeepAlive) { alt.DueAtMs = startMs; continue; }
                 var userId = alt.Assignment.Alt.RobloxUserId;
@@ -476,8 +479,8 @@ internal sealed class AssignmentRunner
             // rides along without incrementing anything).
             var indexOf = _indexOf;
             indexOf.Clear();
-            for (int i = 0; i < initialScheduledd.Count; i++) indexOf[initialScheduledd[i]] = i;
-            _nextIndex = initialScheduledd.Count;
+            for (int i = 0; i < initialScheduled.Count; i++) indexOf[initialScheduled[i]] = i;
+            _nextIndex = initialScheduled.Count;
             var servicedThisPass = new HashSet<ScheduledAlt>();
             cycle = 1;   // declared ahead of the try (see above) so finally can read it too
 

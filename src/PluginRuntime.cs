@@ -129,7 +129,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // backgrounded PID would have inherited pre-pruning. Drop both pieces
             // of stale state together.
             _assignments.Remove(info.Pid);
-            _runner.RemoveAssignment(info.RobloxUserId);
+            _runner.RemoveAssignment(info.RobloxUserId, info.Pid);
         };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();

@@ -76,7 +76,7 @@ public class MembershipTests
         {
             if (removed || r.NowMs < 25 * Min) return;
             removed = true;
-            r.Runner.RemoveAssignment(2);
+            r.Runner.RemoveAssignment(2, 2);
         });
 
         await rig.Run(Alt(1), Alt(2));
@@ -170,5 +170,69 @@ public class MembershipTests
         Assert.Equal(AccountKeepAliveState.Off, ledger.Get(1)!.State);
         hold.End();
         Assert.Equal(AccountKeepAliveState.Off, ledger.Get(1)!.State);
+    }
+
+    [Fact]
+    public async Task A_relaunch_announced_before_the_old_exit_keeps_the_account_scheduled()
+    {
+        var done = false;
+        var rig = RunnerLedgerTests.Build(startMs: 10 * Min, runForMs: 60 * Min, onSleep: (r, _) =>
+        {
+            if (done || r.NowMs < 25 * Min) return;
+            done = true;
+            var relaunched = new AccountRegistry.AccountInfo(22, 2, "alt2", "acct-2");   // same user, new pid
+            r.Runner.AddAssignment(Assignment.WithDerivedRole(relaunched, null));
+            r.Runner.RemoveAssignment(2, 2);                                              // the old pid exits afterwards
+        });
+
+        await rig.Run(Alt(1), Alt(2));
+
+        Assert.True(done);
+        Assert.Contains(rig.Focused, f => f.pid == 22);
+        Assert.DoesNotContain(rig.Focused, f => f.pid == 2 && f.at > 26 * Min);
+    }
+
+    [Fact]
+    public async Task Relaunching_an_active_account_leaves_it_active_and_farming()
+    {
+        var done = false;
+        var plays = 0;
+        var playsAtRelaunch = 0;
+        var macro = new Macro(
+            SchemaVersion: 3, Id: "farm", Name: "farm", RecordMode: "PerWindow", RecordedAgainstUserId: null,
+            RecordedAgainstDisplayName: null, InterAltDelayMs: null, RecordedAtUnixMs: 0, Events: new List<MacroEvent>());
+        var player = new RunnerLedgerTests.FakePlayer { OnPlay = () => plays++ };
+        var rig = RunnerLedgerTests.Build(startMs: 10 * Min, runForMs: 12 * Min, onSleep: (r, _) =>
+        {
+            if (done || r.NowMs < 11 * Min) return;
+            done = true;
+            playsAtRelaunch = plays;
+            r.Runner.AddAssignment(new Assignment(new AccountRegistry.AccountInfo(22, 2, "alt2", "acct-2"), null, CadenceRole.KeepAlive));
+        }, player: player);
+
+        await rig.Runner.RunAsync(new[] { new Assignment(Alt(2), macro, CadenceRole.Active) }, rig.Cts.Token);
+
+        Assert.True(done);
+        Assert.True(playsAtRelaunch > 0);
+        Assert.True(plays > playsAtRelaunch);        // still farming after the relaunch
+        Assert.Null(rig.Ledger.Get(2));              // never became a keep-alive account
+    }
+
+    [Fact]
+    public void A_tick_queued_before_End_does_nothing_after_it()
+    {
+        long now = 0;
+        Func<DateTimeOffset> wall = () => WallBase + TimeSpan.FromMilliseconds(now);
+        var ledger = new KeepAliveLedger(() => now, wall);
+        var hold = new BreakglassHold(ledger, new MissReporter(_ => { }, wall), () => now);
+        ledger.Track(Alt(1), RunnerLedgerTests.Fifteen);
+        now = 1 * Min; ledger.StampLanded(1, InputSource.KeepAlive);
+        hold.Begin();
+        hold.End();
+
+        now = 30 * Min; hold.Tick();
+
+        Assert.Equal(AccountKeepAliveState.Waiting, ledger.Get(1)!.State);
+        Assert.Null(ledger.Get(1)!.LastMiss);
     }
 }

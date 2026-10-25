@@ -17,11 +17,15 @@ public class RunnerLedgerTests
 
     internal sealed class FakePlayer : IMacroPlayer
     {
+        public Action? OnPlay;
         public bool IsPlaying => false;
         public event EventHandler<PlaybackStartedArgs>? Started { add { } remove { } }
         public event EventHandler<PlaybackEndedArgs>? Ended { add { } remove { } }
         public Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
-            => Task.FromResult(PlaybackResult.Completed());
+        {
+            OnPlay?.Invoke();
+            return Task.FromResult(PlaybackResult.Completed());
+        }
         public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
             => Task.FromResult(PlaybackResult.Completed());
         public bool Abort() => false;
@@ -60,7 +64,7 @@ public class RunnerLedgerTests
     /// <param name="focus">the Focus seam; default is a clean success that brings the window forward.</param>
     internal static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
         string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null,
-        Action<Rig, long>? onSleep = null, Action<string>? markActive = null)
+        Action<Rig, long>? onSleep = null, Action<string>? markActive = null, FakePlayer? player = null)
     {
         Rig rig = null!;
         var cts = new CancellationTokenSource();
@@ -70,7 +74,7 @@ public class RunnerLedgerTests
             Focus: pid =>
             {
                 rig.Focused.Add((pid, rig.NowMs));
-                rig.Target = Enumerable.Range(1, 20).Select(Alt).First(a => a.Pid == pid);
+                rig.Target = new AccountRegistry.AccountInfo(pid, pid % 20, $"alt{pid % 20}", $"acct-{pid % 20}");   // pid 22 is user 2 relaunched
                 return focus?.Invoke(pid) ?? new FocusAttempt(true, null, null);
             },
             ClockMs: () => { if (++calls > 200_000) cts.Cancel(); return rig.NowMs; },
@@ -95,7 +99,7 @@ public class RunnerLedgerTests
         rig = new Rig
         {
             Cts = cts, Ledger = ledger, NowMs = startMs,
-            Runner = new AssignmentRunner(new FakePlayer(), new Fg(() => inFront is null ? rig.Target : inFront(rig)), deps, ledger),
+            Runner = new AssignmentRunner(player ?? new FakePlayer(), new Fg(() => inFront is null ? rig.Target : inFront(rig)), deps, ledger),
         };
         return rig;
     }

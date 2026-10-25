@@ -15,14 +15,21 @@ internal sealed class BreakglassHold(KeepAliveLedger ledger, MissReporter report
     /// <summary>The last-input time each account had when its miss was recorded: a different one is a new stretch.</summary>
     private readonly Dictionary<long, long?> _recordedFor = new();
 
+    private bool _active;
+
     /// <summary>Break-glass is on: every tracked account is held.</summary>
-    public void Begin() => Tick();
+    public void Begin()
+    {
+        lock (_gate) _active = true;
+        Tick();
+    }
 
     /// <summary>Break-glass is off: every account goes back to waiting.</summary>
     public void End()
     {
         lock (_gate)
         {
+            _active = false;   // a tick already queued on the timer must not re-hold after this
             _recordedFor.Clear();
             foreach (var e in ledger.Snapshot()) ledger.SetState(e.UserId, AccountKeepAliveState.Waiting);
         }
@@ -32,6 +39,7 @@ internal sealed class BreakglassHold(KeepAliveLedger ledger, MissReporter report
     {
         lock (_gate)
         {
+            if (!_active) return;
             var now = clockMs();
             foreach (var e in ledger.Snapshot())
             {
