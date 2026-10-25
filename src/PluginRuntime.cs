@@ -878,7 +878,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private void StopAndSaveRecording()
     {
-        var events = _recorder.Stop();
+        // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
+        var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
         var bound = _recordingBoundAccount;
         var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;

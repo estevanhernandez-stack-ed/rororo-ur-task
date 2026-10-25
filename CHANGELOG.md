@@ -21,6 +21,14 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   window comes back once at the end. Off by default; with it off, keep-alive works exactly as
   before.
 
+### Fixed
+
+- **The record hotkey no longer ends up in your recordings.** Ctrl+Shift+R to stop used to leave
+  its Ctrl and Shift presses at the end of the macro, sometimes as a full Shift tap, which toggles
+  shift-lock in Roblox at the end of every pass. Starting left the chord's releases at the front.
+  Both are trimmed when the recording is saved. Ctrl and Shift you pressed yourself, before your
+  last key or click, stay.
+
 ## 0.12.0 — 2026-10-25
 
 ### Added

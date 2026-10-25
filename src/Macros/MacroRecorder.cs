@@ -306,6 +306,42 @@ public sealed class MacroRecorder
         };
     }
 
+    // Ctrl and Shift, generic and left/right: the record and stop hotkeys are all Ctrl+Shift chords.
+    private static readonly HashSet<int> ChordModifierVkCodes = new() { 0x10, 0x11, 0xA0, 0xA1, 0xA2, 0xA3 };
+
+    /// <summary>
+    /// Drop the record hotkey's own keys from a finished recording. The chord key itself is filtered at
+    /// capture, but its modifiers are not: Ctrl+Shift+R to start leaves their releases at the front (and
+    /// R's, when Ctrl comes up first), and Ctrl+Shift+R to stop leaves Ctrl and Shift presses at the end,
+    /// sometimes as a complete Shift tap, which toggles Roblox's shift-lock every pass. So: every release
+    /// with no earlier press goes, and every Ctrl/Shift event after the last real input goes, pairs
+    /// included. Modifiers pressed before the last real input are the user's and stay. Pure, so it is
+    /// the test seam; mouse moves are not real input and are kept.
+    /// </summary>
+    internal static IReadOnlyList<MacroEvent> TrimHotkeyKeys(IReadOnlyList<MacroEvent> events)
+    {
+        var pressed = new HashSet<int>();
+        var kept = new List<MacroEvent>(events.Count);
+        foreach (var e in events)
+        {
+            if (e.Kind == MacroEventKind.KeyDown) pressed.Add(e.VirtualKeyCode);
+            else if (e.Kind == MacroEventKind.KeyUp && !pressed.Contains(e.VirtualKeyCode)) continue;
+            kept.Add(e);
+        }
+
+        int lastReal = kept.FindLastIndex(e => e.Kind switch
+        {
+            MacroEventKind.KeyDown or MacroEventKind.KeyUp => !ChordModifierVkCodes.Contains(e.VirtualKeyCode),
+            MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel => true,
+            _ => false,
+        });
+        for (int i = kept.Count - 1; i > lastReal; i--)
+        {
+            if (kept[i].Kind is MacroEventKind.KeyDown or MacroEventKind.KeyUp) kept.RemoveAt(i);
+        }
+        return kept;
+    }
+
     private (int X, int Y)? ResolveClientOrigin()
     {
         if (_clientAnchorHwnd == IntPtr.Zero) return null;
