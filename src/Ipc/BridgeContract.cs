@@ -20,7 +20,8 @@ public sealed record RunMacroResponse(
     string? Reason,
     string? Detail,
     string? Actor = null,
-    string? Advice = null)
+    string? Advice = null,
+    string? Note = null)              // 0.13 additive: a heads-up on an accepted run, e.g. it will cross a keep-alive deadline
 {
     public static RunMacroResponse Accepted(string playbackId) => new(true, playbackId, false, null, null); // Queued=false: contract refuses-when-busy, no server-side queue path
     public static RunMacroResponse Refused(string reason, string? detail = null, string? actor = null, string? advice = null)
@@ -144,6 +145,45 @@ public sealed record SweepPathRequest(
     ClearAtGuard? Guard,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool FreePath = false);
 
+public sealed record GetStatusRequest(
+    string ContractVersion,
+    string Method,
+    string? CallerPluginId);
+
+/// <summary>State is running | stopped | breakglass (break-glass wins).</summary>
+public sealed record KeepAliveStatus(string State, bool Turbo);
+
+/// <summary>One tracked account. Role is active | keep-alive | off. State is waiting | serving | off | held |
+/// paused-for-macro. LastInputSource is keep-alive | macro | paste | host. Times are local ISO 8601 with
+/// offset. IdleSeconds and LastInputAt are null when the last input is unknown; LastMiss is the cause text
+/// the keep-alive log uses.</summary>
+public sealed record AccountStatus(
+    string UserId,
+    string Name,
+    string Role,
+    string? LastInputAt,
+    string? LastInputSource,
+    int? IdleSeconds,
+    string? DeadlineAt,
+    int LimitMinutes,
+    int Misses,
+    string? LastMiss,
+    string State);
+
+/// <summary>A running bridge playback. PausedFor names the account keep-alive is serving while it waits.</summary>
+public sealed record PlaybackStatus(string PlaybackId, bool Paused, string? PausedFor);
+
+public sealed record GetStatusResponse(
+    bool Ok,
+    KeepAliveStatus? KeepAlive,
+    IReadOnlyList<AccountStatus>? Accounts,
+    IReadOnlyList<PlaybackStatus>? Playbacks,
+    string? Reason,
+    string? Detail)
+{
+    public static GetStatusResponse Refused(string reason, string? detail = null) => new(false, null, null, null, reason, detail);
+}
+
 internal static class BridgeContract
 {
     public const string Method = "RunMacro";          // back-compat alias
@@ -153,6 +193,7 @@ internal static class BridgeContract
     public const string MethodGetPlayback = "GetPlayback";
     public const string MethodClearAt = "ClearAt";
     public const string MethodSweepPath = "SweepPath";
+    public const string MethodGetStatus = "GetStatus";
 
     public static readonly JsonSerializerOptions Json = new()
     {

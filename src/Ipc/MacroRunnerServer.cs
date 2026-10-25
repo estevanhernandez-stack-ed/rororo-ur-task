@@ -19,9 +19,11 @@ internal sealed class MacroRunnerServer
 
     private readonly IMacroRunInvoker _invoker;
     private readonly string _pipeName;
+    private readonly IStatusProvider? _status;
 
-    public MacroRunnerServer(IMacroRunInvoker invoker, string? pipeName = null)
+    public MacroRunnerServer(IMacroRunInvoker invoker, string? pipeName = null, IStatusProvider? status = null)
     {
+        _status = status;
         _invoker = invoker ?? throw new ArgumentNullException(nameof(invoker));
         _pipeName = pipeName ?? PipeName;
     }
@@ -150,6 +152,17 @@ internal sealed class MacroRunnerServer
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
                     return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(await _invoker.SweepPathAsync(req, ct).ConfigureAwait(false));
+            }
+            case BridgeContract.MethodGetStatus:
+            {
+                var req = JsonSerializer.Deserialize<GetStatusRequest>(frame, BridgeContract.Json);
+                if (req is null)
+                    return Bytes(GetStatusResponse.Refused(Reasons.Refused, "Empty request."));
+                if (string.IsNullOrWhiteSpace(req.CallerPluginId))
+                    return Bytes(GetStatusResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
+                if (_status is null)
+                    return Bytes(GetStatusResponse.Refused(Reasons.Refused, "GetStatus isn't available."));
+                return Bytes(_status.GetStatus());
             }
             default:
                 return Bytes(RunMacroResponse.Refused(Reasons.Refused, $"Unknown method '{env.Method}'."));

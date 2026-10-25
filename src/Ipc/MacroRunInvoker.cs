@@ -34,6 +34,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<bool> _isBreakglass;
     private readonly PlaybackRegistry _registry;
     private readonly Action<string> _log;
+    private readonly Func<IReadOnlyList<KeepAliveDeadline>> _deadlines;
+    private readonly Func<DateTimeOffset> _now;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
@@ -41,7 +43,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
     // Production ctor wires the real collaborators.
     public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player,
-        Func<bool> isBreakglass)
+        Func<bool> isBreakglass,
+        Func<IReadOnlyList<KeepAliveDeadline>>? deadlines = null,
+        PlaybackRegistry? registry = null)
         : this(
             load: () => store.LoadAll(),
             snapshot: () => accounts.Snapshot().ToList(),
@@ -50,7 +54,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),
             abort: () => player.Abort(),
             log: Diagnostics.DiagLog.Write,
-            isBreakglass: isBreakglass)
+            isBreakglass: isBreakglass,
+            deadlines: deadlines,
+            registry: registry)
     { }
 
     // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
@@ -64,8 +70,12 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool>? abort = null,
         PlaybackRegistry? registry = null,
         Action<string>? log = null,
-        Func<bool>? isBreakglass = null)
+        Func<bool>? isBreakglass = null,
+        Func<IReadOnlyList<KeepAliveDeadline>>? deadlines = null,
+        Func<DateTimeOffset>? now = null)
     {
+        _deadlines = deadlines ?? (() => Array.Empty<KeepAliveDeadline>());
+        _now = now ?? (() => DateTimeOffset.Now);
         // Tests leave it out, so a test run never writes to the real ur-task.log.
         _log = log ?? (_ => { });
         _load = load;
@@ -139,7 +149,33 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         if (targets.Count == 0)
             return Task.FromResult(RunMacroResponse.Refused(Reasons.NoTargetsResolved, "None of the requested targets are running."));
 
-        return Task.FromResult(Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct));
+        var started = Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct);
+        return Task.FromResult(started with { Note = DeadlineNote(macro, targets) });
+    }
+
+    /// <summary>A heads-up when this run is long enough to cross another tracked account's keep-alive
+    /// deadline: the earliest such account. Null when it crosses none. Never affects the run.</summary>
+    private string? DeadlineNote(Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets)
+    {
+        try
+        {
+            var now = _now();
+            var ends = now + macro.Duration;
+            var own = targets.Select(t => t.RobloxUserId).ToHashSet();
+            var hit = _deadlines()
+                .Where(d => !d.Off && !own.Contains(d.UserId) && d.At < ends)
+                .OrderBy(d => d.At)
+                .FirstOrDefault();
+            if (hit is null) return null;
+            var minutes = (int)Math.Ceiling(macro.Duration.TotalMinutes);
+            return string.Create(CultureInfo.InvariantCulture,
+                $"This run (about {minutes} min) crosses {hit.Name}'s keep-alive deadline at {hit.At:HH:mm}; it will pause there for a Space.");
+        }
+        catch (Exception ex)
+        {
+            _log($"  ! deadline note skipped: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -209,7 +245,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     {
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
-        _registry.Started(playbackId);
+        _registry.Started(playbackId, targets.Select(t => t.RobloxUserId).ToArray());
         _ = ObservePlaybackAsync(playbackId, macro, targets, interAltDelayMs, repeat, playbackCts);
         return RunMacroResponse.Accepted(playbackId);
     }

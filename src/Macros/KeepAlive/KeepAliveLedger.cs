@@ -148,6 +148,9 @@ internal sealed class KeepAliveLedger(Func<long> monoMs, Func<DateTimeOffset> wa
         lock (_gate) return _byUser.Values.Select(ToRecord).ToArray();
     }
 
+    /// <summary>The ledger's monotonic clock now, in ms.</summary>
+    public long NowMs => monoMs();
+
     /// <summary>Converts a mono-clock reading to wall time using both clocks sampled together.</summary>
     public DateTimeOffset ToWall(long monoMsValue)
     {

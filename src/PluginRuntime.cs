@@ -157,10 +157,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // on-disk library the recorder/sequence player use.
         if (UI.UserPreferences.Load().AcceptPluginRunRequests)
         {
+            var playbacks = new Ipc.PlaybackRegistry();
+            var status = new Ipc.StatusProvider(Ledger, Gate, playbacks,
+                () => _breakglass.IsOn, () => _runner.IsRunning, () => _runner.TurboKeepAlive, () => _runner.ActiveUserIds);
             var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
-                isBreakglass: () => _breakglass.IsOn);
+                isBreakglass: () => _breakglass.IsOn, deadlines: status.Deadlines, registry: playbacks);
             _bridgeInvoker = invoker;
-            _bridgeServer = new Ipc.MacroRunnerServer(invoker);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
 

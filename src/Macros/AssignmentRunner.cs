@@ -232,6 +232,11 @@ internal sealed class AssignmentRunner
 
     public bool IsRunning => _activeCts is not null;
 
+    /// <summary>Accounts the running loop plays a macro on (Active). Empty when no loop runs. A snapshot read of
+    /// the schedule, so it never waits on a pass.</summary>
+    public IReadOnlySet<long> ActiveUserIds
+        => (_scheduled ?? []).Where(a => !a.IsKeepAlive).Select(a => a.Assignment.Alt.RobloxUserId).ToHashSet();
+
     /// <summary>
     /// An account that appeared while the loop runs joins it as keep-alive (Active needs a macro the
     /// running loop never had a chance to pair). Already scheduled: refreshes its window identity. Does
