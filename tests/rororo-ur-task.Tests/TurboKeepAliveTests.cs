@@ -65,6 +65,7 @@ public class TurboKeepAliveTests
         public List<(int pid, long at)> Focused { get; } = new();
         public List<(IntPtr h, long at)> Restored { get; } = new();
         public List<(int s, int n, long at)> Countdown { get; } = new();
+        public List<string> Log { get; } = new();
         public int Iterations;
     }
 
@@ -112,6 +113,7 @@ public class TurboKeepAliveTests
             KeepAliveIntervalMs: alt => intervalFor?.Invoke(alt.Pid) ?? TwelveMin)
         {
             SweepCountdown = (s, n) => rig.Countdown.Add((s, n, clock.NowMs)),
+            SweepLog = line => rig.Log.Add(line),
         };
 
         rig = new Rig
@@ -173,6 +175,27 @@ public class TurboKeepAliveTests
         var focusToRestore = rig.Restored[0].at - rig.Focused[0].at;
         Assert.True(focusToRestore <= 45 + AssignmentRunner.TurboPollIntervalMs + AssignmentRunner.TurboSettleMs + AssignmentRunner.TurboPostKeyMs,
             $"per-alt sweep cost was {focusToRestore}ms");
+    }
+
+    /// The live check reads every alt's Space off the log: one line per alt with its time to
+    /// the front, and a tally when the sweep ends. A skip names its reason and sends nothing.
+    [Fact]
+    public async Task Turbo_LogsEveryAltsSpace_AndEverySkip_WithASweepTally()
+    {
+        var a1 = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
+        var a2 = new Assignment(Alt(2), null, CadenceRole.KeepAlive);
+        var sent = Build(new[] { a1, a2 }, runForMs: 5 * Min, flipDelayMs: 45);
+        await sent.Runner.RunAsync(new[] { a1, a2 }, sent.Cts.Token);
+
+        Assert.Equal("turbo keep-alive: Space to alt1 (45 ms to front)", sent.Log[0]);
+        Assert.Equal("turbo keep-alive: Space to alt2 (45 ms to front)", sent.Log[1]);
+        Assert.Equal("turbo keep-alive: sweep done, 2 of 2 Space sent", sent.Log[2]);
+
+        var skipped = Build(new[] { a1 }, runForMs: 5 * Min, flipDelayMs: null);
+        await skipped.Runner.RunAsync(new[] { a1 }, skipped.Cts.Token);
+
+        Assert.Equal($"turbo keep-alive: skipped alt1, not in front within {AssignmentRunner.TurboConfirmCapMs} ms; retry in 30s", skipped.Log[0]);
+        Assert.Equal("turbo keep-alive: sweep done, 0 of 1 Space sent", skipped.Log[1]);
     }
 
     /// (c) The foreground never reads as the alt. The cap expires, NO Space is ever

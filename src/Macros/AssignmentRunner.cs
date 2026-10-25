@@ -29,6 +29,10 @@ internal sealed record CadenceDeps(
     /// </summary>
     public Action<int, int> SweepCountdown { get; init; } = (_, _) => { };
 
+    /// <summary>One line per alt a turbo sweep reaches (sent, or skipped and why) and one when it
+    /// ends, so a live check can read every window's Space off ur-task.log. No-op by default.</summary>
+    public Action<string> SweepLog { get; init; } = _ => { };
+
     public static CadenceDeps Real
     {
         get
@@ -61,6 +65,7 @@ internal sealed record CadenceDeps(
                             $"turbo keep-alive: sweeping {windowCount} window(s) in {secondsLeft}s");
                     UI.TurboSweepToast.Update(secondsLeft, windowCount);
                 },
+                SweepLog = Diagnostics.DiagLog.Write,
             };
         }
     }
@@ -629,6 +634,7 @@ internal sealed class AssignmentRunner
 
         var prior = _deps.CaptureForeground();
         var anyFocusTaken = false;
+        int sent = 0, reached = 0;
         try
         {
             foreach (var alt in batch)
@@ -638,13 +644,17 @@ internal sealed class AssignmentRunner
                 var asn = alt.Assignment;
                 var cycle = advancePass(alt);
                 var index = indexOf[alt];
+                var name = asn.Alt.DisplayName;
+                reached++;
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
+                var focusAt = _deps.ClockMs();
                 if (!_deps.Focus(asn.Alt.Pid).ok)
                 {
                     alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
                     alt.ConsecutiveFocusFailures++;
                     EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    _deps.SweepLog($"turbo keep-alive: skipped {name}, focus failed; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;   // nothing stolen by THIS alt; the sweep moves on
                 }
                 anyFocusTaken = true;
@@ -660,8 +670,10 @@ internal sealed class AssignmentRunner
                     alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
                     alt.ConsecutiveFocusFailures++;
                     EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    _deps.SweepLog($"turbo keep-alive: skipped {name}, not in front within {TurboConfirmCapMs} ms; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;
                 }
+                var confirmMs = _deps.ClockMs() - focusAt;
                 try { await _deps.Sleep(TurboSettleMs, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
                 // Re-check after the settle: the user (or another window) can take the foreground in those ms.
@@ -671,6 +683,7 @@ internal sealed class AssignmentRunner
                     alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
                     alt.ConsecutiveFocusFailures++;
                     EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    _deps.SweepLog($"turbo keep-alive: skipped {name}, lost the foreground in the settle; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;
                 }
                 if (ct.IsCancellationRequested) return;   // last check before input
@@ -679,6 +692,8 @@ internal sealed class AssignmentRunner
                 _deps.SendKeepAlive();
                 alt.ConsecutiveFocusFailures = 0;
                 alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;
+                sent++;
+                _deps.SweepLog($"turbo keep-alive: Space to {name} ({confirmMs} ms to front)");
 
                 try { await _deps.Sleep(TurboPostKeyMs, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
@@ -687,6 +702,9 @@ internal sealed class AssignmentRunner
         finally
         {
             if (anyFocusTaken) _deps.RestoreForeground(prior);
+            _deps.SweepLog(ct.IsCancellationRequested
+                ? $"turbo keep-alive: sweep stopped after {reached} of {batch.Count}, {sent} Space sent"
+                : $"turbo keep-alive: sweep done, {sent} of {batch.Count} Space sent");
         }
     }
 
@@ -928,7 +946,7 @@ internal sealed class AssignmentRunner
         // a no-op for every release through v0.2.2.
         var ok = down == 1 && up == 1;
         if (!ok)
-            Debug.WriteLine($"[AssignmentRunner] keep-alive Space rejected by SendInput (down={down}, up={up}).");
+            Diagnostics.DiagLog.Write($"keep-alive Space rejected by SendInput (down={down}, up={up}).");
         return ok;
     }
 
