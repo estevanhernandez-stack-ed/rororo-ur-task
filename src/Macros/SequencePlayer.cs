@@ -67,11 +67,12 @@ internal sealed class SequencePlayer
         {
             for (int i = 0; i < orderedTargets.Count; i++)
             {
-                // A keep-alive break holds the foreground: nothing is focused until it ends. Before
-                // the first target too, which is the boundary between passes.
+                // A held keep-alive break owns the foreground: nothing is focused until it ends. Before
+                // the first target too, which is the boundary between passes. Wait-only: the sequence
+                // is no playback, so it never grants a break (another playback may be mid-step).
                 if (_gate is not null)
                 {
-                    try { await _gate.AtBoundaryAsync(i, orderedTargets.Count, _activeCts.Token).ConfigureAwait(false); }
+                    try { await _gate.WaitWhileBreakHeldAsync(_activeCts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { /* aborted during the break: skipped just below */ }
                 }
 
@@ -90,19 +91,20 @@ internal sealed class SequencePlayer
 
                 // Phase: Focusing
                 EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Focusing, completed, failed, skipped));
-                var (ok, focusErr) = _focus(target.Pid);
+                bool ok;
+                string? focusErr;
+                try { (ok, focusErr) = await FocusOutsideBreaksAsync(target, delay, _activeCts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException)
+                {
+                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Skipped, "Sequence aborted."));
+                    skipped++;
+                    continue;
+                }
                 if (!ok)
                 {
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
                     failed++;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
-                    continue;
-                }
-                try { await Task.Delay(delay, _activeCts.Token).ConfigureAwait(false); }
-                catch (OperationCanceledException)
-                {
-                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Skipped, "Sequence aborted."));
-                    skipped++;
                     continue;
                 }
 
@@ -155,6 +157,20 @@ internal sealed class SequencePlayer
         {
             _activeCts?.Dispose();
             _activeCts = null;
+        }
+    }
+
+    /// <summary>Focus, then the inter-alt delay. A break granted during the delay (nothing was in,
+    /// so keep-alive got it at once) has moved the foreground: wait it out and focus again, so the
+    /// target is never focused or played while keep-alive holds the foreground.</summary>
+    private async Task<(bool Ok, string? Error)> FocusOutsideBreaksAsync(AccountRegistry.AccountInfo target, int delay, CancellationToken ct)
+    {
+        while (true)
+        {
+            var (ok, err) = _focus(target.Pid);
+            if (!ok) return (false, err);
+            await Task.Delay(delay, ct).ConfigureAwait(false);
+            if (_gate is null || !await _gate.WaitWhileBreakHeldAsync(ct).ConfigureAwait(false)) return (true, null);
         }
     }
 

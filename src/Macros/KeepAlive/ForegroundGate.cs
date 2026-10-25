@@ -25,6 +25,8 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
         public int Leases = 1;
         public bool Granted;
         public bool Parked;
+        /// <summary>The timer has decided to cancel; the cancel itself runs after the lock.</summary>
+        public bool Preempting;
         public readonly TaskCompletionSource GrantedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource ReleasedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly CancellationTokenSource Timer = new();
@@ -36,6 +38,10 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
     private string? _label;
     private CancellationTokenSource _preempt = new();
     private Break? _break;
+
+    /// <summary>Test seam: runs between the preempt decision and the cancel, the gap a playback
+    /// can park in.</summary>
+    internal Action? OnPreemptDecided;
 
     /// <summary>Cancelled when keep-alive preempts the playback that is in. A fresh token per
     /// playback: read it after <see cref="EnterPlayback"/>.</summary>
@@ -89,8 +95,14 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
         if (granted is not null) { b0!.Timer.Cancel(); log(granted); }
     }
 
-    /// <summary>Returns at once unless a break is pending or held. Otherwise marks the playback
-    /// parked, grants a pending break, and waits until every lease is released.</summary>
+    /// <summary>Only the playback that is in calls this: parking grants a pending break, so a
+    /// caller outside the playback would hand keep-alive the foreground mid-step. Anyone else uses
+    /// <see cref="WaitWhileBreakHeldAsync"/>.
+    /// <para>Returns at once unless a break is pending or held. Otherwise marks the playback parked,
+    /// grants a pending break, and waits until every lease is released. A parked playback gets a
+    /// fresh <see cref="PreemptToken"/>: a preempt decided just before it parked may still cancel
+    /// the old one, and must not end a playback that did reach its boundary. Pass a token that is
+    /// not linked to the preempt token, and re-read <see cref="PreemptToken"/> after it returns.</para></summary>
     public Task AtBoundaryAsync(int stepIndex, int stepCount, CancellationToken ct)
     {
         Break b;
@@ -100,6 +112,7 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
             if (_break is null) return Task.CompletedTask;
             b = _break;
             b.Parked = true;
+            if (b.Preempting) _preempt = new CancellationTokenSource(); // the timer cancels the old one
             if (!b.Granted)
             {
                 Grant(b);
@@ -109,6 +122,25 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
         }
         if (granted is not null) { b.Timer.Cancel(); log(granted); }
         return ParkedAsync(b, ct);
+    }
+
+    /// <summary>For callers outside a playback (a sequence between targets): waits while a granted
+    /// break holds the foreground, and never grants one. True when it waited, so the caller knows
+    /// keep-alive moved the foreground. A pending break is the playback's business, not ours.</summary>
+    public async Task<bool> WaitWhileBreakHeldAsync(CancellationToken ct)
+    {
+        bool waited = false;
+        while (true)
+        {
+            Task released;
+            lock (_lock)
+            {
+                if (_break is not { Granted: true } b) return waited;
+                released = b.ReleasedTcs.Task;
+            }
+            await released.WaitAsync(ct).ConfigureAwait(false);
+            waited = true; // another break may have been granted since: look again
+        }
     }
 
     private async Task ParkedAsync(Break b, CancellationToken ct)
@@ -169,9 +201,10 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
         string? label = null;
         lock (_lock)
         {
-            if (_break == b && !b.Granted && _playbackIn) { cut = _preempt; label = _label; }
+            if (_break == b && !b.Granted && _playbackIn) { cut = _preempt; label = _label; b.Preempting = true; }
         }
         if (cut is null) return;
+        OnPreemptDecided?.Invoke();
         log(string.Create(CultureInfo.InvariantCulture,
             $"keep-alive break for {b.For}: the playback on {label} reached no step boundary in {after.TotalSeconds:F0} s, stopping it"));
         cut.Cancel(); // outside the lock: the runner's continuations may run inline

@@ -135,4 +135,31 @@ public class ForegroundGateTests
         using var lease = await second.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal((long?)43, gate.Status.PlaybackTarget);
     }
+
+    [Fact]
+    public async Task A_wait_outside_the_playback_never_grants()
+    {
+        var gate = Gate();
+        var playback = gate.EnterPlayback(42, "macro"); // mid-step: it has not reached a boundary
+        var request = gate.RequestBreakAsync("Alt One", Long, default);
+
+        // A sequence between targets, or anyone else outside the playback: returns at once, grants nothing.
+        Assert.False(await gate.WaitWhileBreakHeldAsync(default).WaitAsync(TimeSpan.FromSeconds(5)));
+        await Task.Delay(50);
+        Assert.False(request.IsCompleted);
+        Assert.False(gate.Status.Paused);
+
+        // Granted only when the playback itself parks (or exits).
+        var boundary = gate.AtBoundaryAsync(1, 3, default);
+        var lease = await request.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // While the break is held, the outside wait waits, and says it did.
+        var outside = gate.WaitWhileBreakHeldAsync(default);
+        await Task.Delay(50);
+        Assert.False(outside.IsCompleted);
+        lease.Dispose();
+        Assert.True(await outside.WaitAsync(TimeSpan.FromSeconds(5)));
+        await boundary.WaitAsync(TimeSpan.FromSeconds(5));
+        playback.Dispose();
+    }
 }

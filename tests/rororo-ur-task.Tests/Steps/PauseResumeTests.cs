@@ -19,6 +19,8 @@ public class PauseResumeTests
         public bool Foreground = true;
         public bool YieldReal;
         public Action? OnDelay;
+        /// <summary>When set, the next delay waits for this task (then it is cleared).</summary>
+        public Task? Hold;
 
         public bool Send(MacroEvent e) { lock (Sent) Sent.Add(e with { TimestampMs = NowMs }); return true; }
         public bool ReleaseButton(int button)
@@ -39,6 +41,7 @@ public class PauseResumeTests
             NowMs += ms;
             OnDelay?.Invoke();
             ct.ThrowIfCancellationRequested();
+            if (Hold is { } hold) { Hold = null; return hold.WaitAsync(ct); }
             return YieldReal ? Task.Delay(1, ct) : Task.CompletedTask;
         }
         public List<(MacroEventKind Kind, int Vk)> Keys()
@@ -214,6 +217,41 @@ public class PauseResumeTests
     }
 
     [Fact]
+    public async Task A_preempt_decided_as_the_playback_parks_does_not_end_it()
+    {
+        // The gap: the timer decides to preempt under the lock and cancels after letting go of it.
+        // The playback reaches its boundary and parks inside that gap; it must pick up normally.
+        var io = new FakeIo();
+        var gate = Gate(io);
+        var stepEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        gate.OnPreemptDecided = () =>
+        {
+            stepEnds.TrySetResult(); // the step finishes right after the decision ...
+            SpinWait.SpinUntil(() => gate.Status.Paused, TimeSpan.FromSeconds(5)); // ... and parks before the cancel
+        };
+        Task<IDisposable>? request = null;
+        io.OnDelay = () =>
+        {
+            if (request is not null) return;
+            request = gate.RequestBreakAsync("Due Alt", TimeSpan.FromMilliseconds(20), default);
+            io.Hold = stepEnds.Task; // this delay is the step still running
+        };
+        var steps = new MacroStep[] { new WaitStep(100), new KeyStep(0, 0x41, true), new KeyStep(0, 0x41, false) };
+
+        using var playback = gate.EnterPlayback(42, "m1");
+        var run = StepRunner.RunAsync(steps, Ctx(gate), io, default);
+        var lease = await request!.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(50); // the cancel has fired by now
+        Assert.False(run.IsCompleted);
+        lease.Dispose();
+        var r = await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Null(r.Code);
+        Assert.Equal(new[] { (MacroEventKind.KeyDown, 0x41), (MacroEventKind.KeyUp, 0x41) }, io.Keys());
+    }
+
+    [Fact]
     public async Task User_cancellation_keeps_its_old_result()
     {
         var io = new FakeIo();
@@ -294,5 +332,39 @@ public class PauseResumeTests
         held.Dispose();
         await next.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(new long[] { 101, 102, 101, 102 }, player.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_break_granted_between_targets_holds_the_next_target_until_it_ends()
+    {
+        var gate = new ForegroundGate(() => 0, _ => { });
+        var player = new GatedPlayer(gate);
+        var fg = new FollowFocus();
+        var alts = new[] { new PluginHost.AccountRegistry.AccountInfo(1, 101, "One", "a1"), new PluginHost.AccountRegistry.AccountInfo(2, 102, "Two", "a2") };
+        var focused = new List<int>();
+        Task<IDisposable>? request = null;
+        var sequence = new SequencePlayer(player, fg, pid =>
+        {
+            lock (focused) focused.Add(pid);
+            fg.Current = alts[pid - 1];
+            // Alt 1 has played and nothing is in: keep-alive gets its break at once, mid inter-alt delay.
+            if (pid == 2 && request is null) request = gate.RequestBreakAsync("Due Alt", Long, default);
+            return (true, null);
+        }, gate);
+
+        var pass = sequence.PlayAsync(EventMacro(), alts, interAltDelayMs: 100);
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref request) is not null, TimeSpan.FromSeconds(5)));
+        var lease = await request!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(request.IsCompletedSuccessfully);
+        await Task.Delay(300); // past the delay: the sequence sees the held break and waits
+        Assert.Equal(new long[] { 101 }, player.Snapshot());
+        lock (focused) Assert.Equal(new[] { 1, 2 }, focused); // no focus during the break
+
+        fg.Current = null; // keep-alive moved the foreground
+        lease.Dispose();
+        var result = await pass.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new long[] { 101, 102 }, player.Snapshot());
+        lock (focused) Assert.Equal(new[] { 1, 2, 2 }, focused); // focused again after the break
+        Assert.Equal(2, result.Completed);
     }
 }

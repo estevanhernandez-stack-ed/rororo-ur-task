@@ -53,7 +53,10 @@ internal sealed class MacroPlayer : IMacroPlayer
         _adjustments = adjustments ?? new PointAdjustmentStore(PointAdjustmentStore.DefaultPath());
     }
 
-    public bool IsPlaying => _activeCts is not null;
+    /// <summary>Set while a playback waits out a keep-alive break before it starts.</summary>
+    private CancellationTokenSource? _waitingCts;
+
+    public bool IsPlaying => _activeCts is not null || _waitingCts is not null;
 
     public event EventHandler<PlaybackStartedArgs>? Started;
     public event EventHandler<PlaybackEndedArgs>? Ended;
@@ -68,7 +71,30 @@ internal sealed class MacroPlayer : IMacroPlayer
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
+        if (_gate is null) return await PlayInAsync(macro, targetUserId, external).ConfigureAwait(false);
 
+        // One registration around the whole playback, step path and event-list path alike. Its
+        // first boundary comes before any window work: a break held now (granted while nothing was
+        // in, say a sequence between targets) is waited out before the preflight, the resize or
+        // any input, so the playback never touches a window keep-alive is using.
+        using var playback = _gate.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
+        var waiting = CancellationTokenSource.CreateLinkedTokenSource(external);
+        _waitingCts = waiting; // Esc and StopMacro reach a playback waiting here too
+        try
+        {
+            await _gate.AtBoundaryAsync(0, macro.HasSteps ? macro.Steps!.Count : macro.Events.Count, waiting.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
+        finally
+        {
+            _waitingCts = null;
+            waiting.Dispose();
+        }
+        return await PlayInAsync(macro, targetUserId, external).ConfigureAwait(false);
+    }
+
+    private async Task<PlaybackResult> PlayInAsync(Macro macro, long targetUserId, CancellationToken external)
+    {
         var preflight = _foreground.ResolveForegroundAccount();
         if (preflight is null)
             return PlaybackResult.Refused("No RoRoRo-managed window is currently in the foreground.");
@@ -97,8 +123,7 @@ internal sealed class MacroPlayer : IMacroPlayer
             if (sizeRefusal is not null) return sizeRefusal;
         }
 
-        using var playback = _gate?.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
-        var preempt = _gate?.PreemptToken ?? CancellationToken.None;
+        var preempt = _gate?.PreemptToken ?? CancellationToken.None; // read after the boundary: a park may renew it
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external, preempt);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();
@@ -229,7 +254,7 @@ internal sealed class MacroPlayer : IMacroPlayer
     /// </summary>
     public bool Abort()
     {
-        var cts = _activeCts;
+        var cts = _activeCts ?? _waitingCts;
         if (cts is null) return false;
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with finally */ }
         return true;
@@ -355,7 +380,6 @@ internal sealed class MacroPlayer : IMacroPlayer
         var actual = _metrics.ClientSize(hwnd) ?? target;
 
         // StepRunner links the gate's preempt token itself and reports it as keep-alive-preempted.
-        using var playback = _gate?.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();

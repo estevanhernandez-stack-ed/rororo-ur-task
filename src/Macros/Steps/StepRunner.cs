@@ -126,7 +126,7 @@ internal static class StepRunner
         // Keep-alive's preempt joins the caller's token; the caller's (Esc, StopMacro) keeps its result.
         var caller = ct;
         var preempt = ctx.Gate?.PreemptToken ?? CancellationToken.None;
-        using var run = ctx.Gate is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, preempt);
+        var run = ctx.Gate is null ? null : CancellationTokenSource.CreateLinkedTokenSource(caller, preempt);
         if (run is not null) ct = run.Token;
         int i = 0;
         try
@@ -134,7 +134,15 @@ internal static class StepRunner
             for (; i < steps.Count; i++)
             {
                 if (ctx.Gate is { BreakWanted: true } gate)
-                    await ParkAsync(gate, i, steps.Count, ctx, io, heldKeys, heldButtons, ct);
+                {
+                    // Parked on the caller's token: a preempt decided as it parked must not end a
+                    // playback that reached its boundary. The gate hands out a fresh preempt token.
+                    await ParkAsync(gate, i, steps.Count, ctx, io, heldKeys, heldButtons, caller);
+                    run!.Dispose();
+                    preempt = gate.PreemptToken;
+                    run = CancellationTokenSource.CreateLinkedTokenSource(caller, preempt);
+                    ct = run.Token;
+                }
 
                 // Not a check failure: no StepIndex, so GetPlayback reports "aborted", not "check-failed".
                 if (!io.TargetInForeground())
@@ -209,6 +217,7 @@ internal static class StepRunner
         }
         finally
         {
+            run?.Dispose();
             // Keys need no window. Buttons go up in screen space at the cursor, never through the
             // client-space Send: when the window has gone (AutoStopCoordinator aborts exactly
             // then), Send drops the event and the button would stay down system-wide.
