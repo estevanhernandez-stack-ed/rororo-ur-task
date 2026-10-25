@@ -2,6 +2,18 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.12.1 — unreleased
+
+### Added
+
+- **Ctrl+Shift+F11 is break-glass: you have the wheel.** When you need the PC back mid-run, press
+  it once. Every macro stops, keep-alive pauses, and Ur Task refuses macros from other plugins and
+  agents (reason `breakglass`) until you press it again, so nothing fights you for the mouse. Ctrl+Shift+P and
+  Ctrl+Shift+L are ignored while it's on. Press it again to hand back: keep-alive comes back on if
+  it was playing when you took over. The state lives in a small flag file next to the logs, so it
+  holds across a restart, and scripts can see it. The log says "Break-glass ON" and "Break-glass
+  OFF", with what was stopped.
+
 ## 0.12.0 — 2026-10-25
 
 ### Added

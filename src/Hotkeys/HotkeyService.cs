@@ -4,8 +4,9 @@ namespace Labs626.UrTask.Hotkeys;
 
 /// <summary>
 /// Registers Ctrl+Shift+R (record toggle), Ctrl+Shift+P (play assignments),
-/// Ctrl+Shift+L (run routine), and Ctrl+Shift+F12 (abort) as Win32 global hotkeys
-/// for the plugin's lifetime. Bare Esc is ALSO an abort key, but registered on
+/// Ctrl+Shift+L (run routine), Ctrl+Shift+F12 (abort) and Ctrl+Shift+F11 (break-glass:
+/// "I have the wheel", see <see cref="Breakglass"/>) as Win32 global hotkeys for the
+/// plugin's lifetime. Bare Esc is ALSO an abort key, but registered on
 /// demand only while a macro plays (EnableAbortKey/DisableAbortKey) — a
 /// permanent bare-Esc grab swallows Esc system-wide for every app whenever the
 /// plugin runs. v0.1 used bare F8/F5/Esc, which hijacked those keys system-wide
@@ -44,6 +45,7 @@ internal sealed class HotkeyService : IDisposable
     private const int VK_R = 0x52;
     private const int VK_P = 0x50;
     private const int VK_F12 = 0x7B;
+    private const int VK_F11 = 0x7A;
     private const int VK_L = 0x4C;
     private const int VK_ESCAPE = 0x1B;
 
@@ -53,6 +55,7 @@ internal sealed class HotkeyService : IDisposable
     private const int ID_ABORT_BARE = 3;   // bare Esc — registered only while a macro plays
     private const int ID_ABORT_CHORD = 4;  // Ctrl+Shift+F12 — registered for the plugin's lifetime
     private const int ID_RUN_ROUTINE = 5;  // Ctrl+Shift+L — run the selected recipe/loadout routine
+    private const int ID_BREAKGLASS = 6;   // Ctrl+Shift+F11 — toggle break-glass (the user has the wheel)
 
     private readonly object _lock = new();
     private Thread? _thread;
@@ -74,6 +77,7 @@ internal sealed class HotkeyService : IDisposable
         ID_ABORT_BARE => "Esc",
         ID_ABORT_CHORD => "Ctrl+Shift+F12",
         ID_RUN_ROUTINE => "Ctrl+Shift+L",
+        ID_BREAKGLASS => Breakglass.Chord,
         _ => $"hotkey {id}",
     };
 
@@ -82,7 +86,7 @@ internal sealed class HotkeyService : IDisposable
     /// this to skip them at record time — but only when Ctrl+Shift is held
     /// (otherwise lowercase 'r'/'p' typing would get eaten).
     /// </summary>
-    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_F12, VK_L };
+    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_F12, VK_L, VK_F11 };
 
     /// <summary>VK code for the bare Esc hotkey — always filtered at record time.</summary>
     public static int AbortVkCode => VK_ESCAPE;
@@ -179,6 +183,10 @@ internal sealed class HotkeyService : IDisposable
                 throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+L) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_RUN_ROUTINE);
 
+            if (!RegisterHotKey(IntPtr.Zero, ID_BREAKGLASS, chord, VK_F11))
+                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+F11) failed, win32 error {Marshal.GetLastWin32Error()}");
+            registered.Add(ID_BREAKGLASS);
+
             _running = true;
             _readySignal!.Set();
 
@@ -209,13 +217,14 @@ internal sealed class HotkeyService : IDisposable
                         ID_ABORT_BARE => HotkeyKind.Abort,
                         ID_ABORT_CHORD => HotkeyKind.Abort,
                         ID_RUN_ROUTINE => HotkeyKind.RunRoutine,
+                        ID_BREAKGLASS => HotkeyKind.Breakglass,
                         _ => (HotkeyKind?)null,
                     };
                     if (kind is not null)
                     {
                         try
                         {
-                            var source = kind == HotkeyKind.Abort
+                            var source = kind is HotkeyKind.Abort or HotkeyKind.Breakglass
                                 ? AbortLog.Source(KeyName(id), PluginHost.Win32Focus.DescribeForeground())
                                 : KeyName(id);
                             HotkeyPressed?.Invoke(kind.Value, source);
@@ -281,4 +290,4 @@ internal sealed class HotkeyService : IDisposable
     private static extern uint GetCurrentThreadId();
 }
 
-internal enum HotkeyKind { RecordToggle, Play, Abort, RunRoutine }
+internal enum HotkeyKind { RecordToggle, Play, Abort, RunRoutine, Breakglass }
