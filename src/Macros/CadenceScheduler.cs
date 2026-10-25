@@ -18,6 +18,9 @@ internal sealed class ScheduledAlt
     /// </summary>
     public int ConsecutiveFocusFailures { get; set; }
 
+    /// <summary>KeepAlive only: this alt's game limit and deadline. Null for Active alts.</summary>
+    public KeepAliveLimit? Limit { get; set; }
+
     /// <summary>
     /// High-water mark, in ms, of the longest Active pass actually observed for this
     /// alt (focus + settle + verify + PlayAsync, timed end to end by the caller).
@@ -57,9 +60,9 @@ internal abstract record CadenceDecision
 /// The safety margin against Roblox's 20-minute idle floor does NOT live here — it's
 /// baked into the fire intervals in <see cref="KeepAliveLimits"/> (deadlines of 14/9/12 minutes).
 /// This scheduler just reacts to whatever <c>DueAtMs</c> it's handed. A maintainer
-/// tightening those intervals toward 20 minutes erodes the gap-fit boundary this class
-/// depends on — backstop games (17-minute interval) only have ~3 minutes of headroom
-/// to begin with.
+/// tightening those intervals toward the limit erodes the gap-fit boundary this class
+/// depends on — every alt's deadline is its game's limit minus a 6-minute runway (PS99:
+/// limit 15, deadline 9), and that runway is all the headroom a late service has.
 /// </summary>
 internal static class CadenceScheduler
 {

@@ -33,6 +33,10 @@ internal sealed record CadenceDeps(
     /// ends, so a live check can read every window's Space off ur-task.log. No-op by default.</summary>
     public Action<string> SweepLog { get; init; } = _ => { };
 
+    /// <summary>The game's limit and deadline for an alt. Null derives them from <see cref="KeepAliveIntervalMs"/>
+    /// (interval = deadline, limit = the platform floor).</summary>
+    public Func<AccountRegistry.AccountInfo, KeepAliveLimit>? KeepAliveLimitFor { get; init; }
+
     /// <summary>Who is in front right now, short, for the line that says why a keep-alive missed.</summary>
     public Func<string> DescribeForeground { get; init; } = () => "unknown";
 
@@ -72,6 +76,7 @@ internal sealed record CadenceDeps(
                 KeepAliveIntervalMs: alt => (long)KeepAliveLimits
                     .For(alt.PlaceId, alt.PlaceName, prefsLazy.Value).Deadline.TotalMilliseconds)
             {
+                KeepAliveLimitFor = alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, prefsLazy.Value),
                 SweepCountdown = (secondsLeft, windowCount) =>
                 {
                     if (secondsLeft == AssignmentRunner.TurboCountdownSeconds)
@@ -98,6 +103,8 @@ internal sealed class AssignmentRunner
     private const int DefaultPerAltDelayMs = 1000; // 1s settle before each alt's action
     private const int KeepAliveDelayMs = 200;       // after Space, small wait before moving on
     private const int FocusRetryBackoffMs = 30_000; // spec: bounded 30s retry on a stuck focus
+    internal const long StartSpreadMs = 2_000;      // accounts with no input history on either clock start this far apart
+    private const int UnschedulableRunwayMinutes = 2; // warn when the projected gap comes within this of the limit
 
     // Turbo keep-alive. One warned sweep services every keep-alive alt due within
     // the batch window, and each alt costs a polled foreground confirm instead of a
@@ -123,6 +130,8 @@ internal sealed class AssignmentRunner
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
     private readonly CadenceDeps _deps;
+    private readonly KeepAliveLedger _ledger;
+    private readonly MissReporter _reporter;
     private CancellationTokenSource? _activeCts;
     private volatile bool _turboKeepAlive;
 
@@ -166,10 +175,21 @@ internal sealed class AssignmentRunner
         }) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps)
+        : this(player, foreground, deps, PrivateLedger(deps)) { }
+
+    private static KeepAliveLedger PrivateLedger(CadenceDeps deps)
+    {
+        ArgumentNullException.ThrowIfNull(deps);
+        return new KeepAliveLedger(deps.ClockMs, () => DateTimeOffset.Now);
+    }
+
+    internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps, KeepAliveLedger ledger)
     {
         _player = player ?? throw new ArgumentNullException(nameof(player));
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _deps = deps ?? throw new ArgumentNullException(nameof(deps));
+        _ledger = ledger ?? throw new ArgumentNullException(nameof(ledger));
+        _reporter = new MissReporter(_deps.SweepLog, () => _ledger.ToWall(_deps.ClockMs()));
     }
 
     public event EventHandler<AssignmentProgress>? Progress;
@@ -252,16 +272,31 @@ internal sealed class AssignmentRunner
             {
                 var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
                 var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
+                var intervalMs = coerced.Role == CadenceRole.KeepAlive
+                    ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
+                    : 0;
                 return new ScheduledAlt
                 {
                     Assignment = coerced,
-                    IntervalMs = coerced.Role == CadenceRole.KeepAlive
-                        ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
-                        : 0,
-                    DueAtMs = _deps.ClockMs(),   // every keep-alive is due immediately on start:
-                                                 // tap once up front, THEN settle into its interval.
+                    IntervalMs = intervalMs,
+                    Limit = coerced.Role == CadenceRole.KeepAlive ? LimitFor(coerced.Alt, intervalMs) : null,
                 };
             }).ToList();
+
+            // The ledger decides who is due: each keep-alive alt is due at its real last input plus its
+            // deadline, so starting the loop resets nobody. An alt with no history is due now, and the
+            // ones due now start StartSpreadMs apart in assignment order, never all in the same second.
+            var startMs = _deps.ClockMs();
+            var spreadIndex = 0;
+            foreach (var alt in scheduled)
+            {
+                if (!alt.IsKeepAlive) { alt.DueAtMs = startMs; continue; }
+                var userId = alt.Assignment.Alt.RobloxUserId;
+                _ledger.Track(alt.Assignment.Alt, alt.Limit!);
+                var due = _ledger.DueAtMs(userId);
+                alt.DueAtMs = due <= startMs ? startMs + spreadIndex++ * StartSpreadMs : due;
+                alt.ConsecutiveFocusFailures = _ledger.Get(userId)?.ConsecutiveMisses ?? 0;
+            }
 
             // Unschedulable check. Because Decide is re-consulted between EVERY Active
             // pass (not once per round-robin lap), the realized worst-case gap between
@@ -276,7 +311,11 @@ internal sealed class AssignmentRunner
             // cries wolf even though the realized ~16-min gap is comfortably safe; a
             // 25-min per-game override with zero Active alts reads as "not shorter than
             // 0" and silently misses a kick that is guaranteed to happen.
-            var warnThresholdMs = (long)TimeSpan.FromMinutes((KeepAliveLimits.PlatformIdleKickFloorMinutes - 2)).TotalMilliseconds;
+            // Each alt is held to its OWN game's limit (capped at the platform floor: games may shorten
+            // it, none may extend it), less a fixed runway.
+            long WarnThresholdMs(ScheduledAlt a) =>
+                (long)(Min(a.Limit!.Limit, TimeSpan.FromMinutes(KeepAliveLimits.PlatformIdleKickFloorMinutes))
+                       - TimeSpan.FromMinutes(UnschedulableRunwayMinutes)).TotalMilliseconds;
 
             // IMPORTANT 1 fix: fired once up front from the STATIC estimate here, and
             // re-fired (see CheckUnschedulableWarnings, called after every Active pass
@@ -305,7 +344,7 @@ internal sealed class AssignmentRunner
                 {
                     if (alreadyWarnedUnschedulable.Contains(alt)) continue;
                     var projectedGapMs = Math.Max(longestActivePassMs, alt.IntervalMs);
-                    if (projectedGapMs < warnThresholdMs) continue;
+                    if (projectedGapMs < WarnThresholdMs(alt)) continue;
 
                     alreadyWarnedUnschedulable.Add(alt);
                     var gapMins = projectedGapMs / 60_000.0;
@@ -372,6 +411,7 @@ internal sealed class AssignmentRunner
 
             while (!ct.IsCancellationRequested)
             {
+                _reporter.FlushMinute();
                 var now = _deps.ClockMs();
                 var rotated = Rotated(scheduled, activeCursor);
                 var decision = CadenceScheduler.Decide(rotated, now, NextActivePassCostMs(scheduled, activeCursor));
@@ -380,7 +420,11 @@ internal sealed class AssignmentRunner
                 {
                     case CadenceDecision.SleepUntil sleep:
                         // The whole point: nothing to do, so do NOTHING. No focus steal.
-                        try { await _deps.Sleep(sleep.WakeAtMs - now, ct).ConfigureAwait(false); }
+                        // Never sleep past the moment the open miss group is due to be written.
+                        var sleepMs = sleep.WakeAtMs - now;
+                        if (_reporter.UntilFlush is { } until)
+                            sleepMs = Math.Min(sleepMs, Math.Max(1_000, (long)until.TotalMilliseconds));
+                        try { await _deps.Sleep(sleepMs, ct).ConfigureAwait(false); }
                         catch (OperationCanceledException) { }
                         break;
 
@@ -441,6 +485,7 @@ internal sealed class AssignmentRunner
                     }
 
                     case CadenceDecision.RunActive run:
+                        _reporter.FlushMinute(force: true);   // an Active pass can be long; say what happened first
                         await RunNextActiveAsync(run.Alt, ct).ConfigureAwait(false);
                         break;
                 }
@@ -464,6 +509,7 @@ internal sealed class AssignmentRunner
             // progress Phase, so it never dropped off "running") and made Abort()
             // return false once _activeCts below went null, with no way to recover
             // short of restarting the app.
+            try { _reporter.FlushMinute(force: true); } catch { /* a log line must never block the shutdown */ }
             EmitProgress(new AssignmentProgress(cycle, -1, assignments.Count, null, AssignmentPhase.Stopped));
             _activeCts?.Dispose();
             _activeCts = null;
@@ -527,6 +573,59 @@ internal sealed class AssignmentRunner
         return playMs + DefaultPerAltDelayMs + (macro?.InterAltDelayMs ?? 500);
     }
 
+    private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+    /// <summary>The alt's limit from the deps, or derived from its (clamped) interval when the deps give none.</summary>
+    private KeepAliveLimit LimitFor(AccountRegistry.AccountInfo alt, long intervalMs)
+    {
+        if (_deps.KeepAliveLimitFor is { } f) return f(alt);
+        var deadline = TimeSpan.FromMilliseconds(intervalMs);
+        // No game knowledge here, so the only limit that holds is the platform floor.
+        var floor = TimeSpan.FromMinutes(KeepAliveLimits.PlatformIdleKickFloorMinutes);
+        return new KeepAliveLimit(deadline > floor ? deadline : floor, deadline, false);
+    }
+
+    /// <summary>
+    /// A keep-alive attempt did not land: record it in the ledger (the source of truth for the streak),
+    /// back off 30s, say once if a reset is now unavoidable, and surface the 3-miss warning with its cause.
+    /// <paramref name="log"/> is false for the turbo sweep, which writes its own 0.12.1 line.
+    /// </summary>
+    private void RecordKeepAliveMiss(
+        ScheduledAlt alt, Miss miss, int cycle, int index, int total, bool log)
+    {
+        var asn = alt.Assignment;
+        var userId = asn.Alt.RobloxUserId;
+        var now = _deps.ClockMs();
+        var count = _ledger.RecordMiss(userId, miss);
+        alt.ConsecutiveFocusFailures = count > 0 ? count : alt.ConsecutiveFocusFailures + 1;
+        alt.DueAtMs = now + FocusRetryBackoffMs;
+        if (log) _reporter.Missed(asn.Alt.DisplayName, miss, alt.ConsecutiveFocusFailures);
+
+        // Idle has reached the deadline and the next retry cannot land before the game's limit.
+        if (_ledger.Get(userId) is { LastInputMs: { } last } e)
+        {
+            var idleMs = now - last;
+            var resetAt = last + (long)e.Limit.Limit.TotalMilliseconds;
+            if (idleMs >= (long)e.Limit.Deadline.TotalMilliseconds && alt.DueAtMs > resetAt)
+                _reporter.ExpectReset(asn.Alt.DisplayName, _ledger.ToWall(resetAt), (int)(idleMs / 60_000));
+        }
+        EmitFocusFailureWarning(alt, cycle, index, total, asn, MissReporter.CauseText(miss));
+    }
+
+    /// <summary>A Space landed: stamp the ledger, take the next due time from it, clear the streak, report recovery.</summary>
+    private void RecordKeepAliveLanded(ScheduledAlt alt)
+    {
+        var asn = alt.Assignment;
+        var userId = asn.Alt.RobloxUserId;
+        var before = _ledger.Get(userId);
+        var now = _deps.ClockMs();
+        _ledger.StampLanded(userId, InputSource.KeepAlive);
+        alt.ConsecutiveFocusFailures = 0;
+        alt.DueAtMs = before is null ? now + alt.IntervalMs : _ledger.DueAtMs(userId);
+        long? idleMs = before?.LastInputMs is { } last ? now - last : null;
+        _reporter.Landed(before, asn.Alt.DisplayName, idleMs);
+    }
+
     /// <summary>
     /// Service one overdue-or-soon-due keep-alive: capture the user's current
     /// foreground, focus the alt, verify the flip, tap Space, then hand the
@@ -545,20 +644,20 @@ internal sealed class AssignmentRunner
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
         var prior = _deps.CaptureForeground();     // whatever the USER was doing
-        var focusSucceeded = false;                 // gates the restore below — see finally
+        var restoreNeeded = false;                  // gates the restore below — see finally
         try
         {
-            if (!_deps.Focus(asn.Alt.Pid).Ok)
+            var focusAt = _deps.ClockMs();
+            var attempt = _deps.Focus(asn.Alt.Pid);
+            // A gone window is final: no verify, nothing to wait for. A refusal is soft, Windows
+            // sometimes brings the window forward anyway, so it still gets the verify below.
+            if (!attempt.Ok && attempt.Cause == MissCause.WindowGone)
             {
-                // Bounded retry — do NOT hammer a window that won't focus. After three
-                // straight misses the window is almost certainly gone (alt closed/crashed),
-                // so say so loudly instead of silently retrying it forever.
-                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                alt.ConsecutiveFocusFailures++;
-                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                RecordKeepAliveMiss(alt, new Miss(MissCause.WindowGone, null), cycle, index, total, log: true);
                 return;   // nothing was stolen — Focus never actually flipped anything
             }
-            focusSucceeded = true;
+            var refused = !attempt.Ok;
+            restoreNeeded = !refused;
 
             try { await _deps.Sleep(DefaultPerAltDelayMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
@@ -571,23 +670,24 @@ internal sealed class AssignmentRunner
             var fg = _foreground.ResolveForegroundAccount();
             if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
             {
-                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                alt.ConsecutiveFocusFailures++;
-                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                var miss = refused
+                    ? new Miss(MissCause.FocusRefused, null)
+                    : new Miss(MissCause.OtherInFront, _deps.DescribeForeground());
+                RecordKeepAliveMiss(alt, miss, cycle, index, total, log: true);
                 return;
             }
+            restoreNeeded = true;
+            var toFrontMs = _deps.ClockMs() - focusAt;
 
             EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
             if (!_deps.SendKeepAlive())
             {
                 // Windows rejected the input: nothing landed, so this is a miss like a failed verify.
-                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                alt.ConsecutiveFocusFailures++;
-                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                RecordKeepAliveMiss(alt, new Miss(MissCause.SendRejected, null), cycle, index, total, log: true);
                 return;   // finally still restores: the focus was taken
             }
-            alt.ConsecutiveFocusFailures = 0;                  // a GENUINELY successful service clears the streak
-            alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;    // settle back into the normal interval
+            RecordKeepAliveLanded(alt);                        // a GENUINELY successful service clears the streak
+            _deps.SweepLog($"keep-alive: Space to {asn.Alt.DisplayName} ({toFrontMs} ms to front)");
             try { await _deps.Sleep(KeepAliveDelayMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { /* still restore below, via finally */ }
         }
@@ -603,8 +703,9 @@ internal sealed class AssignmentRunner
             // nothing was stolen — restoring anyway used to poke the system-wide
             // SPI_SETFOREGROUNDLOCKTIMEOUT every single attempt, including the 30s
             // retry loop against a dead alt (crashed/closed window) for as long as the
-            // run keeps going.
-            if (focusSucceeded)
+            // run keeps going. A refused focus that then verified is the one exception:
+            // the window did come forward, so it is restored like any other.
+            if (restoreNeeded)
             {
                 _deps.RestoreForeground(prior);
             }
@@ -674,15 +775,16 @@ internal sealed class AssignmentRunner
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
                 var focusAt = _deps.ClockMs();
-                if (!_deps.Focus(asn.Alt.Pid).Ok)
+                var attempt = _deps.Focus(asn.Alt.Pid);
+                if (!attempt.Ok && attempt.Cause == MissCause.WindowGone)
                 {
-                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                    alt.ConsecutiveFocusFailures++;
-                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    RecordKeepAliveMiss(alt, new Miss(MissCause.WindowGone, null), cycle, index, total, log: false);
                     _deps.SweepLog($"turbo keep-alive: skipped {name}, focus failed; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;   // nothing stolen by THIS alt; the sweep moves on
                 }
-                anyFocusTaken = true;
+                // A refusal is soft: the window sometimes comes forward anyway, so it still gets the polled confirm.
+                var refused = !attempt.Ok;
+                if (!refused) anyFocusTaken = true;
 
                 bool confirmed;
                 try { confirmed = await PollForegroundIsAsync(asn.Alt.RobloxUserId, ct).ConfigureAwait(false); }
@@ -692,12 +794,16 @@ internal sealed class AssignmentRunner
                 {
                     // Safety invariant: the foreground never read as this alt within
                     // the cap — send nothing, back off, warn on the streak crossing.
-                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                    alt.ConsecutiveFocusFailures++;
-                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
-                    _deps.SweepLog($"turbo keep-alive: skipped {name}, not in front within {TurboConfirmCapMs} ms; retry in {FocusRetryBackoffMs / 1000}s");
+                    var miss = refused
+                        ? new Miss(MissCause.FocusRefused, null)
+                        : new Miss(MissCause.OtherInFront, _deps.DescribeForeground());
+                    RecordKeepAliveMiss(alt, miss, cycle, index, total, log: false);
+                    _deps.SweepLog(refused
+                        ? $"turbo keep-alive: skipped {name}, focus failed; retry in {FocusRetryBackoffMs / 1000}s"
+                        : $"turbo keep-alive: skipped {name}, not in front within {TurboConfirmCapMs} ms; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;
                 }
+                anyFocusTaken = true;
                 var confirmMs = _deps.ClockMs() - focusAt;
                 try { await _deps.Sleep(TurboSettleMs, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
@@ -705,9 +811,8 @@ internal sealed class AssignmentRunner
                 var settled = _foreground.ResolveForegroundAccount();
                 if (settled is null || settled.RobloxUserId != asn.Alt.RobloxUserId)
                 {
-                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                    alt.ConsecutiveFocusFailures++;
-                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    RecordKeepAliveMiss(alt, new Miss(MissCause.OtherInFront, _deps.DescribeForeground()),
+                        cycle, index, total, log: false);
                     _deps.SweepLog($"turbo keep-alive: skipped {name}, lost the foreground in the settle; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;
                 }
@@ -716,14 +821,11 @@ internal sealed class AssignmentRunner
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
                 if (!_deps.SendKeepAlive())
                 {
-                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
-                    alt.ConsecutiveFocusFailures++;
-                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    RecordKeepAliveMiss(alt, new Miss(MissCause.SendRejected, null), cycle, index, total, log: false);
                     _deps.SweepLog($"turbo keep-alive: skipped {name}, Windows rejected the input; retry in {FocusRetryBackoffMs / 1000}s");
                     continue;
                 }
-                alt.ConsecutiveFocusFailures = 0;
-                alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;
+                RecordKeepAliveLanded(alt);
                 sent++;
                 _deps.SweepLog($"turbo keep-alive: Space to {name} ({confirmMs} ms to front)");
 
@@ -786,14 +888,16 @@ internal sealed class AssignmentRunner
     /// still emit Skipped (silent, no Reason) so the activity log/UI still reflects
     /// that an attempt happened — they just don't re-toast.
     /// </summary>
-    private void EmitFocusFailureWarning(ScheduledAlt alt, int cycle, int index, int total, Assignment asn)
+    private void EmitFocusFailureWarning(
+        ScheduledAlt alt, int cycle, int index, int total, Assignment asn, string? lastCause = null)
     {
         if (alt.ConsecutiveFocusFailures == 3)
         {
             EmitProgress(new AssignmentProgress(
                 cycle, index, total, asn, AssignmentPhase.Warning,
                 $"{asn.Alt.DisplayName} hasn't reliably reached the foreground in 3 tries — its window " +
-                $"may be gone, or focus isn't sticking. Still retrying every 30s."));
+                $"may be gone, or focus isn't sticking. Still retrying every 30s." +
+                (lastCause is null ? "" : $" Last cause: {lastCause}.")));
             return;
         }
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Skipped));
