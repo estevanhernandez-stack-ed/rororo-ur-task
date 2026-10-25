@@ -1,6 +1,7 @@
 // src/Ipc/MacroRunInvoker.cs
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.IO;
 using Labs626.UrTask.Macros;
 using Labs626.UrTask.PluginHost;
 
@@ -23,7 +24,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 {
     internal const string ForegroundSentinel = "foreground";
 
-    private readonly Func<IReadOnlyList<Macro>> _loadMacros;
+    private readonly Func<MacroStore.LoadResult> _load;
+    private readonly HashSet<string> _loggedFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
     private readonly Func<long?> _resolveForegroundUserId;
     private readonly Func<bool> _isBusy;
@@ -41,7 +43,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player,
         Func<bool> isBreakglass)
         : this(
-            loadMacros: () => store.LoadAll().Macros,
+            load: () => store.LoadAll(),
             snapshot: () => accounts.Snapshot().ToList(),
             resolveForegroundUserId: () => foreground.ResolveForegroundAccount()?.RobloxUserId,
             isBusy: () => player.IsRunning,
@@ -52,8 +54,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     { }
 
     // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
+    // The load keeps its failures so an unreadable macro can say why (#39).
     internal MacroRunInvoker(
-        Func<IReadOnlyList<Macro>> loadMacros,
+        Func<MacroStore.LoadResult> load,
         Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
         Func<long?> resolveForegroundUserId,
         Func<bool> isBusy,
@@ -65,7 +68,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     {
         // Tests leave it out, so a test run never writes to the real ur-task.log.
         _log = log ?? (_ => { });
-        _loadMacros = loadMacros;
+        _load = load;
         _snapshot = snapshot;
         _resolveForegroundUserId = resolveForegroundUserId;
         _isBusy = isBusy;
@@ -74,6 +77,21 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         _isBreakglass = isBreakglass ?? (() => false);
         _registry = registry ?? new PlaybackRegistry();
     }
+
+    // Test ctor over a plain macro list (no load failures), the signature GetPlayback tests already use.
+    internal MacroRunInvoker(
+        Func<IReadOnlyList<Macro>> loadMacros,
+        Func<IReadOnlyList<AccountRegistry.AccountInfo>> snapshot,
+        Func<long?> resolveForegroundUserId,
+        Func<bool> isBusy,
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
+        Func<bool>? abort = null,
+        PlaybackRegistry? registry = null,
+        Action<string>? log = null,
+        Func<bool>? isBreakglass = null)
+        : this(() => new MacroStore.LoadResult(loadMacros(), Array.Empty<MacroStore.LoadFailure>()),
+               snapshot, resolveForegroundUserId, isBusy, playWithResult, abort, registry, log, isBreakglass)
+    { }
 
     // Test ctor, unchanged signature: fakes that only need to run. Adapts into the one delegate.
     internal MacroRunInvoker(
@@ -92,22 +110,34 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     /// path refuses with reason "breakglass": a clean no an agent can pause on, not a mid-step abort.</summary>
     private Task<RunMacroResponse>? BreakglassRefusal()
         => _isBreakglass()
-            ? Task.FromResult(RunMacroResponse.Refused(Hotkeys.Breakglass.RefusalReason, Hotkeys.Breakglass.RefusalDetail))
+            ? Task.FromResult(RunMacroResponse.Refused(Reasons.Breakglass, Hotkeys.Breakglass.RefusalDetail, Actors.User))
             : null;
 
     public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
         if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (_isBusy() || !_playbacks.IsEmpty)
-            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Busy, "A sequence is already running."));
 
-        var macro = _loadMacros().FirstOrDefault(m => string.Equals(m.Id, request.MacroId, StringComparison.OrdinalIgnoreCase));
+        var loaded = _load();
+        var macro = loaded.Macros.FirstOrDefault(m => string.Equals(m.Id, request.MacroId, StringComparison.OrdinalIgnoreCase));
         if (macro is null)
-            return Task.FromResult(RunMacroResponse.Refused("unknown-macro", $"No macro with id '{request.MacroId}'."));
+        {
+            // #39: a file that failed to load is not an unknown id. Say why.
+            var failure = loaded.Failures.FirstOrDefault(f => string.Equals(
+                Path.GetFileNameWithoutExtension(f.Path), request.MacroId, StringComparison.OrdinalIgnoreCase));
+            if (failure is not null)
+            {
+                var advice = failure.Reason.Contains(Reasons.UpdateUrTaskAdvice, StringComparison.Ordinal)
+                    ? Reasons.UpdateUrTaskAdvice : null;
+                return Task.FromResult(RunMacroResponse.Refused(Reasons.MacroUnreadable, failure.Reason, advice: advice));
+            }
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.UnknownMacro, $"No macro with id '{request.MacroId}'."));
+        }
 
         var targets = ResolveTargets(request.Targets);
         if (targets.Count == 0)
-            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", "None of the requested targets are running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.NoTargetsResolved, "None of the requested targets are running."));
 
         return Task.FromResult(Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct));
     }
@@ -124,13 +154,13 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         // malformed even while something is playing.
         if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (ClearAtMacro.Validate(request) is { } problem)
-            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Refused, problem, Actors.AgentOrNull(request.CallerPluginId)));
         if (_isBusy() || !_playbacks.IsEmpty)
-            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Busy, "A sequence is already running."));
 
         var targets = ResolveTargets(new[] { request.Target! });
         if (targets.Count == 0)
-            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.NoTargetsResolved, $"Account {request.Target} is not running."));
 
         var playbackId = Guid.NewGuid().ToString("N");
         var macro = ClearAtMacro.Build(request, ClearAtMacro.IdPrefix + playbackId);
@@ -151,13 +181,13 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         // malformed even while something is playing.
         if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (SweepPathMacro.Validate(request) is { } problem)
-            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Refused, problem, Actors.AgentOrNull(request.CallerPluginId)));
         if (_isBusy() || !_playbacks.IsEmpty)
-            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Busy, "A sequence is already running."));
 
         var targets = ResolveTargets(new[] { request.Target! });
         if (targets.Count == 0)
-            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.NoTargetsResolved, $"Account {request.Target} is not running."));
 
         var playbackId = Guid.NewGuid().ToString("N");
         var macro = SweepPathMacro.Build(request, SweepPathMacro.IdPrefix + playbackId);
@@ -185,9 +215,15 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     }
 
     public IReadOnlyList<MacroSummary> ListMacros()
-        => _loadMacros()
+    {
+        var loaded = _load();
+        foreach (var f in loaded.Failures)
+            if (_loggedFailures.Add(f.Path)) // once per plugin lifetime, however often it is listed
+                _log($"  ! load failed: {Path.GetFileName(f.Path)} — {f.Reason}");
+        return loaded.Macros
             .Select(m => new MacroSummary(m.Id, string.IsNullOrWhiteSpace(m.Name) ? "(unnamed)" : m.Name!))
             .ToList();
+    }
 
     public StopMacroResponse StopMacro(StopMacroRequest request)
     {
@@ -219,7 +255,14 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         return StopMacroResponse.Done(stopped);
     }
 
-    public GetPlaybackResponse GetPlayback(GetPlaybackRequest request) => _registry.Get(request.PlaybackId);
+    public GetPlaybackResponse GetPlayback(GetPlaybackRequest request)
+    {
+        var response = _registry.Get(request.PlaybackId);
+        // A blank playback id is the request's own fault; name the agent that sent it.
+        return response is { Ok: false, Reason: Reasons.Refused }
+            ? response with { Actor = Actors.AgentOrNull(request.CallerPluginId) }
+            : response;
+    }
 
     private async Task ObservePlaybackAsync(
         string playbackId, Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets,
@@ -233,7 +276,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
         SequenceResult? last = null;
         var state = PlaybackState.Finished;
-        string? reason = null, detail = null;
+        string? reason = null, detail = null, actor = null, advice = null;
         int? stepIndex = null;
         try
         {
@@ -242,7 +285,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 last = await _play(macro, targets, interAltDelayMs, playbackCts.Token).ConfigureAwait(false);
                 // Each pass reports its own ending; a later clean pass clears an earlier refusal.
                 state = PlaybackState.Finished;
-                reason = null; detail = null; stepIndex = null;
+                reason = null; detail = null; stepIndex = null; actor = null; advice = null;
                 // SequencePlayer's single-flight claim was lost to a concurrent pass (an empty
                 // PerAlt on a non-null result): nothing ran, so this must not read as a clean
                 // finish. `last == null` is the test ctor's run-only fakes, which stays a clean
@@ -253,7 +296,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 if (last is { PerAlt.Count: 0 })
                 {
                     state = PlaybackState.Failed;
-                    reason = "refused";
+                    reason = Reasons.Refused;
                     detail = "Another playback took the sequence.";
                     break;
                 }
@@ -276,12 +319,19 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 if (failure is null && !playbackCts.IsCancellationRequested
                     && last?.PerAlt is { Count: > 0 } alts
                     && alts.All(a => a.Outcome == PlaybackOutcome.Completed && a.SkippedByReach))
-                    reason = "skipped";
+                    reason = Reasons.Skipped;
                 if (failure is not null && !playbackCts.IsCancellationRequested)
                 {
                     state = PlaybackState.Failed;
-                    reason = failure.StepIndex is not null ? "check-failed"
-                           : failure.Outcome == PlaybackOutcome.Refused ? "refused" : "aborted";
+                    reason = failure.StepIndex is not null ? Reasons.CheckFailed
+                           : failure.Outcome == PlaybackOutcome.Refused ? Reasons.Refused : Reasons.Aborted;
+                    // Keep-alive cut in (no StepIndex, an Aborted outcome): say so, not a bare aborted.
+                    if (failure.Code == Reasons.KeepAlivePreempted)
+                    {
+                        reason = Reasons.KeepAlivePreempted;
+                        actor = Actors.KeepAlive;
+                        advice = Reasons.KeepAlivePreemptedAdvice;
+                    }
                     detail = failure.Reason;
                     stepIndex = failure.StepIndex + 1; // 1-based on the wire, same as "step N" in the detail
                     // A failed check ends a repeat: retrying it forever helps nobody. Only step
@@ -295,7 +345,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             if (playbackCts.IsCancellationRequested) state = PlaybackState.Stopped;
         }
         catch (OperationCanceledException) { state = PlaybackState.Stopped; }
-        catch (Exception ex) { state = PlaybackState.Failed; reason = "error"; detail = ex.Message; }
+        catch (Exception ex) { state = PlaybackState.Failed; reason = Reasons.Error; detail = ex.Message; }
         finally
         {
             // A finished ClearAt names the points that showed no outline, so Ur OCR stops
@@ -306,7 +356,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                             && last?.PerAlt is { Count: > 0 } played
                 ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
                 : null;
-            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline);
+            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline, actor, advice);
             // Same state string GetPlayback returns, and before the removal below, so anything
             // waiting for the playback to leave the active set finds the line already written.
             _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));

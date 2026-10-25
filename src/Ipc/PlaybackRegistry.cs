@@ -10,7 +10,7 @@ internal sealed class PlaybackRegistry
 {
     public static readonly TimeSpan Retention = TimeSpan.FromMinutes(10);
 
-    private sealed record Entry(PlaybackState State, string? Reason, string? Detail, int? StepIndex, DateTimeOffset? EndedAt, int[]? NoOutline = null);
+    private sealed record Entry(PlaybackState State, string? Reason, string? Detail, int? StepIndex, DateTimeOffset? EndedAt, int[]? NoOutline = null, string? Actor = null, string? Advice = null);
 
     private readonly Func<DateTimeOffset> _now;
     private readonly ConcurrentDictionary<string, Entry> _entries = new();
@@ -25,17 +25,18 @@ internal sealed class PlaybackRegistry
     }
 
     /// <param name="noOutline">A finished ClearAt's no-outline points (GetPlaybackResponse.NoOutline); null otherwise.</param>
-    public void Finished(string id, PlaybackState state, string? reason, string? detail, int? stepIndex, int[]? noOutline = null)
-        => _entries[id] = new Entry(state, reason, detail, stepIndex, _now(), noOutline);
+    public void Finished(string id, PlaybackState state, string? reason, string? detail, int? stepIndex, int[]? noOutline = null,
+        string? actor = null, string? advice = null)
+        => _entries[id] = new Entry(state, reason, detail, stepIndex, _now(), noOutline, actor, advice);
 
     public GetPlaybackResponse Get(string? id)
     {
         Prune();
         if (string.IsNullOrWhiteSpace(id))
-            return GetPlaybackResponse.Refused("refused", "Name the playback id that RunMacro returned.");
+            return GetPlaybackResponse.Refused(Reasons.Refused, "Name the playback id that RunMacro returned.");
         if (!_entries.TryGetValue(id, out var e))
-            return GetPlaybackResponse.Refused("unknown-playback", $"No playback with id '{id}'. Finished playbacks are kept for 10 minutes.");
-        return new GetPlaybackResponse(true, e.State.ToString().ToLowerInvariant(), e.Reason, e.Detail, e.StepIndex, e.NoOutline);
+            return GetPlaybackResponse.Refused(Reasons.UnknownPlayback, $"No playback with id '{id}'. Finished playbacks are kept for 10 minutes.");
+        return new GetPlaybackResponse(true, e.State.ToString().ToLowerInvariant(), e.Reason, e.Detail, e.StepIndex, e.NoOutline, e.Actor, e.Advice);
     }
 
     private void Prune()

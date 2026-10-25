@@ -750,7 +750,7 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
     /// (<see cref="ForegroundGate"/>). No StepIndex: it is no check failure.</summary>
     public static PlaybackResult KeepAlivePreempted() => new(PlaybackOutcome.Aborted,
         "Stopped for keep-alive: a step ran longer than the keep-alive runway allows. Give long holds a max so keep-alive can take its turn.")
-    { Code = "keep-alive-preempted" };
+    { Code = Ipc.Reasons.KeepAlivePreempted };
 
     /// <summary>
     /// A Completed run that pressed nothing because reach checks skipped: at least one step was

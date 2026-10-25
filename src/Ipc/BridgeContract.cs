@@ -18,10 +18,13 @@ public sealed record RunMacroResponse(
     string? PlaybackId,
     bool Queued,
     string? Reason,
-    string? Detail)
+    string? Detail,
+    string? Actor = null,
+    string? Advice = null)
 {
     public static RunMacroResponse Accepted(string playbackId) => new(true, playbackId, false, null, null); // Queued=false: contract refuses-when-busy, no server-side queue path
-    public static RunMacroResponse Refused(string reason, string? detail = null) => new(false, null, false, reason, detail);
+    public static RunMacroResponse Refused(string reason, string? detail = null, string? actor = null, string? advice = null)
+        => new(false, null, false, reason, detail, actor, advice);
 }
 
 /// <summary>Minimal shape for peeking method + version before typed deserialization.</summary>
@@ -75,9 +78,12 @@ public sealed record GetPlaybackResponse(
     string? Reason,
     string? Detail,
     int? StepIndex,
-    int[]? NoOutline = null)
+    int[]? NoOutline = null,
+    string? Actor = null,
+    string? Advice = null)
 {
-    public static GetPlaybackResponse Refused(string reason, string? detail = null) => new(false, null, reason, detail, null);
+    public static GetPlaybackResponse Refused(string reason, string? detail = null, string? actor = null)
+        => new(false, null, reason, detail, null, Actor: actor);
 }
 
 /// <summary>The client size a ClearAt's points and outline box were measured in.</summary>

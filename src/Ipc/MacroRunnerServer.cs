@@ -89,7 +89,7 @@ internal sealed class MacroRunnerServer
         }
         catch (JsonException)
         {
-            outBytes = Bytes(RunMacroResponse.Refused("refused", "Malformed request JSON."));
+            outBytes = Bytes(RunMacroResponse.Refused(Reasons.Refused, "Malformed request JSON."));
         }
 
         await FrameCodec.WriteFrameAsync(stream, outBytes, ct).ConfigureAwait(false);
@@ -98,9 +98,9 @@ internal sealed class MacroRunnerServer
     private async Task<byte[]> DispatchAsync(RequestEnvelope? env, byte[] frame, CancellationToken ct)
     {
         if (env is null)
-            return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+            return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Empty request."));
         if (!BridgeContract.IsSupportedVersion(env.ContractVersion))
-            return Bytes(RunMacroResponse.Refused("version-mismatch", $"Unsupported contractVersion '{env.ContractVersion}'."));
+            return Bytes(RunMacroResponse.Refused(Reasons.VersionMismatch, $"Unsupported contractVersion '{env.ContractVersion}'."));
 
         switch (env.Method)
         {
@@ -108,9 +108,9 @@ internal sealed class MacroRunnerServer
             {
                 var req = JsonSerializer.Deserialize<RunMacroRequest>(frame, BridgeContract.Json);
                 if (req is null)
-                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Empty request."));
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
-                    return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(await _invoker.RunAsync(req, ct).ConfigureAwait(false));
             }
             case BridgeContract.MethodListMacros:
@@ -119,40 +119,40 @@ internal sealed class MacroRunnerServer
             {
                 var req = JsonSerializer.Deserialize<StopMacroRequest>(frame, BridgeContract.Json);
                 if (req is null)
-                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Empty request."));
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
-                    return Bytes(StopMacroResponse.Refused("refused", "Missing callerPluginId."));
+                    return Bytes(StopMacroResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(_invoker.StopMacro(req));
             }
             case BridgeContract.MethodGetPlayback:
             {
                 var req = JsonSerializer.Deserialize<GetPlaybackRequest>(frame, BridgeContract.Json);
                 if (req is null)
-                    return Bytes(GetPlaybackResponse.Refused("refused", "Empty request."));
+                    return Bytes(GetPlaybackResponse.Refused(Reasons.Refused, "Empty request."));
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
-                    return Bytes(GetPlaybackResponse.Refused("refused", "Missing callerPluginId."));
+                    return Bytes(GetPlaybackResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(_invoker.GetPlayback(req));
             }
             case BridgeContract.MethodClearAt:
             {
                 var req = JsonSerializer.Deserialize<ClearAtRequest>(frame, BridgeContract.Json);
                 if (req is null)
-                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Empty request."));
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
-                    return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(await _invoker.ClearAtAsync(req, ct).ConfigureAwait(false));
             }
             case BridgeContract.MethodSweepPath:
             {
                 var req = JsonSerializer.Deserialize<SweepPathRequest>(frame, BridgeContract.Json);
                 if (req is null)
-                    return Bytes(RunMacroResponse.Refused("refused", "Empty request."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Empty request."));
                 if (string.IsNullOrWhiteSpace(req.CallerPluginId))
-                    return Bytes(RunMacroResponse.Refused("refused", "Missing callerPluginId."));
+                    return Bytes(RunMacroResponse.Refused(Reasons.Refused, "Missing callerPluginId."));
                 return Bytes(await _invoker.SweepPathAsync(req, ct).ConfigureAwait(false));
             }
             default:
-                return Bytes(RunMacroResponse.Refused("refused", $"Unknown method '{env.Method}'."));
+                return Bytes(RunMacroResponse.Refused(Reasons.Refused, $"Unknown method '{env.Method}'."));
         }
     }
 

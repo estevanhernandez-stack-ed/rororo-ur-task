@@ -426,6 +426,22 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     // ---------- Recipes (Task 7: wire RecipeRunner to the real runners) ----------
 
+    private readonly HashSet<string> _loggedLoadFailures = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The readable macros; each file that failed to load is logged once per plugin
+    /// lifetime (#39), so a recipe lookup does not drop it silently or repeat it on every call.</summary>
+    private IReadOnlyList<Macro> LoadMacrosLoggingFailuresOnce()
+    {
+        var loaded = Store.LoadAll();
+        foreach (var f in loaded.Failures)
+        {
+            bool first;
+            lock (_loggedLoadFailures) first = _loggedLoadFailures.Add(f.Path);
+            if (first) Log($"  ! load failed: {Path.GetFileName(f.Path)} — {f.Reason}");
+        }
+        return loaded.Macros;
+    }
+
     /// <summary>
     /// Compose a <see cref="RecipeRunner"/> over the live <see cref="SequencePlayer"/>
     /// (RunOnce position steps) and <see cref="AssignmentRunner"/> (terminal Loop/
@@ -468,7 +484,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // position step plus once for a Loop terminal, and re-reading + re-deserializing
         // every macro file on each call turns an N-step recipe into N+1 full library
         // reloads. Snapshot into a dictionary instead.
-        var macros = Store.LoadAll().Macros.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        var macros = LoadMacrosLoggingFailuresOnce().ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
@@ -549,7 +565,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         try
         {
-            var library = Store.LoadAll().Macros;
+            var library = LoadMacrosLoggingFailuresOnce();
             var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
             var editor = new UI.RecipeEditorWindow(library, alts, this) { Owner = owner };
             editor.Saved += (_, _) =>
@@ -654,7 +670,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
             foreach (var f in loaded.Failures)
+            {
+                lock (_loggedLoadFailures) _loggedLoadFailures.Add(f.Path); // the recipe lookups need not repeat it
                 Log($"  ! load failed: {Path.GetFileName(f.Path)} — {f.Reason}");
+            }
             if (loaded.Macros.Count > 0)
             {
                 _lastMacro = loaded.Macros[^1];
