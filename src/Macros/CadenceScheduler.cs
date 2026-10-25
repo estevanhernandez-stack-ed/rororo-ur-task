@@ -55,7 +55,7 @@ internal abstract record CadenceDecision
 /// the loop SLEEP the rest of the time instead of stealing focus every 1.25s.
 ///
 /// The safety margin against Roblox's 20-minute idle floor does NOT live here — it's
-/// baked into the fire intervals in <see cref="KeepAliveIntervals"/> (11/17/12 minutes).
+/// baked into the fire intervals in <see cref="KeepAliveLimits"/> (deadlines of 14/9/12 minutes).
 /// This scheduler just reacts to whatever <c>DueAtMs</c> it's handed. A maintainer
 /// tightening those intervals toward 20 minutes erodes the gap-fit boundary this class
 /// depends on — backstop games (17-minute interval) only have ~3 minutes of headroom

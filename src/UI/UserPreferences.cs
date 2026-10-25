@@ -37,7 +37,7 @@ internal sealed class UserPreferences
 
     /// <summary>
     /// Per-game keep-alive fire interval overrides, in MINUTES, keyed by Roblox
-    /// PlaceId. Beats the shipped table in <see cref="Macros.KeepAliveIntervals"/>.
+    /// PlaceId. Beats the shipped table in <see cref="Macros.KeepAliveLimits"/>.
     /// Empty by default — populated only by the user or from observed presence data,
     /// never by guessing PlaceIds.
     ///

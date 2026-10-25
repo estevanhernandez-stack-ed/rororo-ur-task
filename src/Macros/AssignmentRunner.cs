@@ -66,8 +66,8 @@ internal sealed record CadenceDeps(
                 CaptureForeground: Win32Focus.CaptureForeground,
                 RestoreForeground: h => Win32Focus.RestoreForeground(h),
                 SendKeepAlive: () => AssignmentRunner.SendSpaceKeepAlive(),
-                KeepAliveIntervalMs: alt => (long)KeepAliveIntervals
-                    .For(alt.PlaceId, alt.PlaceName, prefsLazy.Value).TotalMilliseconds)
+                KeepAliveIntervalMs: alt => (long)KeepAliveLimits
+                    .For(alt.PlaceId, alt.PlaceName, prefsLazy.Value).Deadline.TotalMilliseconds)
             {
                 SweepCountdown = (secondsLeft, windowCount) =>
                 {
@@ -150,7 +150,7 @@ internal sealed class AssignmentRunner
             // CadenceDeps ctor directly instead.
             CaptureForeground = () => IntPtr.Zero,
             RestoreForeground = _ => { },
-            KeepAliveIntervalMs = _ => (long)TimeSpan.FromMinutes(KeepAliveIntervals.UnknownGameMinutes).TotalMilliseconds,
+            KeepAliveIntervalMs = _ => (long)KeepAliveLimits.For(null, null, new UI.UserPreferences()).Deadline.TotalMilliseconds,
             // Left alone this also inherits the REAL SendKeepAlive (a genuine
             // SendInput Space keystroke into the developer's desktop) — the same
             // side-effect class this whole seam exists to keep out of the unit
@@ -272,7 +272,7 @@ internal sealed class AssignmentRunner
             // cries wolf even though the realized ~16-min gap is comfortably safe; a
             // 25-min per-game override with zero Active alts reads as "not shorter than
             // 0" and silently misses a kick that is guaranteed to happen.
-            var warnThresholdMs = (long)TimeSpan.FromMinutes(KeepAliveIntervals.WarnThresholdMinutes).TotalMilliseconds;
+            var warnThresholdMs = (long)TimeSpan.FromMinutes((KeepAliveLimits.PlatformIdleKickFloorMinutes - 2)).TotalMilliseconds;
 
             // IMPORTANT 1 fix: fired once up front from the STATIC estimate here, and
             // re-fired (see CheckUnschedulableWarnings, called after every Active pass
@@ -308,7 +308,7 @@ internal sealed class AssignmentRunner
                     EmitProgress(new AssignmentProgress(
                         0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
                         $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
-                        $"~{gapMins:F0} min, at or near Roblox's {KeepAliveIntervals.PlatformIdleKickFloorMinutes}-minute " +
+                        $"~{gapMins:F0} min, at or near Roblox's {KeepAliveLimits.PlatformIdleKickFloorMinutes}-minute " +
                         $"idle floor (games may shorten this, none may extend it). " +
                         $"Shorten the macro, split it, or set this alt to Active."));
                 }

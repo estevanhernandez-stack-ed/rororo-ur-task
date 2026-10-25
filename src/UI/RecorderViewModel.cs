@@ -1211,7 +1211,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     /// tracks reality rather than just decaying blindly from the moment of toggle.</summary>
     private void SeedKeepAliveDue(AssignmentRow row)
     {
-        var intervalMs = (long)KeepAliveIntervals.For(row.Alt.PlaceId, row.Alt.PlaceName, _prefs).TotalMilliseconds;
+        var intervalMs = (long)KeepAliveLimits.For(row.Alt.PlaceId, row.Alt.PlaceName, _prefs).Deadline.TotalMilliseconds;
         _keepAliveDueAtMs[row] = Environment.TickCount64 + intervalMs;
         row.SetNextDue(TimeSpan.FromMilliseconds(intervalMs));
     }
