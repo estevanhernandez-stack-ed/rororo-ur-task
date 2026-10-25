@@ -11,12 +11,12 @@ namespace Labs626.UrTask.Macros;
 /// into the developer's desktop or reads the user's prefs file.
 /// </summary>
 internal sealed record CadenceDeps(
-    Func<int, (bool ok, string? error)> Focus,
+    Func<int, FocusAttempt> Focus,
     Func<long> ClockMs,
     Func<long, CancellationToken, Task> Sleep,   // arg is a DURATION in ms, not a wake time
     Func<IntPtr> CaptureForeground,
     Action<IntPtr> RestoreForeground,
-    Action SendKeepAlive,
+    Func<bool> SendKeepAlive,
     Func<AccountRegistry.AccountInfo, long> KeepAliveIntervalMs)
 {
     /// <summary>
@@ -32,6 +32,9 @@ internal sealed record CadenceDeps(
     /// <summary>One line per alt a turbo sweep reaches (sent, or skipped and why) and one when it
     /// ends, so a live check can read every window's Space off ur-task.log. No-op by default.</summary>
     public Action<string> SweepLog { get; init; } = _ => { };
+
+    /// <summary>Who is in front right now, short, for the line that says why a keep-alive missed.</summary>
+    public Func<string> DescribeForeground { get; init; } = () => "unknown";
 
     /// <summary>Held from the end of the countdown until the foreground is back: while it is held,
     /// the user's own key and click presses are dropped instead of landing in whichever account's
@@ -77,6 +80,7 @@ internal sealed record CadenceDeps(
                     UI.TurboSweepToast.Update(secondsLeft, windowCount);
                 },
                 SweepLog = Diagnostics.DiagLog.Write,
+                DescribeForeground = Win32Focus.DescribeForegroundShort,
                 GuardUserInput = Hotkeys.SweepInputGuard.Begin,
             };
         }
@@ -139,7 +143,7 @@ internal sealed class AssignmentRunner
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus)
         : this(player, foreground, CadenceDeps.Real with
         {
-            Focus = focus,
+            Focus = pid => focus(pid),
             // This compat ctor exists for call sites/tests that only want to fake
             // Focus. Left alone it silently inherits the REST of CadenceDeps.Real too
             // — a real Win32Focus.CaptureForeground/RestoreForeground pair (which
@@ -158,7 +162,7 @@ internal sealed class AssignmentRunner
             // keystroke itself (KeepAliveInputStructSize_MatchesCanonicalWin32InputSize
             // tests SendSpaceKeepAlive's cbSize directly, without going through a
             // runner instance at all).
-            SendKeepAlive = () => { },
+            SendKeepAlive = () => true,
         }) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps)
@@ -544,7 +548,7 @@ internal sealed class AssignmentRunner
         var focusSucceeded = false;                 // gates the restore below — see finally
         try
         {
-            if (!_deps.Focus(asn.Alt.Pid).ok)
+            if (!_deps.Focus(asn.Alt.Pid).Ok)
             {
                 // Bounded retry — do NOT hammer a window that won't focus. After three
                 // straight misses the window is almost certainly gone (alt closed/crashed),
@@ -574,7 +578,14 @@ internal sealed class AssignmentRunner
             }
 
             EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
-            _deps.SendKeepAlive();
+            if (!_deps.SendKeepAlive())
+            {
+                // Windows rejected the input: nothing landed, so this is a miss like a failed verify.
+                alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                alt.ConsecutiveFocusFailures++;
+                EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                return;   // finally still restores: the focus was taken
+            }
             alt.ConsecutiveFocusFailures = 0;                  // a GENUINELY successful service clears the streak
             alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;    // settle back into the normal interval
             try { await _deps.Sleep(KeepAliveDelayMs, ct).ConfigureAwait(false); }
@@ -663,7 +674,7 @@ internal sealed class AssignmentRunner
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
                 var focusAt = _deps.ClockMs();
-                if (!_deps.Focus(asn.Alt.Pid).ok)
+                if (!_deps.Focus(asn.Alt.Pid).Ok)
                 {
                     alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
                     alt.ConsecutiveFocusFailures++;
@@ -703,7 +714,14 @@ internal sealed class AssignmentRunner
                 if (ct.IsCancellationRequested) return;   // last check before input
 
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Playing));
-                _deps.SendKeepAlive();
+                if (!_deps.SendKeepAlive())
+                {
+                    alt.DueAtMs = _deps.ClockMs() + FocusRetryBackoffMs;
+                    alt.ConsecutiveFocusFailures++;
+                    EmitFocusFailureWarning(alt, cycle, index, total, asn);
+                    _deps.SweepLog($"turbo keep-alive: skipped {name}, Windows rejected the input; retry in {FocusRetryBackoffMs / 1000}s");
+                    continue;
+                }
                 alt.ConsecutiveFocusFailures = 0;
                 alt.DueAtMs = _deps.ClockMs() + alt.IntervalMs;
                 sent++;
@@ -815,7 +833,7 @@ internal sealed class AssignmentRunner
         {
             // Phase: Focusing
             EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
-            if (!_deps.Focus(asn.Alt.Pid).ok)
+            if (!_deps.Focus(asn.Alt.Pid).Ok)
             {
                 // Bounded retry — same shape as ServiceKeepAliveAsync's focus-fail
                 // exit: count it against the shared streak and reuse the same

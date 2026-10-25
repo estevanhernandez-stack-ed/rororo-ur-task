@@ -14,6 +14,14 @@ internal enum InputSource { KeepAlive, Macro, Paste, Host }
 /// <summary>Why a keep-alive attempt did not land.</summary>
 internal enum MissCause { WindowGone, FocusRefused, OtherInFront, SendRejected, HeldOff }
 
+/// <summary>The outcome of trying to bring an account's window to the front. Cause is set exactly when
+/// Ok is false. The tuple conversion keeps the old (ok, error) rigs compiling: false means FocusRefused.</summary>
+internal sealed record FocusAttempt(bool Ok, MissCause? Cause, string? Detail)
+{
+    public static implicit operator FocusAttempt((bool ok, string? error) t)
+        => t.ok ? new FocusAttempt(true, null, t.error) : new FocusAttempt(false, MissCause.FocusRefused, t.error);
+}
+
 /// <summary>A failed attempt. Holder is "'&lt;title&gt;' (&lt;process&gt;)" or the hold reason.</summary>
 internal sealed record Miss(MissCause Cause, string? Holder);
 

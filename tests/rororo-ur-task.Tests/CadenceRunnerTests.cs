@@ -98,7 +98,8 @@ public class CadenceRunnerTests
     /// regression that busy-spins fails the test instead of hanging it.
     private static Rig Build(
         IReadOnlyList<Assignment> assignments, long runForMs, long keepAliveIntervalMs = TwelveMin,
-        Func<int, (bool ok, string? error)>? focusOverride = null)
+        Func<int, (bool ok, string? error)>? focusOverride = null,
+        Func<bool>? sendOverride = null)
     {
         var clock = new FakeClock();
         var fg = new FakeForeground();
@@ -138,7 +139,7 @@ public class CadenceRunnerTests
             },
             CaptureForeground: () => new IntPtr(0xBEEF),     // sentinel: "the user's window"
             RestoreForeground: h => restored.Add(h),
-            SendKeepAlive: () => { taps.Add(currentPid); tapTimes.Add(clock.NowMs); },  // counted, never injected
+            SendKeepAlive: () => { taps.Add(currentPid); tapTimes.Add(clock.NowMs); return sendOverride?.Invoke() ?? true; },  // counted, never injected
             KeepAliveIntervalMs: _ => keepAliveIntervalMs);
 
         return new Rig(
@@ -194,6 +195,24 @@ public class CadenceRunnerTests
         Assert.InRange(rig.Taps.Count, 4, 6);     // behaves exactly like a plain KeepAlive alt
         Assert.True(rig.Focused.Count < 20,
             $"macro-less 'Active' alt was focused {rig.Focused.Count}x in a simulated hour — the hijack loop is back");
+    }
+
+    /// A Space that Windows rejects is a miss, not a success: no stamp, the streak grows, and the
+    /// alt is retried after the 30 s backoff instead of settling back to its normal interval.
+    [Fact]
+    public async Task RejectedSpace_IsAMiss_RetriedAfterTheFocusBackoff()
+    {
+        var alt = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
+        var rig = Build(new[] { alt }, runForMs: 5 * Min, sendOverride: () => false);
+        var warnings = new List<AssignmentProgress>();
+        rig.Runner.Progress += (_, p) => { if (p.Phase == AssignmentPhase.Warning) warnings.Add(p); };
+
+        await rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);
+
+        Assert.True(rig.Taps.Count >= 4, $"a rejected Space was treated as a success ({rig.Taps.Count} attempts in 5 min)");
+        var gaps = rig.TapTimes.Zip(rig.TapTimes.Skip(1), (a, b) => b - a).ToList();
+        Assert.All(gaps, g => Assert.InRange(g, 30_000, 33_000));
+        Assert.NotEmpty(warnings);   // the streak crossed 3, same warning idiom as a failed verify
     }
 
     /// Every foreground steal is paired with a restore, so a keep-alive is a ~1s blip
@@ -359,7 +378,7 @@ public class CadenceRunnerTests
             },
             CaptureForeground: () => new IntPtr(0xBEEF),
             RestoreForeground: _ => { },
-            SendKeepAlive: () => taps.Add(2),
+            SendKeepAlive: () => { taps.Add(2); return true; },
             KeepAliveIntervalMs: _ => TwelveMin);
 
         var runner = new AssignmentRunner(player, fg, deps);
@@ -437,7 +456,7 @@ public class CadenceRunnerTests
             },
             CaptureForeground: () => new IntPtr(0xBEEF),
             RestoreForeground: h => restored.Add(h),
-            SendKeepAlive: () => taps.Add(2),
+            SendKeepAlive: () => { taps.Add(2); return true; },
             KeepAliveIntervalMs: _ => TwelveMin);
 
         var runner = new AssignmentRunner(player, fg, deps);
@@ -493,7 +512,7 @@ public class CadenceRunnerTests
             },
             CaptureForeground: () => new IntPtr(0xBEEF),
             RestoreForeground: h => restored.Add(h),
-            SendKeepAlive: () => tapped = true,
+            SendKeepAlive: () => { tapped = true; return true; },
             KeepAliveIntervalMs: _ => TwelveMin);
 
         var runner = new AssignmentRunner(new FakePlayer(), fg, deps);

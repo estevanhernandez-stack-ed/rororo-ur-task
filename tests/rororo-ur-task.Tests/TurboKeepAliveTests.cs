@@ -76,7 +76,7 @@ public class TurboKeepAliveTests
     private static Rig Build(
         IReadOnlyList<Assignment> assignments, long runForMs, long? flipDelayMs = 0,
         Func<int, long>? intervalFor = null, bool turbo = true,
-        Action<Rig>? onTap = null)
+        Action<Rig>? onTap = null, bool sendOk = true)
     {
         var clock = new FakeClock();
         var fg = new DelayedForeground(clock);
@@ -113,6 +113,7 @@ public class TurboKeepAliveTests
                 rig.Events.Add($"tap {currentPid}");
                 rig.TapTimes.Add(clock.NowMs);
                 onTap?.Invoke(rig);
+                return sendOk;
             },
             KeepAliveIntervalMs: alt => intervalFor?.Invoke(alt.Pid) ?? TwelveMin)
         {
@@ -223,6 +224,19 @@ public class TurboKeepAliveTests
         Assert.Equal("turbo keep-alive: sweep done, 0 of 1 Space sent", skipped.Log[1]);
     }
 
+    /// Windows rejecting the input is a skip with its own reason, never counted in the tally.
+    [Fact]
+    public async Task Turbo_RejectedSpace_IsSkipped_NotCountedAsSent()
+    {
+        var a1 = new Assignment(Alt(1), null, CadenceRole.KeepAlive);
+        var rig = Build(new[] { a1 }, runForMs: 5 * Min, flipDelayMs: 45, sendOk: false);
+
+        await rig.Runner.RunAsync(new[] { a1 }, rig.Cts.Token);
+
+        Assert.Equal("turbo keep-alive: skipped alt1, Windows rejected the input; retry in 30s", rig.Log[0]);
+        Assert.Equal("turbo keep-alive: sweep done, 0 of 1 Space sent", rig.Log[1]);
+    }
+
     /// (c) The foreground never reads as the alt. The cap expires, NO Space is ever
     /// sent, and the alt backs off ~30s instead of spinning.
     [Fact]
@@ -297,7 +311,7 @@ public class TurboKeepAliveTests
             Sleep: clock.Sleep,
             CaptureForeground: () => UserWindow,
             RestoreForeground: restored.Add,
-            SendKeepAlive: () => taps++,
+            SendKeepAlive: () => { taps++; return true; },
             KeepAliveIntervalMs: _ => TwelveMin)
         {
             SweepCountdown = (s, n) => { countdown.Add(s); if (s == 2) cts2.Cancel(); },

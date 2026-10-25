@@ -159,5 +159,9 @@ internal sealed class SequencePlayer
     }
 
     // Delegates to Win32Focus so the AttachThreadInput P/Invokes live in one place.
-    private static (bool, string?) DefaultFocus(int pid) => Win32Focus.AttachAndFocus(pid);
+    private static (bool, string?) DefaultFocus(int pid)
+    {
+        var a = Win32Focus.AttachAndFocus(pid);
+        return (a.Ok, a.Detail);
+    }
 }
