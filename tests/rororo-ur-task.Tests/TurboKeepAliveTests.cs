@@ -66,6 +66,8 @@ public class TurboKeepAliveTests
         public List<(IntPtr h, long at)> Restored { get; } = new();
         public List<(int s, int n, long at)> Countdown { get; } = new();
         public List<string> Log { get; } = new();
+        // Every event in order: "guard on", "focus N", "tap N", "restore", "guard off".
+        public List<string> Events { get; } = new();
         public int Iterations;
     }
 
@@ -86,6 +88,7 @@ public class TurboKeepAliveTests
             Focus: pid =>
             {
                 rig.Focused.Add((pid, clock.NowMs));
+                rig.Events.Add($"focus {pid}");
                 currentPid = pid;
                 fg.Target = assignments.First(a => a.Alt.Pid == pid).Alt;
                 fg.LandsAtMs = flipDelayMs is null ? long.MaxValue : clock.NowMs + flipDelayMs.Value;
@@ -103,10 +106,11 @@ public class TurboKeepAliveTests
                 return t;
             },
             CaptureForeground: () => UserWindow,
-            RestoreForeground: h => rig.Restored.Add((h, clock.NowMs)),
+            RestoreForeground: h => { rig.Restored.Add((h, clock.NowMs)); rig.Events.Add("restore"); },
             SendKeepAlive: () =>
             {
                 rig.Taps.Add(currentPid);
+                rig.Events.Add($"tap {currentPid}");
                 rig.TapTimes.Add(clock.NowMs);
                 onTap?.Invoke(rig);
             },
@@ -114,6 +118,7 @@ public class TurboKeepAliveTests
         {
             SweepCountdown = (s, n) => rig.Countdown.Add((s, n, clock.NowMs)),
             SweepLog = line => rig.Log.Add(line),
+            GuardUserInput = () => { rig.Events.Add("guard on"); return new Guard(() => rig.Events.Add("guard off")); },
         };
 
         rig = new Rig
@@ -122,6 +127,26 @@ public class TurboKeepAliveTests
             Clock = clock, Cts = cts, Fg = fg,
         };
         return rig;
+    }
+
+    private sealed class Guard(Action off) : IDisposable
+    {
+        public void Dispose() => off();
+    }
+
+    /// The user's presses are dropped from the first focus until the foreground is back, and never
+    /// during the countdown, when the user is still meant to be typing in their own window.
+    [Fact]
+    public async Task Turbo_HoldsTheInputGuard_FromFirstFocusUntilAfterTheRestore()
+    {
+        var alts = new[] { 1, 2 }.Select(p => new Assignment(Alt(p), null, CadenceRole.KeepAlive)).ToArray();
+        var rig = Build(alts, runForMs: 1 * Min);
+
+        await rig.Runner.RunAsync(alts, rig.Cts.Token);
+
+        Assert.Equal(new[] { "guard on", "focus 1", "tap 1", "focus 2", "tap 2", "restore", "guard off" }, rig.Events.Take(7));
+        var countdownEnd = rig.Countdown.First(c => c.s == 0).at;
+        Assert.True(rig.Focused[0].at >= countdownEnd, "focused before the countdown ended");
     }
 
     private static int SweepsStarted(Rig rig)

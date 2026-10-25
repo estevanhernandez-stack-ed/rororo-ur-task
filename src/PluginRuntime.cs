@@ -205,6 +205,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _client.ThemeChanged += p => ThemeChanged?.Invoke(p);
 
         _hotkeys.HotkeyPressed += OnHotkey;
+        // A turbo sweep drops every key the user presses, the stop chords included; it hands those here.
+        Hotkeys.SweepInputGuard.ChordPressed += OnHotkey;
         _player.Started += (_, args) =>
         {
             _playerActive = true;

@@ -33,6 +33,17 @@ internal sealed record CadenceDeps(
     /// ends, so a live check can read every window's Space off ur-task.log. No-op by default.</summary>
     public Action<string> SweepLog { get; init; } = _ => { };
 
+    /// <summary>Held from the end of the countdown until the foreground is back: while it is held,
+    /// the user's own key and click presses are dropped instead of landing in whichever account's
+    /// window is in front (Hotkeys.SweepInputGuard). No-op by default.</summary>
+    public Func<IDisposable> GuardUserInput { get; init; } = () => NoGuard.Instance;
+
+    private sealed class NoGuard : IDisposable
+    {
+        public static readonly NoGuard Instance = new();
+        public void Dispose() { }
+    }
+
     public static CadenceDeps Real
     {
         get
@@ -66,6 +77,7 @@ internal sealed record CadenceDeps(
                     UI.TurboSweepToast.Update(secondsLeft, windowCount);
                 },
                 SweepLog = Diagnostics.DiagLog.Write,
+                GuardUserInput = Hotkeys.SweepInputGuard.Begin,
             };
         }
     }
@@ -632,6 +644,8 @@ internal sealed class AssignmentRunner
         }
         if (ct.IsCancellationRequested) return;
 
+        // Disposed after the finally below has restored the foreground.
+        using var guard = _deps.GuardUserInput();
         var prior = _deps.CaptureForeground();
         var anyFocusTaken = false;
         int sent = 0, reached = 0;

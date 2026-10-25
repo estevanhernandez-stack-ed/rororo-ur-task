@@ -19,7 +19,9 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   first and never takes focus; Ctrl+Shift+F12 stops the sweep. Each window gets its Space the
   moment it is confirmed in front (capped at 300ms), not after a fixed second, and your own
   window comes back once at the end. Off by default; with it off, keep-alive works exactly as
-  before.
+  before. While a sweep holds the screen (about a second), keys you type and clicks you make are
+  dropped rather than landing in an account's window, so a W, A, S or D typed mid-sweep can't walk
+  an account. Ctrl+Shift+F12, Esc and Ctrl+Shift+F11 still work during it.
 - **A paste step.** `{ "kind": "paste", "delayMs": 200, "text": "Huge" }` puts the text on the
   clipboard, presses Ctrl+V in the game window, and puts back what you had copied. Leave `text`
   out and it pastes whatever is on the clipboard already, for an agent that sets it first. It
