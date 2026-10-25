@@ -94,7 +94,7 @@ macros and agents it shares the foreground with.**
   | Game | Limit | Deadline | Today's fire interval |
   |---|---|---|---|
   | No anti-AFK of its own (Grow a Garden, Adopt Me, ...) | 20 | 14 | 11 |
-  | Has its own ~15 min anti-AFK reset (PS99, Fisch, ...) | 15, or the measured number | 9 | 17 (PS99 got 12 by the name bug) |
+  | Has its own ~15 min anti-AFK reset (PS99, Fisch, ...) | 15 (PS99 measured, below) | 9 | 17 (PS99 got 12 by the name bug) |
   | Unknown | 18 | 12 | 12 |
 
   Unknown keeps today's 12-minute behaviour. A measured number replaces a table entry.
@@ -201,9 +201,16 @@ note when the run is likely to cross an account's deadline, using the macro's es
 
 ### Measured limits
 
-- Before this ships, measure the idle limit in PS99 on an untouched account: time to the game's
-  own idle reset and, if it gets there, to Roblox's disconnect. The measurement started
-  2026-10-25 13:39 on Dunder-MiffLan; result goes in the smoke doc and the table.
+- **PS99, measured 2026-10-25 on Dunder-MiffLan**, one untouched account on a private server,
+  10-second captures: the game shows "We're restarting Pet Simulator 99! Please wait while we
+  redirect you..." and rejoins the account to a fresh server, back at spawn, in about 25 seconds.
+  Lap 1: 16 min 25 s after a verified Space. Lap 2: about 14 min 55 s after landing back in, with
+  no input. It repeats, so it is the game's anti-AFK, not a server restart, and Roblox's 20-minute
+  disconnect never comes into play. Limit 15 (the earliest seen), deadline 9.
+- Measure the other games in the table the same way when they are next played; until then their
+  row stands.
+- Gotcha from the same run: RoRoRo's idle clock credited a click on another window to the test
+  account (RoRoRo #221), off by about 85 s. Ur Task's own landed-input clock is the one to trust.
 - Fix game-name matching in `KeepAliveIntervals`: presence reports names with decoration (emoji,
   brackets, punctuation), so today PS99 never matches its entry and falls to the 12-minute default.
   Match on a normalized name that ignores decoration.
