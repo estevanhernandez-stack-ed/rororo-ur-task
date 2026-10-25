@@ -27,11 +27,12 @@ internal interface IStepIo
 /// instead of parking before every spot (StepRunner's BaselineFrame).</param>
 /// <param name="Guard">A ClearAt pass's guard pixel, sampled before every hold's first input and
 /// before every press; a changed colour stops the playback (StepRunner.CheckGuard). Null: none.</param>
+/// <param name="Clipboard">What a paste step reads and writes. Null: the real clipboard.</param>
 internal sealed record StepContext(
     string AccountName, long UserId, string MacroId,
     (int W, int H) RecordedClient, (int W, int H) ActualClient, int DisplayScale,
     Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false,
-    ScreenGuard? Guard = null);
+    ScreenGuard? Guard = null, IStepClipboard? Clipboard = null);
 
 /// <summary>
 /// Plays v4 steps. A point with its check on treats its delay as a ceiling: it presses as soon
@@ -160,6 +161,9 @@ internal static class StepRunner
                         break;
                     case WaitStep w:
                         await io.Delay(w.DelayMs, ct);
+                        break;
+                    case PasteStep p:
+                        await PlayPasteAsync(p, i, ctx, io, heldKeys, ct);
                         break;
                     case RawStep r:
                         await io.Delay(r.DelayMs, ct);
@@ -845,6 +849,51 @@ internal static class StepRunner
     /// <summary>SendInput goes to whatever window is in front, so every input event re-checks the
     /// target first, and a refused send stops the run. The finally block's releases bypass this on
     /// purpose: held keys and buttons must come up whatever is in front.</summary>
+    private const int VK_CONTROL = 0x11;
+    private const int VK_V = 0x56;
+
+    /// <summary>Ctrl+V, with the step's own text on the clipboard for it when it has one. The old
+    /// clipboard goes back in a finally, so an abort mid-paste still restores it. Keys go through
+    /// heldKeys like a key step's, so RunAsync's finally releases them if the paste is cut short.</summary>
+    private static async Task PlayPasteAsync(PasteStep p, int index, StepContext ctx, IStepIo io, HashSet<int> heldKeys, CancellationToken ct)
+    {
+        await io.Delay(p.DelayMs, ct);
+        var clipboard = ctx.Clipboard ?? StaStepClipboard.Instance;
+        ClipboardContents? before = null;
+        if (p.Text is not null)
+        {
+            before = clipboard.Read();
+            if (!clipboard.SetText(p.Text))
+                throw new StopException($"Could not put the paste text on the clipboard at step {index + 1} (another app may be holding it).", index);
+        }
+        try
+        {
+            SendKey(VK_CONTROL, down: true);
+            await io.Delay(StepTiming.PasteKeyGapMs, ct);
+            SendKey(VK_V, down: true);
+            await io.Delay(StepTiming.PasteKeyHoldMs, ct);
+            SendKey(VK_V, down: false);
+            SendKey(VK_CONTROL, down: false);
+            if (before is not null) await io.Delay(StepTiming.PasteRestoreAfterMs, ct);
+        }
+        finally
+        {
+            if (before is { } was)
+            {
+                if (was.HasOther)
+                    ctx.Log($"Paste at step {index + 1}: the clipboard held something other than text, so the pasted text stays on it.");
+                else if (!(was.Text is null ? clipboard.Clear() : clipboard.SetText(was.Text)))
+                    ctx.Log($"Paste at step {index + 1}: could not put the clipboard back; it still holds the pasted text.");
+            }
+        }
+
+        void SendKey(int vk, bool down)
+        {
+            SendGuarded(io, new MacroEvent(0, down ? MacroEventKind.KeyDown : MacroEventKind.KeyUp, vk, 0, 0, 0, 0));
+            if (down) heldKeys.Add(vk); else heldKeys.Remove(vk);
+        }
+    }
+
     private static void SendGuarded(IStepIo io, MacroEvent e)
     {
         GuardForeground(io);

@@ -11,6 +11,7 @@ namespace Labs626.UrTask.Macros.Steps;
 [JsonDerivedType(typeof(WheelStep), "wheel")]
 [JsonDerivedType(typeof(PointerMoveStep), "pointerMove")]
 [JsonDerivedType(typeof(WaitStep), "wait")]
+[JsonDerivedType(typeof(PasteStep), "paste")]
 [JsonDerivedType(typeof(FirstMatchStep), "firstMatch")]
 [JsonDerivedType(typeof(HoldStep), "hold")]
 [JsonDerivedType(typeof(RawStep), "raw")]
@@ -63,6 +64,13 @@ public sealed record WheelStep(int DelayMs, int X, int Y, int Delta) : MacroStep
 public sealed record PointerMoveStep(int DelayMs, int Dx, int Dy, int DurationMs) : MacroStep(DelayMs);
 
 public sealed record WaitStep(int DelayMs) : MacroStep(DelayMs);
+
+/// <summary>Ctrl+V into the target, for search boxes and price fields: one step instead of four
+/// hand-timed key steps. With <see cref="Text"/>, the step puts it on the clipboard first and puts
+/// back what was there after (text only: something else, such as an image, is left replaced and the
+/// log says so). With no Text, it pastes whatever is on the clipboard already, which is how an agent
+/// that sets the clipboard itself drives it.</summary>
+public sealed record PasteStep(int DelayMs, string? Text = null) : MacroStep(DelayMs);
 
 /// <summary>Stored as the spec spells it ("skip", "stopAndReport"). The store's global
 /// JsonStringEnumConverter honours these member names.</summary>
@@ -129,6 +137,16 @@ public static class StepTiming
     /// 15 s. Above the default's 1.2 s so a 400 ms sweep samples exactly as before.</summary>
     public const int SweepGuardMaxGapMs = 1500;
 
+    /// <summary>A paste's Ctrl goes down, then V this long after, held this long: the 40 ms and
+    /// 30 ms the hand-written paste macros were tuned to.</summary>
+    public const int PasteKeyGapMs = 40;
+    public const int PasteKeyHoldMs = 30;
+
+    /// <summary>How long after Ctrl+V a paste with its own text waits before putting the old
+    /// clipboard back. The game reads the clipboard on a later frame; restoring sooner pastes the
+    /// old contents.</summary>
+    public const int PasteRestoreAfterMs = 250;
+
     /// <summary>Rough playing time of a step, for Macro.Duration and UI only.</summary>
     public static long EstimateMs(MacroStep s) => s.DelayMs + s switch
     {
@@ -141,6 +159,7 @@ public static class StepTiming
         WheelStep => JumpWiggleMs,
         PointerMoveStep p => p.DurationMs,
         RawStep r => r.Events.Count == 0 ? 0 : r.Events[^1].TimestampMs,
+        PasteStep p => PasteKeyGapMs + PasteKeyHoldMs + (p.Text is null ? 0 : PasteRestoreAfterMs),
         _ => 0,
     };
 }
@@ -199,6 +218,10 @@ public static class StepValidator
                     if (ReachProblem(h.Reach, name) is { } rerr) return rerr;
                     break;
                 }
+                case PasteStep p:
+                    if (p.Text is { Length: 0 })
+                        return $"Step {n} is a paste with empty text; leave text out to paste what is on the clipboard.";
+                    break;
                 case SweepStep s:
                 {
                     if (s.Path is null || s.Path.Count < 2) return $"Step {n} is a sweep with fewer than 2 points.";

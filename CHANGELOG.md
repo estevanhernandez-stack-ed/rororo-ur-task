@@ -20,6 +20,12 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   moment it is confirmed in front (capped at 300ms), not after a fixed second, and your own
   window comes back once at the end. Off by default; with it off, keep-alive works exactly as
   before.
+- **A paste step.** `{ "kind": "paste", "delayMs": 200, "text": "Huge" }` puts the text on the
+  clipboard, presses Ctrl+V in the game window, and puts back what you had copied. Leave `text`
+  out and it pastes whatever is on the clipboard already, for an agent that sets it first. It
+  replaces the four hand-timed Ctrl and V key steps search-box macros used. Text only goes back:
+  if you had an image copied, the log says it was replaced. AutoHotkey export writes the same
+  paste. Macros with a paste step don't load on Ur Task 0.12.0 or older.
 
 ### Fixed
 
