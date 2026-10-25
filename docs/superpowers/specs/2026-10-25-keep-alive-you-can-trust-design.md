@@ -105,8 +105,19 @@ macros and agents it shares the foreground with.**
   are its retry runway.
 - **Keep-alive does nothing for an account whose clock keeps getting reset.** No more grabbing
   on a fixed interval regardless of what else is happening.
-- When a loop starts, accounts with no ledger history start due at the deadline from now, spread
-  so they do not all come due in the same second (today every account starts due at once).
+- **Last input is the later of two clocks:** input Ur Task landed itself, and input RoRoRo saw on
+  that account (`GetAccountActivity`, contract 0.3.0, already in the package Ur Task builds on and
+  never called today). An account the user plays by hand is left alone until it really goes idle.
+  Ur Task calls `MarkAccountActive` (contract 0.5.0) after every Space it lands, so both clocks
+  agree. RoRoRo's clock can credit the wrong account (RoRoRo #221; 85 s off in the 2026-10-25
+  measurement), always in the "active" direction; the 6-minute margin absorbs a skew that size.
+- **Starting the loop does not reset anyone.** Each account is due at its real last input plus its
+  deadline, read from the two clocks above, not at "now". Only accounts already near their
+  deadline get the first sweep. Today every account starts due at once, and the UI's "next: 11m"
+  counts from Ur Task's start, so after a restart it shows times later than the real reset (seen
+  live 2026-10-25: alts Spaced at 14:31, Ur Task restarted at 14:36, UI said next in 11 min, PS99
+  would reset at about 14:46). The "next" shown is the ledger's deadline, never a separate timer.
+- An account with no history on either clock is due now, spread a few seconds apart.
 - If an account's idle clock passes its deadline with no landed input and the next retry is not
   going to land before the limit, say so: "<account> has had no input for 14 min; expect a reset or
   kick around HH:MM." That is the line the silent afternoons were missing.
@@ -247,4 +258,6 @@ spread start is computed; how GetStatus is split between the server and a status
 - One break serves every account due within two minutes.
 - Agent pause leases and the "no input" hold cut from 0.13.
 - Accounts launched mid-loop join it.
+- Host-seen activity counts toward the idle clock (Este, 2026-10-25: "that should change the time
+  of the next keep awake"); the #221 skew is accepted inside the 6-minute margin.
 - `off` is readable but not settable by agents.
