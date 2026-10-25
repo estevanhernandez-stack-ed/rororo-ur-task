@@ -33,11 +33,14 @@ internal sealed class MacroPlayer : IMacroPlayer
     private readonly IScreenSampler _sampler;
     private readonly IDisplayScale _displayScale;
     private readonly PointAdjustmentStore _adjustments;
+    private readonly KeepAliveLedger? _ledger;
     private CancellationTokenSource? _activeCts;
 
     public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics,
-        IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null)
+        IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null,
+        KeepAliveLedger? ledger = null)
     {
+        _ledger = ledger;
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
         _sampler = sampler ?? new ScreenSampler(metrics);
@@ -141,7 +144,8 @@ internal sealed class MacroPlayer : IMacroPlayer
                     var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
                     toSend = evt with { X = sx, Y = sy };
                 }
-                SendMacroEvent(toSend);
+                var landed = SendMacroEvent(toSend);
+                if (landed && toSend.Kind == MacroEventKind.KeyDown) _ledger?.StampLanded(targetUserId, InputSource.Macro);
                 TrackHeldState(toSend, heldKeys, heldButtons);
             }
             return result = PlaybackResult.Completed();
@@ -348,7 +352,8 @@ internal sealed class MacroPlayer : IMacroPlayer
             var ctx = new StepContext(preflight.DisplayName, targetUserId, macro.Id, (rw, rh), actual, scale,
                 pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
                 line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"),
-                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard);
+                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard,
+                OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src));
             var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }

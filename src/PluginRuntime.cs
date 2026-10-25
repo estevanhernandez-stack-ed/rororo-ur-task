@@ -123,10 +123,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
-        _player = new MacroPlayer(_foreground, _metrics);
-        _sequence = new SequencePlayer(_player, _foreground);
         // One ledger for the plugin's lifetime: it outlives every stop/start of the keep-alive loop.
         Ledger = new KeepAliveLedger(() => Environment.TickCount64, () => DateTimeOffset.Now);
+        _player = new MacroPlayer(_foreground, _metrics, ledger: Ledger);
+        _sequence = new SequencePlayer(_player, _foreground);
         _client = new PluginClient(PluginId, Accounts);
         _hostActivity = new PluginHost.HostActivity(_client, Log);
         var hostActivity = _hostActivity;

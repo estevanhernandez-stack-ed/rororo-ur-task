@@ -28,11 +28,13 @@ internal interface IStepIo
 /// <param name="Guard">A ClearAt pass's guard pixel, sampled before every hold's first input and
 /// before every press; a changed colour stops the playback (StepRunner.CheckGuard). Null: none.</param>
 /// <param name="Clipboard">What a paste step reads and writes. Null: the real clipboard.</param>
+/// <param name="OnKeyLanded">Called after a key-down was sent (a paste calls it once, as Paste). Key-ups and
+/// mouse input never call it: only keys are known to reset Roblox's idle clock. Null: nobody listens.</param>
 internal sealed record StepContext(
     string AccountName, long UserId, string MacroId,
     (int W, int H) RecordedClient, (int W, int H) ActualClient, int DisplayScale,
     Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false,
-    ScreenGuard? Guard = null, IStepClipboard? Clipboard = null);
+    ScreenGuard? Guard = null, IStepClipboard? Clipboard = null, Action<InputSource>? OnKeyLanded = null);
 
 /// <summary>
 /// Plays v4 steps. A point with its check on treats its delay as a ceiling: it presses as soon
@@ -132,7 +134,8 @@ internal static class StepRunner
                     case KeyStep k:
                         await io.Delay(k.DelayMs, ct);
                         SendGuarded(io, new MacroEvent(0, k.Down ? MacroEventKind.KeyDown : MacroEventKind.KeyUp, k.VirtualKeyCode, 0, 0, 0, 0));
-                        if (k.Down) heldKeys.Add(k.VirtualKeyCode); else heldKeys.Remove(k.VirtualKeyCode);
+                        if (k.Down) { heldKeys.Add(k.VirtualKeyCode); ctx.OnKeyLanded?.Invoke(InputSource.Macro); }
+                        else heldKeys.Remove(k.VirtualKeyCode);
                         break;
                     case PointStep p:
                         await PlayPointAsync(p, i, ctx, io, heldButtons, tally, ct);
@@ -871,6 +874,7 @@ internal static class StepRunner
             SendKey(VK_CONTROL, down: true);
             await io.Delay(StepTiming.PasteKeyGapMs, ct);
             SendKey(VK_V, down: true);
+            ctx.OnKeyLanded?.Invoke(InputSource.Paste);
             await io.Delay(StepTiming.PasteKeyHoldMs, ct);
             SendKey(VK_V, down: false);
             SendKey(VK_CONTROL, down: false);
@@ -1013,7 +1017,7 @@ internal static class StepRunner
             SendGuarded(io, ev);
             switch (ev.Kind)
             {
-                case MacroEventKind.KeyDown: heldKeys.Add(ev.VirtualKeyCode); break;
+                case MacroEventKind.KeyDown: heldKeys.Add(ev.VirtualKeyCode); ctx.OnKeyLanded?.Invoke(InputSource.Macro); break;
                 case MacroEventKind.KeyUp: heldKeys.Remove(ev.VirtualKeyCode); break;
                 case MacroEventKind.MouseDown: heldButtons.Add(ev.MouseButton); break;
                 case MacroEventKind.MouseUp: heldButtons.Remove(ev.MouseButton); break;
