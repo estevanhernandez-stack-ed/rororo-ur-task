@@ -49,6 +49,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private Ipc.MacroRunInvoker? _bridgeInvoker;
     // Ctrl+Shift+F11: the user has the wheel. Reads the flag file, so a restart keeps hands off.
     private readonly Hotkeys.Breakglass _breakglass = new();
+    private BreakglassHold? _hold;
+    private System.Threading.Timer? _holdTimer;
+    private readonly object _holdLock = new();
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
@@ -105,7 +108,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         Accounts = new AccountRegistry();
         Accounts.AccountAdded += (_, info) =>
+        {
             Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+            // A running keep-alive loop takes the new account in (unless it was switched off this session).
+            if (_runner.IsRunning) _runner.AddAssignment(new Assignment(info, null, CadenceRole.KeepAlive));
+        };
         Accounts.AccountRemoved += (_, info) =>
         {
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
@@ -122,6 +129,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // backgrounded PID would have inherited pre-pruning. Drop both pieces
             // of stale state together.
             _assignments.Remove(info.Pid);
+            _runner.RemoveAssignment(info.RobloxUserId);
         };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
@@ -137,6 +145,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _runner = new AssignmentRunner(_player, _foreground,
             CadenceDeps.Real with { MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None) },
             Ledger, Gate) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
+        _hold = new BreakglassHold(Ledger,
+            new MissReporter(Log, () => Ledger.ToWall(Environment.TickCount64)), () => Environment.TickCount64);
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).
@@ -599,6 +609,34 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _claim.Stop(); } catch (Exception ex) { Log($"Claim release failed (non-fatal — TTL expiry covers it): {ex.Message}"); }
     }
 
+    // ---------- Break-glass hold ----------
+
+    /// <summary>Break-glass is on: tracked accounts show as held and a deadline reached meanwhile is said out loud.
+    /// The first tick comes after a second so the aborted loop's last state writes land first.</summary>
+    private void StartHold()
+    {
+        lock (_holdLock)
+        {
+            _holdTimer?.Dispose();
+            var hold = _hold!;
+            _holdTimer = new System.Threading.Timer(_ =>
+            {
+                try { hold.Tick(); } catch (Exception ex) { Log($"break-glass hold: {ex.Message}"); }
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
+            hold.Begin();
+        }
+    }
+
+    private void StopHold()
+    {
+        lock (_holdLock)
+        {
+            _holdTimer?.Dispose();
+            _holdTimer = null;
+            _hold!.End();
+        }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -607,7 +645,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
         {
             _hotkeys.Start();
             Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
-            if (_breakglass.IsOn) Log(Hotkeys.Breakglass.StillOnAtStartLine);
+            if (_breakglass.IsOn)
+            {
+                Log(Hotkeys.Breakglass.StillOnAtStartLine);
+                StartHold();
+            }
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -642,6 +684,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _bridgeCts.Cancel(); } catch { }
         try { _bridgeCts.Dispose(); } catch { }
         try { _activityCts.Cancel(); } catch { }
+        try { _holdTimer?.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         try { _activeRecipeRunner?.Abort(); } catch { }
@@ -802,10 +845,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
                     if (_player.Abort()) count++;
                     if (_activeRecipeRunner?.Abort() ?? false) count++;
                     Log(Hotkeys.Breakglass.OnLine(count, keepAlivePlaying) + $" ({source ?? "unknown source"})");
+                    StartHold();
                 }
                 else
                 {
                     Log(Hotkeys.Breakglass.OffLine(restoreKeepAlive));
+                    StopHold();
                     if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
                 }
                 break;

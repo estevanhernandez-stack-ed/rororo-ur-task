@@ -22,18 +22,16 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     private readonly PluginRuntime _runtime;
     private readonly UserPreferences _prefs = UserPreferences.Load();
 
-    // ---------- Task 8: next-due countdown (proof-of-life for a sleeping scheduler) ----------
-
-    // Monotonic (Environment.TickCount64) deadline per KeepAlive row — mirrors
-    // AssignmentRunner's own clock choice (never wall-clock; a DST shift or clock
-    // adjustment must not make the countdown lie). Only KeepAlive rows are tracked;
-    // an Active row is removed the moment it stops being KeepAlive.
-    private readonly Dictionary<AssignmentRow, long> _keepAliveDueAtMs = new();
+    // ---------- Next-due countdown (proof-of-life for a sleeping scheduler) ----------
+    // Each row reads its own next-due from the keep-alive ledger; this timer only makes it re-read.
     private readonly DispatcherTimer _keepAliveCountdownTimer;
+    private readonly KeepAliveView _keepAliveView;
 
     public RecorderViewModel(PluginRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _keepAliveView = new KeepAliveView(_runtime.Ledger, _runtime.Gate, () => Environment.TickCount64,
+            alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, _prefs));
 
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
@@ -180,7 +178,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // Task 8 next-due countdown: low-frequency tick only — this is a
         // minutes-scale countdown (11-17 min fire intervals), not a stopwatch.
         // A per-second timer would be wasted UI-thread churn for no visible gain.
-        _keepAliveCountdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _keepAliveCountdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _keepAliveCountdownTimer.Tick += (_, _) => RefreshKeepAliveCountdowns();
         _keepAliveCountdownTimer.Start();
 
@@ -305,17 +303,6 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             if ((p.Phase == AssignmentPhase.Refused || p.Phase == AssignmentPhase.Warning)
                 && !string.IsNullOrWhiteSpace(p.Reason))
                 ShowError(p.Reason);
-            // Task 8 proof-of-life: the Space actually landed for a keep-alive alt —
-            // reseed that row's countdown to a fresh full interval. Without this the
-            // countdown would only ever count down from the DispatcherTimer's own
-            // 30s-granularity view of elapsed time and never resync with what the
-            // scheduler actually did (e.g. a focus-retry backoff shortens the real
-            // next deadline).
-            if (p.Phase == AssignmentPhase.Playing && p.Current?.Role == CadenceRole.KeepAlive)
-            {
-                var row = Assignments.FirstOrDefault(r => r.Alt.Pid == p.Current.Alt.Pid);
-                if (row is not null) SeedKeepAliveDue(row);
-            }
         });
 
         // Ctrl+Shift+L global chord — bridges to the same RunRoutineCommand the
@@ -1110,7 +1097,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         if (Assignments.Any(r => r.Alt.Pid == alt.Pid)) return;
         var existing = _runtime.GetAssignment(alt.Pid);
-        var row = new AssignmentRow(alt) { AssignedMacro = existing };
+        var row = new AssignmentRow(alt, _keepAliveView) { AssignedMacro = existing };
         row.PropertyChanged += OnAssignmentRowPropertyChanged;
         Assignments.Add(row);
         // Seed the row's displayed Role so what it SHOWS on first paint agrees with
@@ -1130,7 +1117,6 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         if (row is null) return;
         row.PropertyChanged -= OnAssignmentRowPropertyChanged;
         Assignments.Remove(row);
-        _keepAliveDueAtMs.Remove(row);
     }
 
     /// <summary>Routine-checkbox toggles change RunRoutineCommand's and
@@ -1184,8 +1170,6 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // this is a derived change or a genuine one, the row's actual role in
         // reality just changed, and the proof-of-life display must track it.
         if (!_isRederivingRole) _runtime.SetRoleOverride(row.Alt.Pid, row.Role);
-        if (row.Role == CadenceRole.KeepAlive) SeedKeepAliveDue(row);
-        else _keepAliveDueAtMs.Remove(row);
     }
 
     /// <summary>
@@ -1205,31 +1189,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         finally { _isRederivingRole = false; }
     }
 
-    /// <summary>(Re)start a row's countdown at a fresh full interval — called both
-    /// when a row first becomes KeepAlive and whenever the scheduler actually taps
-    /// it (see the AssignmentProgressed handler above), so the displayed countdown
-    /// tracks reality rather than just decaying blindly from the moment of toggle.</summary>
-    private void SeedKeepAliveDue(AssignmentRow row)
-    {
-        var intervalMs = (long)KeepAliveLimits.For(row.Alt.PlaceId, row.Alt.PlaceName, _prefs).Deadline.TotalMilliseconds;
-        _keepAliveDueAtMs[row] = Environment.TickCount64 + intervalMs;
-        row.SetNextDue(TimeSpan.FromMilliseconds(intervalMs));
-    }
-
-    /// <summary>DispatcherTimer tick (30s — this is a minutes-scale countdown, not
-    /// a stopwatch): recompute every tracked row's remaining time from its stored
-    /// deadline. A row that stopped being KeepAlive (flipped back to Active) is
-    /// dropped here too, in case something mutated Role without going through
-    /// <see cref="SyncRoleToRuntime"/> (defensive; today nothing does).</summary>
+    /// <summary>DispatcherTimer tick: every row re-reads its next-due, off and held state from the ledger.</summary>
     private void RefreshKeepAliveCountdowns()
     {
-        if (_keepAliveDueAtMs.Count == 0) return;
-        var now = Environment.TickCount64;
-        foreach (var row in _keepAliveDueAtMs.Keys.ToList())
-        {
-            if (row.Role != CadenceRole.KeepAlive) { _keepAliveDueAtMs.Remove(row); continue; }
-            row.SetNextDue(TimeSpan.FromMilliseconds(Math.Max(0, _keepAliveDueAtMs[row] - now)));
-        }
+        foreach (var row in Assignments) row.RefreshKeepAlive();
     }
 
     // ---------- Dispatcher helper ----------

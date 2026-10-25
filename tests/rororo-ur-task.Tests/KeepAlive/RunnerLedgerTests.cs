@@ -10,12 +10,12 @@ namespace Labs626.UrTask.Tests;
 public class RunnerLedgerTests
 {
     private const long Min = 60_000;
-    private static readonly KeepAliveLimit Fifteen = new(TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(9), false);
+    internal static readonly KeepAliveLimit Fifteen = new(TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(9), false);
     private static readonly DateTimeOffset WallBase = new(2026, 10, 25, 14, 0, 0, TimeSpan.Zero);
 
-    private static AccountRegistry.AccountInfo Alt(int n) => new(n, n, $"alt{n}", $"acct-{n}");
+    internal static AccountRegistry.AccountInfo Alt(int n) => new(n, n, $"alt{n}", $"acct-{n}");
 
-    private sealed class FakePlayer : IMacroPlayer
+    internal sealed class FakePlayer : IMacroPlayer
     {
         public bool IsPlaying => false;
         public event EventHandler<PlaybackStartedArgs>? Started { add { } remove { } }
@@ -27,12 +27,12 @@ public class RunnerLedgerTests
         public bool Abort() => false;
     }
 
-    private sealed class Fg(Func<AccountRegistry.AccountInfo?> resolve) : IForegroundWatcher
+    internal sealed class Fg(Func<AccountRegistry.AccountInfo?> resolve) : IForegroundWatcher
     {
         public AccountRegistry.AccountInfo? ResolveForegroundAccount() => resolve();
     }
 
-    private sealed class Rig
+    internal sealed class Rig
     {
         public required AssignmentRunner Runner;
         public required KeepAliveLedger Ledger;
@@ -58,7 +58,7 @@ public class RunnerLedgerTests
 
     /// <param name="inFront">who reads as the foreground; default is whoever was just focused.</param>
     /// <param name="focus">the Focus seam; default is a clean success that brings the window forward.</param>
-    private static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
+    internal static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
         string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null,
         Action<Rig, long>? onSleep = null, Action<string>? markActive = null)
     {
