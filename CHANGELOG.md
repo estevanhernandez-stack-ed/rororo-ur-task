@@ -2,7 +2,7 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.12.0 — 2026-10-25
 
 ### Added
 
@@ -19,17 +19,6 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   It drops out of the library, the action bridge and the MCP's `list_macros`. Show archived lists
   them greyed out, each with Restore. Archiving a macro that is paired with an alt or used in a
   recipe asks first and names where.
-
-### Changed
-
-- **The library is ordered by group, not by recency.** The game band now only drives the PLAYING
-  NOW filter.
-- **Delete names where a macro is in use** (paired alts, recipes) before you confirm.
-- An import now dedupes names against the whole library, not just the macros currently showing.
-
-## 0.12.0 — unreleased
-
-### Added
 
 - **Ur OCR can sweep the stone around you in one hold.** Clearing stone block by block paid a
   look before and after every block. `SweepPath`, a new bridge call, presses the left button on a
@@ -62,6 +51,10 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
 
 ### Changed
 
+- **The library is ordered by group, not by recency.** The game band now only drives the PLAYING
+  NOW filter.
+- **Delete names where a macro is in use** (paired alts, recipes) before you confirm.
+- An import now dedupes names against the whole library, not just the macros currently showing.
 - **Camera top-down also sets the zoom.** After the pitch drag it holds I to the nearest zoom, then O for `camera.zoom.outMs` (1000 ms, measured 2026-09-30 at the top of Mine #8: two 900 ms holds matched frame for frame). A fresh client starts zoomed in close, which Ur OCR reads as a dark frame; Ur OCR now runs this macro at the start of its pulse and after every Go to Top. Only the example macro changes: regenerate from `measured.json` and copy `0e5a0000-0000-4000-8000-000000000003.json` into your macros folder.
 - **Abort moved from `Ctrl+Shift+A` to `Ctrl+Shift+F12`.** Typing relayed through Mouse Without
   Borders or Chrome Remote Desktop can leave Ctrl and Shift held down, and the next "a" typed then
@@ -78,7 +71,7 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   626labs.ur-ocr).`, which logged nothing before. Windows' hotkey message does not say whether a
   key press was injected by another program, so the line can't say that.
 
-## 0.11.0 — unreleased
+## 0.11.0 — not released on its own; ships in 0.12.0
 
 ### Added
 
@@ -150,7 +143,7 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   without one behave as before.
 - The reach values in `measured.json` are provisional until the live outline measurement.
 
-## 0.10.0 — unreleased
+## 0.10.0 — not released on its own; ships in 0.12.0
 
 ### Added
 
