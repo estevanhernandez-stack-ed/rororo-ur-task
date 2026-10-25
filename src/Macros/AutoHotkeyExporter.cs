@@ -249,6 +249,16 @@ public static class AutoHotkeyExporter
                 case PointerMoveStep m:
                     sb.Append(FormattableString.Invariant($"DllCall(\"mouse_event\", \"UInt\", 1, \"Int\", {m.Dx}, \"Int\", {m.Dy}, \"UInt\", 0, \"UPtr\", 0)")).Append(Nl);
                     break;
+                case PasteStep p:
+                    if (p.Text is not null)
+                    {
+                        sb.Append("; paste: Ur Task puts the old clipboard back afterwards; this export does not").Append(Nl);
+                        sb.Append(version == AhkVersion.V1
+                            ? $"Clipboard := \"{AhkString(p.Text, version)}\""
+                            : $"A_Clipboard := \"{AhkString(p.Text, version)}\"").Append(Nl);
+                    }
+                    sb.Append(version == AhkVersion.V1 ? "Send, ^v" : "Send \"^v\"").Append(Nl);
+                    break;
                 case RawStep r:
                     for (int i = 0; i < r.Events.Count; i++)
                     {
@@ -272,6 +282,17 @@ public static class AutoHotkeyExporter
         var size = r.Box is { } b ? FormattableString.Invariant($"{b.W}x{b.H}") : "no box";
         return FormattableString.Invariant(
             $"; reach: '{SanitizeComment(label)}' needs a white outline here ({r.MinCount} near-white px in {size}); Ur Task skips the step without one (Ur Task only)");
+    }
+
+    /// <summary>Text for a quoted AutoHotkey string. Backtick is the escape character in both versions;
+    /// v1 doubles a quote and needs its semicolons escaped (it would read " ;" as a comment), v2 escapes
+    /// the quote. Line breaks become `n and `r so the string stays on one line.</summary>
+    private static string AhkString(string text, AhkVersion version)
+    {
+        var s = text.Replace("`", "``").Replace("\r", "`r").Replace("\n", "`n");
+        return version == AhkVersion.V1
+            ? s.Replace("\"", "\"\"").Replace(";", "`;")
+            : s.Replace("\"", "`\"");
     }
 
     private static string Sleep(long ms, AhkVersion version)

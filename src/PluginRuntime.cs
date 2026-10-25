@@ -39,6 +39,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private readonly CancellationTokenSource _bridgeCts = new();
     private Ipc.MacroRunnerServer? _bridgeServer;
+    private Ipc.MacroRunInvoker? _bridgeInvoker;
+    // Ctrl+Shift+F11: the user has the wheel. Reads the flag file, so a restart keeps hands off.
+    private readonly Hotkeys.Breakglass _breakglass = new();
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
@@ -79,6 +82,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     public bool RecordKeyboardOnly { get; set; } = true;
 
+    /// <summary>
+    /// Turbo keep-alive, forwarded straight to the cadence runner (which the recipe
+    /// loop shares). Hydrated from prefs in the constructor and kept in sync by the
+    /// UI toggle; the runner reads it at every keep-alive decision, so a mid-run flip
+    /// applies from the next sweep.
+    /// </summary>
+    public bool TurboKeepAlive
+    {
+        get => _runner.TurboKeepAlive;
+        set => _runner.TurboKeepAlive = value;
+    }
+
     public PluginRuntime()
     {
         Accounts = new AccountRegistry();
@@ -105,7 +120,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
-        _runner = new AssignmentRunner(_player, _foreground);
+        _runner = new AssignmentRunner(_player, _foreground) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).
@@ -116,7 +131,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // on-disk library the recorder/sequence player use.
         if (UI.UserPreferences.Load().AcceptPluginRunRequests)
         {
-            var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence);
+            var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
+                isBreakglass: () => _breakglass.IsOn);
+            _bridgeInvoker = invoker;
             _bridgeServer = new Ipc.MacroRunnerServer(invoker);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
@@ -188,6 +205,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _client.ThemeChanged += p => ThemeChanged?.Invoke(p);
 
         _hotkeys.HotkeyPressed += OnHotkey;
+        // A turbo sweep drops every key the user presses, the stop chords included; it hands those here.
+        Hotkeys.SweepInputGuard.ChordPressed += OnHotkey;
         _player.Started += (_, args) =>
         {
             _playerActive = true;
@@ -572,7 +591,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try
         {
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing).");
+            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            if (_breakglass.IsOn) Log(Hotkeys.Breakglass.StillOnAtStartLine);
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
@@ -664,6 +684,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // Break-glass: the user has the wheel. An agent's Ctrl+Shift+P (a script re-arming
+                // keep-alive) is indistinguishable from theirs, so it waits for their F11 like everything else.
+                if (_breakglass.IsOn)
+                {
+                    Log(Hotkeys.Breakglass.IgnoredLine("Ctrl+Shift+P"));
+                    break;
+                }
                 // A recipe owns the shared runner surface while it's active — refuse
                 // rather than starting a concurrent plain loop underneath it.
                 if (_activeRecipeRunner is { IsRunning: true })
@@ -742,7 +769,36 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 Log(Hotkeys.AbortLog.Line(aborted, source ?? "unknown source"));
                 break;
 
+            case HotkeyKind.Breakglass:
+            {
+                var keepAlivePlaying = _runner.IsRunning;
+                var (on, restoreKeepAlive) = _breakglass.Toggle(keepAlivePlaying, DateTime.Now);
+                if (on)
+                {
+                    // Bridge playbacks first: a repeat loops on after an aborted pass unless cancelled.
+                    var stopped = _bridgeInvoker?.StopMacro(new Ipc.StopMacroRequest(
+                        "1.0", "StopMacro", null, null, Hotkeys.Breakglass.Chord + " break-glass")).Stopped ?? 0;
+                    int count = stopped;
+                    if (_runner.Abort()) count++;
+                    if (_sequence.Abort() && stopped == 0) count++;
+                    if (_player.Abort()) count++;
+                    if (_activeRecipeRunner?.Abort() ?? false) count++;
+                    Log(Hotkeys.Breakglass.OnLine(count, keepAlivePlaying) + $" ({source ?? "unknown source"})");
+                }
+                else
+                {
+                    Log(Hotkeys.Breakglass.OffLine(restoreKeepAlive));
+                    if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
+                }
+                break;
+            }
+
             case HotkeyKind.RunRoutine:
+                if (_breakglass.IsOn && _activeRecipeRunner is not { IsRunning: true })
+                {
+                    Log(Hotkeys.Breakglass.IgnoredLine("Ctrl+Shift+L"));
+                    break;
+                }
                 // Toggle: a routine already running (looping recipe OR loadout —
                 // IsRunning covers both) means Ctrl+Shift+L stops it, same rescue
                 // affordance TogglePlayStopCommand gives Ctrl+Shift+P. Otherwise
@@ -824,7 +880,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private void StopAndSaveRecording()
     {
-        var events = _recorder.Stop();
+        // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
+        var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
         var bound = _recordingBoundAccount;
         var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;

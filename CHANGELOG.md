@@ -2,6 +2,41 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.12.1 — unreleased
+
+### Added
+
+- **Ctrl+Shift+F11 is break-glass: you have the wheel.** When you need the PC back mid-run, press
+  it once. Every macro stops, keep-alive pauses, and Ur Task refuses macros from other plugins and
+  agents (reason `breakglass`) until you press it again, so nothing fights you for the mouse. Ctrl+Shift+P and
+  Ctrl+Shift+L are ignored while it's on. Press it again to hand back: keep-alive comes back on if
+  it was playing when you took over. The state lives in a small flag file next to the logs, so it
+  holds across a restart, and scripts can see it. The log says "Break-glass ON" and "Break-glass
+  OFF", with what was stopped.
+- **Turbo keep-alive.** An opt-in toggle next to the cadence presets. When any keep-alive window
+  comes due, every keep-alive window due in the next two minutes is jumped in one quick sweep,
+  so you are interrupted once instead of once per window. A small corner card counts down 3, 2, 1
+  first and never takes focus; Ctrl+Shift+F12 stops the sweep. Each window gets its Space the
+  moment it is confirmed in front (capped at 300ms), not after a fixed second, and your own
+  window comes back once at the end. Off by default; with it off, keep-alive works exactly as
+  before. While a sweep holds the screen (about a second), keys you type and clicks you make are
+  dropped rather than landing in an account's window, so a W, A, S or D typed mid-sweep can't walk
+  an account. Ctrl+Shift+F12, Esc and Ctrl+Shift+F11 still work during it.
+- **A paste step.** `{ "kind": "paste", "delayMs": 200, "text": "Huge" }` puts the text on the
+  clipboard, presses Ctrl+V in the game window, and puts back what you had copied. Leave `text`
+  out and it pastes whatever is on the clipboard already, for an agent that sets it first. It
+  replaces the four hand-timed Ctrl and V key steps search-box macros used. Text only goes back:
+  if you had an image copied, the log says it was replaced. AutoHotkey export writes the same
+  paste. Macros with a paste step don't load on Ur Task 0.12.0 or older.
+
+### Fixed
+
+- **The record hotkey no longer ends up in your recordings.** Ctrl+Shift+R to stop used to leave
+  its Ctrl and Shift presses at the end of the macro, sometimes as a full Shift tap, which toggles
+  shift-lock in Roblox at the end of every pass. Starting left the chord's releases at the front.
+  Both are trimmed when the recording is saved. Ctrl and Shift you pressed yourself, before your
+  last key or click, stay.
+
 ## 0.12.0 — 2026-10-25
 
 ### Added

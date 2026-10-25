@@ -29,6 +29,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<bool> _isBusy;
     private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _play;
     private readonly Func<bool> _abort;
+    private readonly Func<bool> _isBreakglass;
     private readonly PlaybackRegistry _registry;
     private readonly Action<string> _log;
 
@@ -37,7 +38,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     internal int ActivePlaybackCount => _playbacks.Count;
 
     // Production ctor wires the real collaborators.
-    public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player)
+    public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player,
+        Func<bool> isBreakglass)
         : this(
             loadMacros: () => store.LoadAll().Macros,
             snapshot: () => accounts.Snapshot().ToList(),
@@ -45,7 +47,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             isBusy: () => player.IsRunning,
             playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),
             abort: () => player.Abort(),
-            log: Diagnostics.DiagLog.Write)
+            log: Diagnostics.DiagLog.Write,
+            isBreakglass: isBreakglass)
     { }
 
     // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
@@ -57,7 +60,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
         Func<bool>? abort = null,
         PlaybackRegistry? registry = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<bool>? isBreakglass = null)
     {
         // Tests leave it out, so a test run never writes to the real ur-task.log.
         _log = log ?? (_ => { });
@@ -67,6 +71,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         _isBusy = isBusy;
         _play = playWithResult;
         _abort = abort ?? (() => false);
+        _isBreakglass = isBreakglass ?? (() => false);
         _registry = registry ?? new PlaybackRegistry();
     }
 
@@ -83,8 +88,16 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                abort: abort)
     { }
 
+    /// <summary>While the user has the wheel (Ctrl+Shift+F11, <see cref="Hotkeys.Breakglass"/>) every start
+    /// path refuses with reason "breakglass": a clean no an agent can pause on, not a mid-step abort.</summary>
+    private Task<RunMacroResponse>? BreakglassRefusal()
+        => _isBreakglass()
+            ? Task.FromResult(RunMacroResponse.Refused(Hotkeys.Breakglass.RefusalReason, Hotkeys.Breakglass.RefusalDetail))
+            : null;
+
     public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
+        if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (_isBusy() || !_playbacks.IsEmpty)
             return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
 
@@ -107,7 +120,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     /// </summary>
     public Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct)
     {
-        // Shape first: a malformed call is refused as malformed even while something is playing.
+        // Break-glass first: hands off beats everything. Then shape: a malformed call is refused as
+        // malformed even while something is playing.
+        if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (ClearAtMacro.Validate(request) is { } problem)
             return Task.FromResult(RunMacroResponse.Refused("refused", problem));
         if (_isBusy() || !_playbacks.IsEmpty)
@@ -132,7 +147,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     /// </summary>
     public Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct)
     {
-        // Shape first: a malformed call is refused as malformed even while something is playing.
+        // Break-glass first: hands off beats everything. Then shape: a malformed call is refused as
+        // malformed even while something is playing.
+        if (BreakglassRefusal() is { } handsOff) return handsOff;
         if (SweepPathMacro.Validate(request) is { } problem)
             return Task.FromResult(RunMacroResponse.Refused("refused", problem));
         if (_isBusy() || !_playbacks.IsEmpty)
@@ -273,7 +290,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                     if (failure.StepIndex is not null) break;
                 }
             }
-            while (repeat && !playbackCts.IsCancellationRequested);
+            // Break-glass ends a repeat too: an aborted pass would otherwise loop on into the user's hands.
+            while (repeat && !playbackCts.IsCancellationRequested && !_isBreakglass());
             if (playbackCts.IsCancellationRequested) state = PlaybackState.Stopped;
         }
         catch (OperationCanceledException) { state = PlaybackState.Stopped; }
