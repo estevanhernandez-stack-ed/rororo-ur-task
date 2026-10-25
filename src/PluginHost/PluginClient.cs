@@ -144,6 +144,24 @@ internal sealed class PluginClient : IAsyncDisposable
         _themeConsumer = Task.Run(() => ConsumeThemeAsync(_consumerCts.Token));
     }
 
+    /// <summary>RoRoRo's per-account activity clock. Null when not connected. Throws RpcException
+    /// (PermissionDenied when the capability was declined).</summary>
+    public async Task<AccountActivityList?> GetAccountActivityAsync(CancellationToken ct = default)
+    {
+        var client = _client;
+        if (client is null) return null;
+        return await client.GetAccountActivityAsync(new Empty(), cancellationToken: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Tells RoRoRo an account just got input from us. No-op when not connected.</summary>
+    public async Task MarkAccountActiveAsync(string accountId, CancellationToken ct = default)
+    {
+        var client = _client;
+        if (client is null) return;
+        await client.MarkAccountActiveAsync(new MarkAccountActiveRequest { AccountId = accountId },
+            cancellationToken: ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Re-fetch the running-accounts snapshot to refresh soft metadata —
     /// notably game identity, which presence fills in AFTER the launch event

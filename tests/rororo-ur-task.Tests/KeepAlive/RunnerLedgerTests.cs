@@ -60,7 +60,7 @@ public class RunnerLedgerTests
     /// <param name="focus">the Focus seam; default is a clean success that brings the window forward.</param>
     private static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
         string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null,
-        Action<Rig, long>? onSleep = null)
+        Action<Rig, long>? onSleep = null, Action<string>? markActive = null)
     {
         Rig rig = null!;
         var cts = new CancellationTokenSource();
@@ -90,6 +90,7 @@ public class RunnerLedgerTests
             SweepLog = line => rig.Log.Add(line),
             DescribeForeground = () => holder,
             KeepAliveLimitFor = _ => Fifteen,
+            MarkActive = markActive ?? (_ => { }),
         };
         rig = new Rig
         {
@@ -120,6 +121,32 @@ public class RunnerLedgerTests
 
         Assert.Equal(new[] { 10 * Min, 10 * Min + 2_000, 10 * Min + 4_000 }, rig.Focused.Take(3).Select(f => f.at));
         Assert.Equal(new[] { 1, 2, 3 }, rig.Focused.Take(3).Select(f => f.pid));
+    }
+
+    [Fact]
+    public async Task A_landed_space_marks_the_account_active()
+    {
+        var marked = new List<string>();
+        var rig = Build(startMs: 10 * Min, runForMs: 10 * Min + 3_000, markActive: marked.Add);
+        await rig.Run(Alt(1));
+        Assert.Equal(new[] { "acct-1" }, marked);
+    }
+
+    [Fact]
+    public async Task A_missed_space_does_not_mark_the_account_active()
+    {
+        var marked = new List<string>();
+        var rig = Build(startMs: 10 * Min, runForMs: 10 * Min + 3_000, sendOk: false, markActive: marked.Add);
+        await rig.Run(Alt(1));
+        Assert.Empty(marked);
+    }
+
+    [Fact]
+    public async Task A_throwing_mark_never_breaks_the_runner()
+    {
+        var rig = Build(startMs: 10 * Min, runForMs: 10 * Min + 3_000, markActive: _ => throw new InvalidOperationException());
+        await rig.Run(Alt(1));
+        Assert.Equal(1, rig.Sent);
     }
 
     [Fact]

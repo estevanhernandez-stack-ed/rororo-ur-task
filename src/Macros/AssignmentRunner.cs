@@ -45,6 +45,10 @@ internal sealed record CadenceDeps(
     /// window is in front (Hotkeys.SweepInputGuard). No-op by default.</summary>
     public Func<IDisposable> GuardUserInput { get; init; } = () => NoGuard.Instance;
 
+    /// <summary>Called with the account id each time a keep-alive Space lands, so RoRoRo can credit its own
+    /// activity clock. Fire-and-forget; must not throw. No-op by default.</summary>
+    public Action<string> MarkActive { get; init; } = _ => { };
+
     private sealed class NoGuard : IDisposable
     {
         public static readonly NoGuard Instance = new();
@@ -641,6 +645,7 @@ internal sealed class AssignmentRunner
         var before = _ledger.Get(userId);
         var now = _deps.ClockMs();
         _ledger.StampLanded(userId, InputSource.KeepAlive);
+        try { _deps.MarkActive(asn.Alt.AccountId); } catch { /* a courtesy call never breaks keep-alive */ }
         alt.ConsecutiveFocusFailures = 0;
         alt.DueAtMs = before is null ? now + alt.IntervalMs : _ledger.DueAtMs(userId);
         long? idleMs = before?.LastInputMs is { } last ? now - last : null;

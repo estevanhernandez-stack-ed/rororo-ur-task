@@ -34,6 +34,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly ClaimFile _claim = new();
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
+    private readonly PluginHost.IHostActivity _hostActivity;
+    private readonly CancellationTokenSource _activityCts = new();
+
+    /// <summary>The keep-alive ledger shared by the runner and everything that reads or credits idle time.</summary>
+    internal KeepAliveLedger Ledger { get; }
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
     private readonly PluginHost.WindowArrangeService _arranger;
 
@@ -120,7 +125,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         _player = new MacroPlayer(_foreground, _metrics);
         _sequence = new SequencePlayer(_player, _foreground);
-        _runner = new AssignmentRunner(_player, _foreground) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
+        // One ledger for the plugin's lifetime: it outlives every stop/start of the keep-alive loop.
+        Ledger = new KeepAliveLedger(() => Environment.TickCount64, () => DateTimeOffset.Now);
+        _client = new PluginClient(PluginId, Accounts);
+        _hostActivity = new PluginHost.HostActivity(_client, Log);
+        var hostActivity = _hostActivity;
+        _runner = new AssignmentRunner(_player, _foreground,
+            CadenceDeps.Real with { MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None) },
+            Ledger) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).
@@ -199,7 +211,6 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         Recipes = new RecipeStore();
-        _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
         // Forwarded rather than handled here: the runtime owns behaviour, not brushes.
         _client.ThemeChanged += p => ThemeChanged?.Invoke(p);
@@ -611,6 +622,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
             IsConnected = true;
             RaiseUI(() => ConnectionChanged?.Invoke());
             Log($"Connected. Host version {HostVersion}. Snapshot has {Accounts.Snapshot().Count} accounts.");
+            _ = new PluginHost.HostActivityPoller(_hostActivity, Ledger, Log)
+                .RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
         }
         catch (Exception ex)
         {
@@ -624,6 +637,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         try { _bridgeCts.Cancel(); } catch { }
         try { _bridgeCts.Dispose(); } catch { }
+        try { _activityCts.Cancel(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         try { _activeRecipeRunner?.Abort(); } catch { }

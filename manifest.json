@@ -12,6 +12,8 @@
     "system.watch-global-input",
     "host.events.account-launched",
     "host.events.account-exited",
+    "host.queries.account-activity",
+    "host.commands.mark-account-active",
     "host.ui.row-badge",
     "host.ui.tray-menu"
   ],
