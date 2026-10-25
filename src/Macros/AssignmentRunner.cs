@@ -141,6 +141,9 @@ internal sealed class AssignmentRunner
     private readonly ForegroundGate _gate;
     /// <summary>One keep-alive service at a time: the main loop and the watchdog both take it.</summary>
     private readonly SemaphoreSlim _turn = new(1, 1);
+    /// <summary>When the runner first tracked each account: an account with no input on either clock counts
+    /// its idle from here, so it can still reach critical. Kept across runs: a restarted loop served nobody.</summary>
+    private readonly Dictionary<long, long> _trackedAtMs = new();
     private CancellationTokenSource? _activeCts;
     private volatile bool _turboKeepAlive;
 
@@ -317,6 +320,7 @@ internal sealed class AssignmentRunner
                 if (!alt.IsKeepAlive) { alt.DueAtMs = startMs; continue; }
                 var userId = alt.Assignment.Alt.RobloxUserId;
                 _ledger.Track(alt.Assignment.Alt, alt.Limit!);
+                lock (_trackedAtMs) _trackedAtMs.TryAdd(userId, startMs);
                 var due = _ledger.DueAtMs(userId);
                 alt.DueAtMs = due <= startMs ? startMs + spreadIndex++ * StartSpreadMs : due;
                 alt.ConsecutiveFocusFailures = _ledger.Get(userId)?.ConsecutiveMisses ?? 0;
@@ -445,38 +449,46 @@ internal sealed class AssignmentRunner
             // keep-alive due within the batch window through the sweep (countdown and input guard), whether
             // or not turbo is ticked; the sweep's captured foreground is the paused macro's window, so its
             // restore hands the foreground back to the macro. chosen is the main loop's pick, null for the
-            // watchdog; dueSeen is chosen's due time when it was picked.
-            async Task TakeTurnAsync(ScheduledAlt? chosen, long dueSeen, CancellationToken token)
+            // watchdog; dueSeen is chosen's due time when Decide picked it (both read under _turn).
+            // A playback is never paused for the account it plays on until that account is critical (idle at
+            // its limit less a minute): returns true when it deferred for that reason, and the main loop
+            // waits a watchdog tick before looking again.
+            async Task<bool> TakeTurnAsync(ScheduledAlt? chosen, long dueSeen, CancellationToken token)
             {
                 try { await _turn.WaitAsync(token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
+                catch (OperationCanceledException) { return false; }
                 try
                 {
                     var now = _deps.ClockMs();
                     List<ScheduledAlt> urgent;
                     if (chosen is not null)
                     {
-                        if (chosen.DueAtMs != dueSeen) return;   // the watchdog served it while we waited for the turn
+                        if (chosen.DueAtMs != dueSeen) return false;   // the watchdog served it while we waited for the turn
+                        if (OwnPlaybackCanWait(chosen, _gate.Status.PlaybackTarget, now)) return true;
                         urgent = [chosen];
                     }
                     else
                     {
-                        if (_gate.Status.PlaybackTarget is not { } target) return;   // ended: the main loop has it
+                        if (_gate.Status.PlaybackTarget is not { } target) return false;   // ended: the main loop has it
                         urgent = WatchdogDue(scheduled, target, now);
-                        if (urgent.Count == 0) return;
+                        if (urgent.Count == 0) return false;
                     }
-                    var first = urgent[0];
 
                     IDisposable lease;
                     try
                     {
                         lease = await _gate.RequestBreakAsync(
-                            first.Assignment.Alt.DisplayName, PreemptAfter(urgent, now), token).ConfigureAwait(false);
+                            urgent[0].Assignment.Alt.DisplayName, PreemptAfter(urgent, now), token).ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException) { return; }
+                    catch (OperationCanceledException) { return false; }
                     using (lease)
                     {
                         var paused = _gate.Status.PlaybackTarget;   // non-null: a playback is parked for this break
+                        // A playback may have come in while we waited for the grant: the same rule again.
+                        var grantedAt = _deps.ClockMs();
+                        urgent = urgent.Where(a => !OwnPlaybackCanWait(a, paused, grantedAt)).ToList();
+                        if (urgent.Count == 0) return chosen is not null;
+                        var first = urgent[0];
                         if (paused is { } p) _ledger.SetState(p, AccountKeepAliveState.PausedForMacro);
                         try
                         {
@@ -500,6 +512,7 @@ internal sealed class AssignmentRunner
                             if (paused is { } p2) _ledger.SetState(p2, AccountKeepAliveState.Waiting);
                         }
                     }
+                    return false;
                 }
                 finally { _turn.Release(); }
             }
@@ -507,11 +520,13 @@ internal sealed class AssignmentRunner
             // The watchdog covers what the main loop cannot: while the runner's own Active pass plays, the
             // loop is inside it and cannot notice a keep-alive deadline. Each second a playback is in, it
             // looks for a due keep-alive and takes the turn for it. It never ticks while nothing plays.
+            // A failed service is logged and the watch goes on (the tick rate-limits it); only the run's
+            // cancellation ends it.
             async Task WatchdogAsync(CancellationToken token)
             {
-                try
+                while (!token.IsCancellationRequested)
                 {
-                    while (!token.IsCancellationRequested)
+                    try
                     {
                         await _gate.WhenPlaybackInAsync(token).ConfigureAwait(false);
                         await _deps.Sleep(WatchdogTickMs, token).ConfigureAwait(false);
@@ -519,9 +534,13 @@ internal sealed class AssignmentRunner
                         if (WatchdogDue(scheduled, target, _deps.ClockMs()).Count == 0) continue;
                         await TakeTurnAsync(null, 0, token).ConfigureAwait(false);
                     }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+                    catch (Exception ex)
+                    {
+                        try { _deps.SweepLog($"keep-alive watchdog: a service failed ({ex.Message}); still watching"); }
+                        catch { /* a log line must never end the watch */ }
+                    }
                 }
-                catch (OperationCanceledException) { }
-                catch (Exception ex) { _deps.SweepLog($"keep-alive watchdog stopped: {ex.Message}"); }
             }
 
             watchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -531,10 +550,24 @@ internal sealed class AssignmentRunner
             while (!ct.IsCancellationRequested)
             {
                 _reporter.FlushMinute();
-                RefreshDueFromLedger(scheduled, lastSeenInput);
-                var now = _deps.ClockMs();
-                var rotated = Rotated(scheduled, activeCursor);
-                var decision = CadenceScheduler.Decide(rotated, now, NextActivePassCostMs(scheduled, activeCursor));
+                // Under the turn: the watchdog's services write the same due times, so the refresh's
+                // read-modify-write and Decide never see one half-done, and the due Decide acted on is the
+                // one TakeTurnAsync checks for a service that landed in between.
+                try { await _turn.WaitAsync(ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                long now;
+                IReadOnlyList<ScheduledAlt> rotated;
+                CadenceDecision decision;
+                long decidedDue;
+                try
+                {
+                    RefreshDueFromLedger(scheduled, lastSeenInput);
+                    now = _deps.ClockMs();
+                    rotated = Rotated(scheduled, activeCursor);
+                    decision = CadenceScheduler.Decide(rotated, now, NextActivePassCostMs(scheduled, activeCursor));
+                    decidedDue = decision is CadenceDecision.ServiceKeepAlive picked ? picked.Alt.DueAtMs : 0;
+                }
+                finally { _turn.Release(); }
 
                 switch (decision)
                 {
@@ -550,7 +583,7 @@ internal sealed class AssignmentRunner
 
                     case CadenceDecision.ServiceKeepAlive svc:
                     {
-                        var genuinelyOverdue = svc.Alt.DueAtMs <= now;
+                        var genuinelyOverdue = decidedDue <= now;
                         // Add() also records this attempt for next time; its return
                         // tells us whether it was ALREADY there from a prior look.
                         var alreadyGapFitted = !gapFittedSinceActivePass.Add(svc.Alt);
@@ -580,7 +613,13 @@ internal sealed class AssignmentRunner
                         // Active pass: service it for real, through the gate. Turbo (or a playback that
                         // parks for the break) sweeps every keep-alive due within the batch window along
                         // with it, so the user is interrupted once, not once per alt.
-                        await TakeTurnAsync(svc.Alt, svc.Alt.DueAtMs, ct).ConfigureAwait(false);
+                        if (await TakeTurnAsync(svc.Alt, decidedDue, ct).ConfigureAwait(false))
+                        {
+                            // Its own macro is playing and it can still wait: look again in a tick. The watchdog
+                            // serves it at its limit less a minute if the playback is still in by then.
+                            try { await _deps.Sleep(WatchdogTickMs, ct).ConfigureAwait(false); }
+                            catch (OperationCanceledException) { }
+                        }
                         break;
                     }
 
@@ -702,7 +741,7 @@ internal sealed class AssignmentRunner
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
     /// <summary>The later of the alt's own due time (which may carry a miss backoff) and the ledger's, which
-    /// moves with input stamped by anyone. The watchdog reads this; it never writes the loop's bookkeeping.</summary>
+    /// moves with input stamped by anyone.</summary>
     private long EffectiveDueMs(ScheduledAlt alt)
     {
         var userId = alt.Assignment.Alt.RobloxUserId;
@@ -714,12 +753,25 @@ internal sealed class AssignmentRunner
     private bool IsOff(ScheduledAlt alt) => _ledger.Get(alt.Assignment.Alt.RobloxUserId)?.Off == true;
 
     /// <summary>Idle has reached the limit less the preempt margin: past the point where the account can wait.
-    /// An account with no known input is not critical (it reads as sitting at its deadline).</summary>
+    /// An account with no input on either clock counts its idle from when the runner first tracked it.</summary>
     private bool IsCritical(ScheduledAlt alt, long now)
     {
-        if (_ledger.Get(alt.Assignment.Alt.RobloxUserId) is not { LastInputMs: { } last } e) return false;
-        return now - last >= (long)e.Limit.Limit.TotalMilliseconds - PreemptMarginMs;
+        var userId = alt.Assignment.Alt.RobloxUserId;
+        var e = _ledger.Get(userId);
+        long since;
+        if (e?.LastInputMs is { } last) since = last;
+        else
+        {
+            lock (_trackedAtMs) { if (!_trackedAtMs.TryGetValue(userId, out since)) return false; }
+        }
+        var limit = e?.Limit ?? alt.Limit!;
+        return now - since >= (long)limit.Limit.TotalMilliseconds - PreemptMarginMs;
     }
+
+    /// <summary>The playback in plays on this account and the account is not critical yet: its own macro is
+    /// the only thing it would be paused for, so it waits (spec: a playback is never paused for itself).</summary>
+    private bool OwnPlaybackCanWait(ScheduledAlt alt, long? playbackTarget, long now)
+        => playbackTarget == alt.Assignment.Alt.RobloxUserId && !IsCritical(alt, now);
 
     /// <summary>Keep-alive alts the watchdog serves now: due, not off, and not the playback's own account,
     /// whose own keys keep it credited, unless it has idled to the limit less a minute (then a Space at

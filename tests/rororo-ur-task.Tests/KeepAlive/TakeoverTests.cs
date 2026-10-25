@@ -35,6 +35,8 @@ public class TakeoverTests
         public readonly HashSet<int> Closed = new();
         public readonly List<FakePlayback> Playbacks = new();
         public Action<int>? OnFocus;
+        public int SendThrows;                                   // the next N Spaces throw instead of landing
+        public readonly List<(int pid, long at)> Taps = new();
         public readonly List<string> GateLog = new();
         public readonly List<string> SweepLog = new();
 
@@ -163,7 +165,17 @@ public class TakeoverTests
                 rig.Add($"restore {(int)h}");
                 if ((int)h != 0 && !rig.Closed.Contains((int)h)) rig.Front = Alt((int)h);
             },
-            SendKeepAlive: () => { rig.Add($"tap {rig.Front?.Pid}"); return true; },
+            SendKeepAlive: () =>
+            {
+                if (Interlocked.Decrement(ref rig.SendThrows) >= 0)
+                {
+                    rig.Add("send threw");
+                    throw new InvalidOperationException("send blew up");
+                }
+                rig.Add($"tap {rig.Front?.Pid}");
+                lock (rig.Taps) rig.Taps.Add((rig.Front?.Pid ?? 0, rig.NowMs));
+                return true;
+            },
             KeepAliveIntervalMs: _ => (long)Fifteen.Deadline.TotalMilliseconds)
         {
             SweepLog = line => { lock (rig.SweepLog) rig.SweepLog.Add(line); },
@@ -300,5 +312,66 @@ public class TakeoverTests
         Assert.DoesNotContain(rig.Events, e => e.StartsWith("VIOLATION"));
         var paused = rig.Events.First(e => e.StartsWith("paused at"));
         Assert.True(int.Parse(paused["paused at ".Length..]) < 29, paused);   // mid-pass, not at its end
+    }
+
+    [Fact]
+    public async Task A_mouse_only_macro_on_its_own_account_is_paused_only_once_critical()
+    {
+        var rig = Build(startMs: 20 * Min, runForMs: 29 * Min);
+        var keep = Alt(2);
+        var stampedAt = 20 * Min - 8 * Min;                       // deadline in 1 min, critical (limit - 1) in 6
+        rig.StampAt(keep, stampedAt);
+        using var pbCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var playback = await StartPlayback(rig, new FakePlayback(rig, keep, steps: 400, stepMs: 10 * Sec), pbCts.Token);
+
+        await RunKeepAlive(rig, keep);
+        pbCts.Cancel();
+        await playback;
+
+        (int pid, long at)[] taps;
+        lock (rig.Taps) taps = rig.Taps.ToArray();
+        var first = Assert.Single(taps.Take(1));
+        Assert.Equal(2, first.pid);
+        Assert.True(first.at >= stampedAt + 14 * Min, $"Space at idle {(first.at - stampedAt) / 1000} s, before limit - 1 min");
+        AssertInOrder(rig.Events, "paused at", "focus 2", "tap 2", "resumed at");
+        Assert.DoesNotContain(rig.Events, e => e.StartsWith("VIOLATION"));
+    }
+
+    [Fact]
+    public async Task An_account_with_no_input_history_counts_its_idle_from_tracking()
+    {
+        var rig = Build(startMs: 20 * Min, runForMs: 36 * Min);
+        var keep = Alt(2);                                        // no input on either clock
+        using var pbCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var playback = await StartPlayback(rig, new FakePlayback(rig, keep, steps: 1000, stepMs: 10 * Sec), pbCts.Token);
+
+        await RunKeepAlive(rig, keep);
+        pbCts.Cancel();
+        await playback;
+
+        (int pid, long at)[] taps;
+        lock (rig.Taps) taps = rig.Taps.ToArray();
+        Assert.NotEmpty(taps);
+        Assert.True(taps[0].at >= 20 * Min + 14 * Min, $"Space {(taps[0].at - 20 * Min) / 1000} s after tracking");
+    }
+
+    [Fact]
+    public async Task A_service_that_throws_does_not_end_the_watchdog()
+    {
+        var rig = Build(startMs: 20 * Min, runForMs: 20 * Min + 330 * Sec, activeSteps: 30, activeStepMs: 10 * Sec);
+        rig.SendThrows = 1;
+        var active = Alt(1); var keep = Alt(2);
+        rig.StampAt(keep, 20 * Min - 9 * Min + 60 * Sec);
+        var assignments = new List<Assignment>
+        {
+            new(active, LongMacro, CadenceRole.Active),
+            Assignment.WithDerivedRole(keep, null),
+        };
+
+        await rig.Runner.RunAsync(assignments, rig.Cts.Token);
+
+        AssertInOrder(rig.Events, "send threw", "resumed at", "paused at", "focus 2", "tap 2", "resumed at", "pass done on 1");
+        lock (rig.SweepLog)
+            Assert.Contains("keep-alive watchdog: a service failed (send blew up); still watching", rig.SweepLog);
     }
 }
