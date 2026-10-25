@@ -162,4 +162,22 @@ public class ForegroundGateTests
         await boundary.WaitAsync(TimeSpan.FromSeconds(5));
         playback.Dispose();
     }
+
+    [Fact]
+    public async Task When_playback_in_waits_for_the_next_playback_each_time()
+    {
+        var gate = Gate();
+        var first = gate.WhenPlaybackInAsync(default);
+        Assert.False(first.IsCompleted);
+
+        var playback = gate.EnterPlayback(42, "macro");
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(gate.WhenPlaybackInAsync(default).IsCompleted);   // one is in: at once
+
+        playback.Dispose();
+        var next = gate.WhenPlaybackInAsync(default);
+        Assert.False(next.IsCompleted);                               // ended: waits for the next one
+        gate.EnterPlayback(7, "macro").Dispose();
+        await next.WaitAsync(TimeSpan.FromSeconds(5));
+    }
 }

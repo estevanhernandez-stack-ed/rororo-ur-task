@@ -136,7 +136,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         var hostActivity = _hostActivity;
         _runner = new AssignmentRunner(_player, _foreground,
             CadenceDeps.Real with { MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None) },
-            Ledger) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
+            Ledger, Gate) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).

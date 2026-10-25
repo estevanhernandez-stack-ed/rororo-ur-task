@@ -109,6 +109,8 @@ internal sealed class AssignmentRunner
     private const int FocusRetryBackoffMs = 30_000; // spec: bounded 30s retry on a stuck focus
     internal const long StartSpreadMs = 2_000;      // accounts with no input history on either clock start this far apart
     private const int UnschedulableRunwayMinutes = 2; // warn when the projected gap comes within this of the limit
+    internal const long PreemptMarginMs = 60_000;   // a playback that reaches no boundary is cut at limit - 1 min
+    internal const int WatchdogTickMs = 1_000;      // how often the watchdog looks while a playback is in
 
     // Turbo keep-alive. One warned sweep services every keep-alive alt due within
     // the batch window, and each alt costs a polled foreground confirm instead of a
@@ -136,6 +138,9 @@ internal sealed class AssignmentRunner
     private readonly CadenceDeps _deps;
     private readonly KeepAliveLedger _ledger;
     private readonly MissReporter _reporter;
+    private readonly ForegroundGate _gate;
+    /// <summary>One keep-alive service at a time: the main loop and the watchdog both take it.</summary>
+    private readonly SemaphoreSlim _turn = new(1, 1);
     private CancellationTokenSource? _activeCts;
     private volatile bool _turboKeepAlive;
 
@@ -188,7 +193,20 @@ internal sealed class AssignmentRunner
     }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps, KeepAliveLedger ledger)
+        : this(player, foreground, deps, ledger, PrivateGate(deps)) { }
+
+    /// <summary>A gate no playback ever enters, so every break is granted at once and the runner behaves
+    /// as it did before the gate. Its lines go nowhere: the sweep log stays exactly the 0.12.1 lines.</summary>
+    private static ForegroundGate PrivateGate(CadenceDeps deps)
     {
+        ArgumentNullException.ThrowIfNull(deps);
+        return new ForegroundGate(deps.ClockMs, _ => { });
+    }
+
+    internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps, KeepAliveLedger ledger,
+        ForegroundGate gate)
+    {
+        _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _player = player ?? throw new ArgumentNullException(nameof(player));
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _deps = deps ?? throw new ArgumentNullException(nameof(deps));
@@ -231,6 +249,8 @@ internal sealed class AssignmentRunner
         // read the current cycle count on every exit path, including one where an
         // exception unwound before the loop ever assigned a "real" value below.
         int cycle = 1;
+        Task? watchdog = null;
+        CancellationTokenSource? watchCts = null;
 
         // Moved up from just before the while loop below: the single-flight
         // win above, the Started emit (which publishes the ur-afk claim), and
@@ -375,15 +395,19 @@ internal sealed class AssignmentRunner
             var servicedThisPass = new HashSet<ScheduledAlt>();
             cycle = 1;   // declared ahead of the try (see above) so finally can read it too
 
+            // Locked: the watchdog's services advance the pass too, from another thread.
             int AdvancePass(ScheduledAlt alt)
             {
-                if (!servicedThisPass.Add(alt))
+                lock (servicedThisPass)
                 {
-                    cycle++;
-                    servicedThisPass.Clear();
-                    servicedThisPass.Add(alt);
+                    if (!servicedThisPass.Add(alt))
+                    {
+                        cycle++;
+                        servicedThisPass.Clear();
+                        servicedThisPass.Add(alt);
+                    }
+                    return cycle;
                 }
-                return cycle;
             }
 
             var lastSeenInput = new Dictionary<long, long?>();
@@ -413,6 +437,96 @@ internal sealed class AssignmentRunner
                 // every keep-alive against the now-current longest observed cost.
                 CheckUnschedulableWarnings();
             }
+
+            // Keep-alive takes its turn through the gate (spec "Pause and pick up"). Every service, from
+            // the main loop or the watchdog, comes through here: one at a time (_turn), and only once the
+            // gate has granted a break. With no playback in the break is granted at once, so nothing
+            // changes. With one in, it parks at its next step boundary first, and the break serves every
+            // keep-alive due within the batch window through the sweep (countdown and input guard), whether
+            // or not turbo is ticked; the sweep's captured foreground is the paused macro's window, so its
+            // restore hands the foreground back to the macro. chosen is the main loop's pick, null for the
+            // watchdog; dueSeen is chosen's due time when it was picked.
+            async Task TakeTurnAsync(ScheduledAlt? chosen, long dueSeen, CancellationToken token)
+            {
+                try { await _turn.WaitAsync(token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                try
+                {
+                    var now = _deps.ClockMs();
+                    List<ScheduledAlt> urgent;
+                    if (chosen is not null)
+                    {
+                        if (chosen.DueAtMs != dueSeen) return;   // the watchdog served it while we waited for the turn
+                        urgent = [chosen];
+                    }
+                    else
+                    {
+                        if (_gate.Status.PlaybackTarget is not { } target) return;   // ended: the main loop has it
+                        urgent = WatchdogDue(scheduled, target, now);
+                        if (urgent.Count == 0) return;
+                    }
+                    var first = urgent[0];
+
+                    IDisposable lease;
+                    try
+                    {
+                        lease = await _gate.RequestBreakAsync(
+                            first.Assignment.Alt.DisplayName, PreemptAfter(urgent, now), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { return; }
+                    using (lease)
+                    {
+                        var paused = _gate.Status.PlaybackTarget;   // non-null: a playback is parked for this break
+                        if (paused is { } p) _ledger.SetState(p, AccountKeepAliveState.PausedForMacro);
+                        try
+                        {
+                            if (paused is not null || TurboKeepAlive)
+                            {
+                                // Pulling an alt forward only ever taps it earlier, the safe direction. Every
+                                // swept alt counts as gap-fitted, so the forward-progress guard holds for them.
+                                var batch = BreakBatch(scheduled, urgent, paused, _deps.ClockMs());
+                                if (chosen is not null) foreach (var a in batch) gapFittedSinceActivePass.Add(a);
+                                await ServiceKeepAliveSweepAsync(
+                                    batch, AdvancePass, indexOf, assignments.Count, token).ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                await ServiceKeepAliveAsync(
+                                    first, AdvancePass(first), indexOf[first], assignments.Count, token).ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            if (paused is { } p2) _ledger.SetState(p2, AccountKeepAliveState.Waiting);
+                        }
+                    }
+                }
+                finally { _turn.Release(); }
+            }
+
+            // The watchdog covers what the main loop cannot: while the runner's own Active pass plays, the
+            // loop is inside it and cannot notice a keep-alive deadline. Each second a playback is in, it
+            // looks for a due keep-alive and takes the turn for it. It never ticks while nothing plays.
+            async Task WatchdogAsync(CancellationToken token)
+            {
+                try
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        await _gate.WhenPlaybackInAsync(token).ConfigureAwait(false);
+                        await _deps.Sleep(WatchdogTickMs, token).ConfigureAwait(false);
+                        if (_gate.Status.PlaybackTarget is not { } target) continue;
+                        if (WatchdogDue(scheduled, target, _deps.ClockMs()).Count == 0) continue;
+                        await TakeTurnAsync(null, 0, token).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _deps.SweepLog($"keep-alive watchdog stopped: {ex.Message}"); }
+            }
+
+            watchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var watchToken = watchCts.Token;
+            watchdog = Task.Run(() => WatchdogAsync(watchToken));
 
             while (!ct.IsCancellationRequested)
             {
@@ -462,31 +576,11 @@ internal sealed class AssignmentRunner
                             break;
                         }
 
-                        if (TurboKeepAlive)
-                        {
-                            // Turbo: the scheduler picked one alt; sweep every
-                            // keep-alive due within the batch window along with it,
-                            // so the user is interrupted once, not once per alt. The
-                            // deadline logic that chose WHEN to sweep is untouched —
-                            // pulling an alt forward only ever taps it earlier, which
-                            // is the safe direction against the idle floor. Every
-                            // swept alt counts as gap-fitted, same as svc.Alt above,
-                            // so the forward-progress guard still holds for them.
-                            var horizon = now + TurboBatchWindowMs;
-                            var batch = scheduled
-                                .Where(a => a.IsKeepAlive && (ReferenceEquals(a, svc.Alt) || a.DueAtMs <= horizon))
-                                .OrderBy(a => a.DueAtMs)
-                                .ToList();
-                            foreach (var a in batch) gapFittedSinceActivePass.Add(a);
-                            await ServiceKeepAliveSweepAsync(
-                                batch, AdvancePass, indexOf, assignments.Count, ct).ConfigureAwait(false);
-                            break;
-                        }
-
-                        // Genuinely overdue (never starved), or this is its first look
-                        // since the last Active pass — service it for real.
-                        await ServiceKeepAliveAsync(
-                            svc.Alt, AdvancePass(svc.Alt), indexOf[svc.Alt], assignments.Count, ct).ConfigureAwait(false);
+                        // Genuinely overdue (never starved), or this is its first look since the last
+                        // Active pass: service it for real, through the gate. Turbo (or a playback that
+                        // parks for the break) sweeps every keep-alive due within the batch window along
+                        // with it, so the user is interrupted once, not once per alt.
+                        await TakeTurnAsync(svc.Alt, svc.Alt.DueAtMs, ct).ConfigureAwait(false);
                         break;
                     }
 
@@ -515,6 +609,13 @@ internal sealed class AssignmentRunner
             // progress Phase, so it never dropped off "running") and made Abort()
             // return false once _activeCts below went null, with no way to recover
             // short of restarting the app.
+            if (watchCts is not null)
+            {
+                // Stopped before Stopped is said: no keep-alive service runs after it.
+                try { watchCts.Cancel(); } catch (ObjectDisposedException) { }
+                try { await watchdog!.ConfigureAwait(false); } catch { /* it logs its own failure */ }
+                watchCts.Dispose();
+            }
             try { _reporter.FlushMinute(force: true); } catch { /* a log line must never block the shutdown */ }
             EmitProgress(new AssignmentProgress(cycle, -1, assignments.Count, null, AssignmentPhase.Stopped));
             _activeCts?.Dispose();
@@ -600,6 +701,77 @@ internal sealed class AssignmentRunner
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
+    /// <summary>The later of the alt's own due time (which may carry a miss backoff) and the ledger's, which
+    /// moves with input stamped by anyone. The watchdog reads this; it never writes the loop's bookkeeping.</summary>
+    private long EffectiveDueMs(ScheduledAlt alt)
+    {
+        var userId = alt.Assignment.Alt.RobloxUserId;
+        return _ledger.Get(userId) is { LastInputMs: not null }
+            ? Math.Max(alt.DueAtMs, _ledger.DueAtMs(userId))
+            : alt.DueAtMs;
+    }
+
+    private bool IsOff(ScheduledAlt alt) => _ledger.Get(alt.Assignment.Alt.RobloxUserId)?.Off == true;
+
+    /// <summary>Idle has reached the limit less the preempt margin: past the point where the account can wait.
+    /// An account with no known input is not critical (it reads as sitting at its deadline).</summary>
+    private bool IsCritical(ScheduledAlt alt, long now)
+    {
+        if (_ledger.Get(alt.Assignment.Alt.RobloxUserId) is not { LastInputMs: { } last } e) return false;
+        return now - last >= (long)e.Limit.Limit.TotalMilliseconds - PreemptMarginMs;
+    }
+
+    /// <summary>Keep-alive alts the watchdog serves now: due, not off, and not the playback's own account,
+    /// whose own keys keep it credited, unless it has idled to the limit less a minute (then a Space at
+    /// a boundary on its own window is harmless). Most urgent first.</summary>
+    private List<ScheduledAlt> WatchdogDue(IReadOnlyList<ScheduledAlt> scheduled, long playbackTarget, long now)
+        => scheduled
+            .Where(a => a.IsKeepAlive && !IsOff(a) && EffectiveDueMs(a) <= now
+                        && (a.Assignment.Alt.RobloxUserId != playbackTarget || IsCritical(a, now)))
+            .OrderBy(EffectiveDueMs)
+            .ToList();
+
+    /// <summary>Everyone one break serves: the alts it was asked for, plus every keep-alive due within the
+    /// batch window, leaving out the paused playback's own account unless it is critical.</summary>
+    private List<ScheduledAlt> BreakBatch(
+        IReadOnlyList<ScheduledAlt> scheduled, IReadOnlyList<ScheduledAlt> asked, long? paused, long now)
+    {
+        var horizon = now + TurboBatchWindowMs;
+        return scheduled
+            .Where(a => a.IsKeepAlive && (asked.Contains(a)
+                || (!IsOff(a) && EffectiveDueMs(a) <= horizon
+                    && (a.Assignment.Alt.RobloxUserId != paused || IsCritical(a, now)))))
+            .OrderBy(EffectiveDueMs)
+            .ToList();
+    }
+
+    /// <summary>How long a playback gets to reach a step boundary before keep-alive cuts it: the most urgent
+    /// alt's limit less a minute, less its idle so far, never below zero. Unknown idle reads as the deadline.</summary>
+    private TimeSpan PreemptAfter(IEnumerable<ScheduledAlt> alts, long now)
+    {
+        var runwayMs = long.MaxValue;
+        foreach (var a in alts)
+        {
+            var e = _ledger.Get(a.Assignment.Alt.RobloxUserId);
+            var limit = e?.Limit ?? a.Limit!;
+            var idleMs = e?.LastInputMs is { } last ? now - last : (long)limit.Deadline.TotalMilliseconds;
+            runwayMs = Math.Min(runwayMs, (long)limit.Limit.TotalMilliseconds - PreemptMarginMs - idleMs);
+        }
+        return TimeSpan.FromMilliseconds(runwayMs == long.MaxValue ? 0 : Math.Max(0, runwayMs));
+    }
+
+    /// <summary>The account shows as Serving until the scope ends, then Waiting.</summary>
+    private IDisposable Serving(long userId)
+    {
+        _ledger.SetState(userId, AccountKeepAliveState.Serving);
+        return new StateScope(() => _ledger.SetState(userId, AccountKeepAliveState.Waiting));
+    }
+
+    private sealed class StateScope(Action end) : IDisposable
+    {
+        public void Dispose() => end();
+    }
+
     /// <summary>The alt's limit from the deps, or derived from its (clamped) interval when the deps give none.</summary>
     private KeepAliveLimit LimitFor(AccountRegistry.AccountInfo alt, long intervalMs)
     {
@@ -667,6 +839,7 @@ internal sealed class AssignmentRunner
     private async Task ServiceKeepAliveAsync(ScheduledAlt alt, int cycle, int index, int total, CancellationToken ct)
     {
         var asn = alt.Assignment;
+        using var serving = Serving(asn.Alt.RobloxUserId);
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
 
         var prior = _deps.CaptureForeground();     // whatever the USER was doing
@@ -798,6 +971,7 @@ internal sealed class AssignmentRunner
                 if (ct.IsCancellationRequested) return;   // Abort hotkey: stop between alts
 
                 var asn = alt.Assignment;
+                using var serving = Serving(asn.Alt.RobloxUserId);   // ends with this alt's iteration
                 var cycle = advancePass(alt);
                 var index = indexOf[alt];
                 var name = asn.Alt.DisplayName;

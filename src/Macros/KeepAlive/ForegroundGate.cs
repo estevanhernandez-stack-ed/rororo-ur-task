@@ -38,6 +38,7 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
     private string? _label;
     private CancellationTokenSource _preempt = new();
     private Break? _break;
+    private TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Test seam: runs between the preempt decision and the cancel, the gap a playback
     /// can park in.</summary>
@@ -69,6 +70,7 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
             _target = targetUserId;
             _label = label;
             _preempt = new CancellationTokenSource();
+            _entered.TrySetResult();
         }
         return new Lease(ExitPlayback);
     }
@@ -90,9 +92,17 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
             _target = null;
             _label = null;
             if (_preempt.IsCancellationRequested) _preempt = new CancellationTokenSource(); // a spent preempt never outlives its playback
+            _entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             Monitor.PulseAll(_lock);
         }
         if (granted is not null) { b0!.Timer.Cancel(); log(granted); }
+    }
+
+    /// <summary>Completes when a playback is in (at once if one already is). Keep-alive's watchdog
+    /// waits on this instead of ticking while nothing plays.</summary>
+    public Task WhenPlaybackInAsync(CancellationToken ct)
+    {
+        lock (_lock) return _playbackIn ? Task.CompletedTask : _entered.Task.WaitAsync(ct);
     }
 
     /// <summary>Only the playback that is in calls this: parking grants a pending break, so a
