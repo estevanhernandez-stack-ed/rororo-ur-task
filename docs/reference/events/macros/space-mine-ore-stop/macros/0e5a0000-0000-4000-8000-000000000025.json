@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 4,
+  "id": "0e5a0000-0000-4000-8000-000000000025",
+  "name": "Clear spot S",
+  "recordMode": "PerWindow",
+  "recordedAgainstUserId": null,
+  "recordedAgainstDisplayName": "agent",
+  "interAltDelayMs": null,
+  "recordedAtUnixMs": 1790467200000,
+  "events": [],
+  "coordSpace": "client",
+  "recordedClientW": 800,
+  "recordedClientH": 599,
+  "recordedMaximized": false,
+  "recordedPlaceId": 8737899170,
+  "allGames": false,
+  "recordedDisplayScale": 100,
+  "steps": [
+    {
+      "kind": "hold",
+      "delayMs": 0,
+      "id": "spot-S",
+      "label": "Spot S",
+      "x": 400,
+      "y": 356,
+      "button": 1,
+      "check": {
+        "box": {
+          "offsetX": -2,
+          "offsetY": -2,
+          "w": 5,
+          "h": 5
+        },
+        "tolerance": 15
+      },
+      "reach": {
+        "box": {
+          "offsetX": -40,
+          "offsetY": -40,
+          "w": 80,
+          "h": 80
+        },
+        "minCount": 60,
+        "whiteMin": 225
+      }
+    }
+  ]
+}

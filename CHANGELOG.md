@@ -2,7 +2,7 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.12.0 — 2026-10-25
 
 ### Added
 
@@ -20,12 +20,150 @@ All notable changes to RoRoRo Ur Task are documented here. Format roughly follow
   them greyed out, each with Restore. Archiving a macro that is paired with an alt or used in a
   recipe asks first and names where.
 
+- **Ur OCR can sweep the stone around you in one hold.** Clearing stone block by block paid a
+  look before and after every block. `SweepPath`, a new bridge call, presses the left button on a
+  block beside your character, moves the pointer one block at a time along a path Ur OCR sends
+  (a real mouse move each time, waiting `dwellMs` on every block), and lets go only back on the
+  block it started on, so the release can't click a player or a chest. While the button is down
+  it checks the Auto Mine dot every 3 blocks, and at least every 1.5 s however long the dwell: if a menu or a profile covers it, the pointer goes
+  back to the start block, lets go there, and the playback stops as `check-failed`. Losing focus
+  lets go at once, as every hold does; Esc and `StopMacro` go back to the start block first. It
+  rides the same single-flight rule, playback id, `GetPlayback`, `StopMacro` and Esc as
+  `RunMacro`, is never saved or listed, and logs "SweepPath (N points)" and "swept N points in
+  S s". The request carries `step`, the block size in px, as a new field. A path must start and end on
+  the same block, move a whole number of `step` px at a time, stay inside the client, carry a guard and hold 3 to 256 points; anything else is refused with
+  a sentence. Additive on bridge contract 1.0.
+- **A sweep can follow the ore, not just the block grid.** `SweepPath` takes an optional
+  `freePath: true`. It skips one rule, that every point sits a whole number of `step` px from the
+  start, so Ur OCR can sweep the ore it found in one hold instead of a jump and two looks per
+  spot (24 ore took 35 s point by point with boosters breaking each in 0.3 s). `step` may then be
+  left out or 0. Every other rule stays: inside the client, start and end on the same point, 3 to
+  256 points, no point repeating the one before, a guard, a `dwellMs` of 50 to 5000. The start
+  line says "free path" where it would name the step. Left out or false, a path is refused off
+  the lattice exactly as before. Additive on bridge contract 1.0.
+- **A finished ClearAt says which spots were empty.** `GetPlayback` on a finished ClearAt now
+  carries `noOutline`: the 1-based points that showed no outline, `[]` when every point had one.
+  A point counts when it logged "no outline, skipped", and also when it logged "no outline on a
+  fresh baseline, stopped": it pressed, but nothing broke there. Ur OCR remembers those spots and
+  stops sending them pass after pass, where each one cost about 0.6 s. Every other reply (a
+  saved macro, a failed or stopped ClearAt, a running one) leaves the field out, so older callers
+  see no change. Additive on bridge contract 1.0.
+
 ### Changed
 
 - **The library is ordered by group, not by recency.** The game band now only drives the PLAYING
   NOW filter.
 - **Delete names where a macro is in use** (paired alts, recipes) before you confirm.
 - An import now dedupes names against the whole library, not just the macros currently showing.
+- **Camera top-down also sets the zoom.** After the pitch drag it holds I to the nearest zoom, then O for `camera.zoom.outMs` (1000 ms, measured 2026-09-30 at the top of Mine #8: two 900 ms holds matched frame for frame). A fresh client starts zoomed in close, which Ur OCR reads as a dark frame; Ur OCR now runs this macro at the start of its pulse and after every Go to Top. Only the example macro changes: regenerate from `measured.json` and copy `0e5a0000-0000-4000-8000-000000000003.json` into your macros folder.
+- **Abort moved from `Ctrl+Shift+A` to `Ctrl+Shift+F12`.** Typing relayed through Mouse Without
+  Borders or Chrome Remote Desktop can leave Ctrl and Shift held down, and the next "a" typed then
+  arrives as Ctrl+Shift+A. On 2026-09-30 that stopped Ur OCR's pulse loop three times while
+  nobody pressed the chord; the abort log caught each one as an injected key with Roblox in
+  front. Typing never produces F12. Bare `Esc` still aborts while something plays.
+- **An abort says what did it.** The log said only "Aborted." or "Abort ignored — nothing
+  playing.", and on 2026-09-30 there were 8 aborts nobody could explain, one of them stopping Ur
+  OCR's ore-stop pulse mid-sweep with nobody at the keyboard. The line now names the source: the
+  key (`Esc`, registered only while something plays, or `Ctrl+Shift+F12`) with the window in front
+  at that moment, its title, pid and process, as in
+  `Aborted (Esc; foreground 'Roblox' pid 6808 RobloxPlayerBeta).`; a button in Ur Task's window
+  (`Aborted (Stop button; foreground ...).`); or a bridge call, `Aborted (StopMacro from
+  626labs.ur-ocr).`, which logged nothing before. Windows' hotkey message does not say whether a
+  key press was injected by another program, so the line can't say that.
+
+## 0.11.0 — not released on its own; ships in 0.12.0
+
+### Added
+
+- **Reach checks.** A hold or a point can carry a `reach`: with the pointer on the spot, it
+  counts the near-white pixels (every channel at 225 or more) in a block-sized box around it and
+  needs at least `minCount`. That is the white outline the game draws on a block your pickaxe can
+  break. No outline within 300 ms: the step is skipped, not failed, and the log says
+  "no outline, skipped" with the count. The box and the count scale with the window like points.
+- **One block per spot.** Ur Task holds the button on each block, longer each time it doesn't
+  break, and stops as soon as the block breaks. The first hold is 0.3 s, then 0.6, 1.2, 2.4, and
+  3 s from then on. Between holds it lets go and looks (the game hides the outline while the
+  button is down). No outline: the block broke. The outline moved or shrank: the block broke and
+  the next one down is showing, and it is left alone. The log says "broke after N hold(s), X s
+  held", with "(outline moved to the next block)" when it jumped. A `maxMs` bounds the pressed
+  time across holds (the last hold is cut short); with none, ore is never abandoned for time.
+- **Turn on Hide My Pets in Roblox Settings before running a pulse.** Pets sit over the character
+  and the ring spots, and cover the outline.
+- **Clear spot macros** for ore stop v1 (pulse) in `docs/reference/events/macros/space-mine-ore-stop/`:
+  `Clear spot N` through `Clear spot NW`, each one hold behind a reach check and nothing else,
+  because the Ur OCR loop owns Auto Mine in pulse mode.
+- **A playback that pressed nothing says so.** When reach checks skipped and no button or key
+  went down, `ur-task.log` reads "playback finished (skipped: no outline)", and a bridge playback
+  reports `GetPlayback` state `finished` with reason `skipped`. A normal finish has no reason, as
+  before.
+- **Ur OCR can aim Ur Task at the blocks it finds.** Instead of only playing recorded spots, Ur
+  Task now clears wherever Ur OCR points: ore first, then the stone around you. Under the hood
+  this is `ClearAt`, a bridge call: one account, the client size it measured in, 1 to 64 points
+  in order and one outline box, played as ONE playback. Each point is a reach hold (hover,
+  outline check, then one block held until it breaks, measured over the box's no-hover
+  baseline), skipped when no outline shows. The window is sized to the client it was
+  measured in first, as for a macro. It rides the same single-flight rule, playback id,
+  `GetPlayback`, `StopMacro` and Esc as `RunMacro`, is never saved or listed, and logs as
+  "ClearAt (N points)" with each point by its label. Additive on bridge contract 1.0.
+- **Clearing stops the moment a menu or a player's profile covers the game: Ur Task checks the
+  Auto Mine dot before every press.** `ClearAt` takes an optional `guard`: a pixel box, the colour
+  it should show and a tolerance. Before each point and each hold, a colour past the tolerance
+  stops the playback as `check-failed`, and no more input is sent. A call without a guard plays
+  as before.
+- **Camera turn left:** a quarter turn with the arrow key, for the pulse to look again from a new
+  angle.
+
+### Changed
+
+- **Reach holds look for the outline over a baseline.** Before the pointer moves onto the spot,
+  it parks on the Roblox window's title bar (a move, never a click), waits for any outline to
+  clear, and counts the box's near-white pixels. The outline counts only when the count rises at
+  least `minCount` over that. The title bar hovers no block; a spot one box-width away could light
+  the neighbouring block and swallow the outline. A window with no title bar takes the baseline
+  beside the box instead, and the log says so. White quartz is bright enough to pass the raw count with no hover, so an
+  out-of-reach quartz block read as outlined and was pressed with no time limit. The log reads
+  "outline seen (N near-white px over a baseline of B, needs M)". Reach points are unchanged.
+- **Clearing runs faster: Ur Task counts the background once per pass instead of before every
+  spot.**
+- **The outline box can be up to 240 px a side, up from 120.** The camera pops in to the first
+  wall in its way, so a block in a narrow shaft measures around 170 px; the old 120 cap refused
+  real shaft blocks. Reach checks and `ClearAt` both read the same `OutlineCheck.MaxSide`, so
+  both are covered.
+- **Mine spot macros check reach too.** A spot looking through a hole at ore out of reach no
+  longer holds forever: no outline, no press, and Auto Mine goes back on.
+- **Esc during the focus delay now reads `stopped`, not `finished`.** The sequence never played
+  that alt, so `GetPlayback` reports state `stopped` and a repeat ends there instead of counting
+  it as a clean pass.
+- **A lost single-flight claim now reads `failed`/`refused`, not a clean finish.** If a second
+  `RunMacro` loses the race for the in-flight `SequencePlayer` (nothing ran that pass),
+  `GetPlayback` reports state `failed`, reason `refused`, detail "Another playback took the
+  sequence.", and a repeat stops spinning on it instead of reading it as `finished`.
+- **Pulse holds no longer end on colour change.** A hit darkens the block, which made a weaker
+  account let go before the block broke. Holds with a reach check ignore colour drift; holds
+  without one behave as before.
+- The reach values in `measured.json` are provisional until the live outline measurement.
+
+## 0.10.0 — not released on its own; ships in 0.12.0
+
+### Added
+
+- **Hold steps.** A `hold` step presses a mouse button at a point and keeps it down while a small
+  box there shows the colour it had just before the press. It lets go when the colour moves past
+  its tolerance, or at `maxMs` if one is set, and the log says how long it held. Losing focus,
+  Esc and `StopMacro` all release the button. Built for the Space Mine ore stop, where one ore can
+  take 20 hits.
+- **First match can skip only on the other state.** With `onNoMatch: "skipIfOther"`, a first match
+  skips when every spot shows its other colour (Auto Mine already off) and stops with a report
+  when something else covers it, such as a popup or a captcha.
+- **Ore-stop example macros** in `docs/reference/events/macros/space-mine-ore-stop/`: Auto Mine
+  off and on (checked), Mine spot N through NW, Camera top-down and Go to Top, generated from one
+  file of measured values.
+
+### Fixed
+
+- **Every playback's ending is in `ur-task.log`.** A stopped playback logs its stop sentence and a
+  clean one logs a finish line. Bridge playbacks also log their id with the state `GetPlayback`
+  returns. Before, the log showed a start and nothing after it.
 
 ## 0.9.1 — 2026-09-29
 

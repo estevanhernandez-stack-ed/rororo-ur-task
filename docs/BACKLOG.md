@@ -103,9 +103,8 @@ today any other tool's injected input lands in a recording as though the user ha
 
 Found in the 0.9.0 live pass, 2026-09-27. All are small, and none blocked the release:
 
-- **The stop sentence is not in the log.** A failed check's sentence reaches Ur MCP only through
-  `GetPlayback`. `ur-task.log` shows the playback start and nothing after it, and it never recorded
-  a normal finish either. Log the sentence, and log a finish line.
+- **The stop sentence is not in the log.** Done in 0.10.0: every playback's ending is logged, with
+  its stop sentence when it stopped, and bridge playbacks log their id and `GetPlayback` state.
 - **The colour namer calls the Auto Mine red "pink".** #FF135A is the red dot, and the sentence read
   "expected pink #FF135A". Widen the red hue band or name by nearest swatch.
 - **The stop hotkey's Ctrl leaks into recordings.** Ctrl+Shift+R to stop recording left a Ctrl

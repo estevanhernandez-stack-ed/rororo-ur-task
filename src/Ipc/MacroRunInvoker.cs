@@ -30,6 +30,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> _play;
     private readonly Func<bool> _abort;
     private readonly PlaybackRegistry _registry;
+    private readonly Action<string> _log;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
@@ -43,7 +44,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             resolveForegroundUserId: () => foreground.ResolveForegroundAccount()?.RobloxUserId,
             isBusy: () => player.IsRunning,
             playWithResult: async (macro, targets, delay, ct) => await player.PlayAsync(macro, targets, delay, ct),
-            abort: () => player.Abort())
+            abort: () => player.Abort(),
+            log: Diagnostics.DiagLog.Write)
     { }
 
     // Main ctor: the play delegate reports how each pass ended (production, and GetPlayback tests).
@@ -54,8 +56,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool> isBusy,
         Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
         Func<bool>? abort = null,
-        PlaybackRegistry? registry = null)
+        PlaybackRegistry? registry = null,
+        Action<string>? log = null)
     {
+        // Tests leave it out, so a test run never writes to the real ur-task.log.
+        _log = log ?? (_ => { });
         _loadMacros = loadMacros;
         _snapshot = snapshot;
         _resolveForegroundUserId = resolveForegroundUserId;
@@ -91,17 +96,75 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         if (targets.Count == 0)
             return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", "None of the requested targets are running."));
 
-        // Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not
-        // block the caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in
-        // the detached playback are swallowed here — they surface on the Ur Task playback side.
-        // The playback registers under its id with a CTS linked to the bridge token, so
-        // StopMacro can end it and bridge shutdown still tears it down.
+        return Task.FromResult(Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct));
+    }
+
+    /// <summary>
+    /// The ClearAt bridge call (ore-stop pulse spec): the points become an in-memory macro of reach
+    /// holds, played through <see cref="Start"/> exactly like a saved macro, so the single-flight
+    /// rule, GetPlayback, StopMacro and Esc need nothing new. It is never written to the store, so
+    /// ListMacros never shows it. Order: malformed → busy → account not running → play.
+    /// </summary>
+    public Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct)
+    {
+        // Shape first: a malformed call is refused as malformed even while something is playing.
+        if (ClearAtMacro.Validate(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+        if (_isBusy() || !_playbacks.IsEmpty)
+            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+
+        var targets = ResolveTargets(new[] { request.Target! });
+        if (targets.Count == 0)
+            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+
         var playbackId = Guid.NewGuid().ToString("N");
+        var macro = ClearAtMacro.Build(request, ClearAtMacro.IdPrefix + playbackId);
+        _log(ClearAtMacro.StartLine(playbackId, macro, targets[0].DisplayName));
+        if (ClearAtMacro.GuardLine(request) is { } guardLine) _log(guardLine);
+        return Task.FromResult(Start(playbackId, macro, targets, interAltDelayMs: null, repeat: false, ct));
+    }
+
+    /// <summary>
+    /// The SweepPath bridge call (ore-stop sweep spec): the path becomes an in-memory macro of one
+    /// sweep step, played through <see cref="Start"/> exactly like a saved macro, so the single-flight
+    /// rule, GetPlayback, StopMacro and Esc need nothing new. Never written to the store, so ListMacros
+    /// never shows it. Order: malformed, busy, account not running, play.
+    /// </summary>
+    public Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct)
+    {
+        // Shape first: a malformed call is refused as malformed even while something is playing.
+        if (SweepPathMacro.Validate(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused("refused", problem));
+        if (_isBusy() || !_playbacks.IsEmpty)
+            return Task.FromResult(RunMacroResponse.Refused("busy", "A sequence is already running."));
+
+        var targets = ResolveTargets(new[] { request.Target! });
+        if (targets.Count == 0)
+            return Task.FromResult(RunMacroResponse.Refused("no-targets-resolved", $"Account {request.Target} is not running."));
+
+        var playbackId = Guid.NewGuid().ToString("N");
+        var macro = SweepPathMacro.Build(request, SweepPathMacro.IdPrefix + playbackId);
+        _log(SweepPathMacro.StartLine(playbackId, macro, targets[0].DisplayName, request));
+        _log(SweepPathMacro.GuardLine(request));
+        return Task.FromResult(Start(playbackId, macro, targets, interAltDelayMs: null, repeat: false, ct));
+    }
+
+    /// <summary>
+    /// Ack-on-accept: start playback fire-and-forget and ack now. The bridge must not block the
+    /// caller (Ur-OCR's 5Hz tick) for the macro's full runtime. Exceptions in the detached playback
+    /// are swallowed here — they surface on the Ur Task playback side. The playback registers under
+    /// its id with a CTS linked to the bridge token, so StopMacro can end it and bridge shutdown
+    /// still tears it down.
+    /// </summary>
+    private RunMacroResponse Start(
+        string playbackId, Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets,
+        int? interAltDelayMs, bool repeat, CancellationToken ct)
+    {
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
         _registry.Started(playbackId);
-        _ = ObservePlaybackAsync(playbackId, macro, targets, request.InterAltDelayMs, request.Repeat, playbackCts);
-        return Task.FromResult(RunMacroResponse.Accepted(playbackId));
+        _ = ObservePlaybackAsync(playbackId, macro, targets, interAltDelayMs, repeat, playbackCts);
+        return RunMacroResponse.Accepted(playbackId);
     }
 
     public IReadOnlyList<MacroSummary> ListMacros()
@@ -133,7 +196,8 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         // Abort the in-flight SequencePlayer pass so cancellation takes effect immediately,
         // not just at the next loop boundary. Single-flight today, so this stops the active
         // pass; Abort() is idempotent-safe and returns false when nothing is running.
-        _abort();
+        var aborted = _abort();
+        _log(Hotkeys.AbortLog.Line(stopped > 0 || aborted, Hotkeys.AbortLog.StopMacro(request.CallerPluginId)));
 
         return StopMacroResponse.Done(stopped);
     }
@@ -162,10 +226,40 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                 // Each pass reports its own ending; a later clean pass clears an earlier refusal.
                 state = PlaybackState.Finished;
                 reason = null; detail = null; stepIndex = null;
+                // SequencePlayer's single-flight claim was lost to a concurrent pass (an empty
+                // PerAlt on a non-null result): nothing ran, so this must not read as a clean
+                // finish. `last == null` is the test ctor's run-only fakes, which stays a clean
+                // finish. `refused` (not `aborted`) so Ur OCR reruns it whether or not the account
+                // is in front (its Task 4 ruling); `break` kills the hot spin from a losing
+                // PlayAsync completing synchronously under `repeat: true` (controller ruling,
+                // 2026-09-28).
+                if (last is { PerAlt.Count: 0 })
+                {
+                    state = PlaybackState.Failed;
+                    reason = "refused";
+                    detail = "Another playback took the sequence.";
+                    break;
+                }
                 // A StepIndex is set only by a failed check (PlaybackResult.AbortedAt), so it
                 // alone means check-failed. Prefer it over any other failed alt in the pass.
                 var failure = last?.PerAlt.FirstOrDefault(a => a.StepIndex is not null)
                            ?? last?.PerAlt.FirstOrDefault(a => a.Outcome is PlaybackOutcome.Aborted or PlaybackOutcome.Refused);
+                // The sequence was aborted before an alt played (Esc, including during the focus
+                // delay): PlaybackOutcome.Skipped, not SkippedByReach. That alt never ran, so the
+                // pass reads stopped, never finished, and a repeat ends here (controller ruling,
+                // 2026-09-28). Checked before the failure below, so it wins over it.
+                if (last?.PerAlt.Any(a => a.Outcome == PlaybackOutcome.Skipped) == true)
+                {
+                    state = PlaybackState.Stopped;
+                    break;
+                }
+                // Pressed nothing on any alt because reach checks skipped: finished/skipped, so Ur
+                // OCR's pulse loop can tell a skipped Clear spot from a mined one (controller
+                // ruling, 2026-09-28). Additive: a finished run carried no reason before.
+                if (failure is null && !playbackCts.IsCancellationRequested
+                    && last?.PerAlt is { Count: > 0 } alts
+                    && alts.All(a => a.Outcome == PlaybackOutcome.Completed && a.SkippedByReach))
+                    reason = "skipped";
                 if (failure is not null && !playbackCts.IsCancellationRequested)
                 {
                     state = PlaybackState.Failed;
@@ -186,7 +280,18 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         catch (Exception ex) { state = PlaybackState.Failed; reason = "error"; detail = ex.Message; }
         finally
         {
-            _registry.Finished(playbackId, state, reason, detail, stepIndex);
+            // A finished ClearAt names the points that showed no outline, so Ur OCR stops
+            // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
+            // macro's steps are not caller points, and a failed or stopped pass never looked at
+            // the rest. A repeat reports its last pass, like everything else here.
+            var noOutline = state == PlaybackState.Finished && ClearAtMacro.SharesBaseline(macro.Id)
+                            && last?.PerAlt is { Count: > 0 } played
+                ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
+                : null;
+            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline);
+            // Same state string GetPlayback returns, and before the removal below, so anything
+            // waiting for the playback to leave the active set finds the line already written.
+            _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
             _playbacks.TryRemove(playbackId, out _);
             playbackCts.Dispose();
         }

@@ -24,6 +24,10 @@ public static class AutoHotkeyExporter
 {
     private const string Nl = "\r\n";
 
+    /// <summary>How long an open hold (no maxMs) is held in an export. AutoHotkey cannot watch the
+    /// colour, so the script holds for a fixed time and the comment says so.</summary>
+    private const int HoldExportMs = 1000;
+
     public static string Export(Macro macro, AhkVersion version)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
@@ -197,6 +201,7 @@ public static class AutoHotkeyExporter
                 case PointStep p:
                     if (p.CheckEnabled && p.Check is { } c)
                         sb.Append($"; check: '{SanitizeComment(p.Label ?? p.Id)}' expects {c.Expect.Hex} here (Ur Task only)").Append(Nl);
+                    if (p.Reach is { } pr) sb.Append(ReachComment(p.Label ?? p.Id, pr)).Append(Nl);
                     sb.Append(ClickAt(p.X, p.Y, p.Button, version)).Append(Nl);
                     break;
                 case FirstMatchStep f:
@@ -209,6 +214,26 @@ public static class AutoHotkeyExporter
                     sb.Append($"; first match '{SanitizeComment(f.Label ?? f.Id)}': Ur Task presses the first candidate whose colour matches; exported as '{SanitizeComment(first.Label ?? first.Id)}'").Append(Nl);
                     sb.Append(ClickAt(first.X, first.Y, first.Button, version)).Append(Nl);
                     break;
+                case HoldStep h:
+                {
+                    var holdMs = h.MaxMs ?? HoldExportMs;
+                    var holdLabel = SanitizeComment(h.Label ?? h.Id);
+                    if (h.Reach is { } hr) sb.Append(ReachComment(h.Label ?? h.Id, hr)).Append(Nl);
+                    // A reach hold presses one block in Ur Task, longer each time, and looks after each; colour plays no part.
+                    var holds = FormattableString.Invariant($"holds for {StepTiming.FirstHoldMs} ms, then twice as long each time up to {StepTiming.MaxHoldMs} ms, looking after each, until the outline goes or moves to the next block");
+                    var holdNote = (h.Reach is not null, h.MaxMs is not null) switch
+                    {
+                        (true, false) => FormattableString.Invariant($"; hold: '{holdLabel}' {holds} (Ur Task only); exported as a {holdMs} ms hold"),
+                        (true, true) => FormattableString.Invariant($"; hold: '{holdLabel}' {holds}, or {holdMs} ms pressed (Ur Task only); exported as a {holdMs} ms hold"),
+                        (false, false) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes (Ur Task only); exported as a {holdMs} ms hold"),
+                        (false, true) => FormattableString.Invariant($"; hold: '{holdLabel}' stays down until its colour changes or {holdMs} ms pass (Ur Task only); exported as a {holdMs} ms hold"),
+                    };
+                    sb.Append(holdNote).Append(Nl);
+                    sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseDown, 0, h.X, h.Y, h.Button, 0), isDown: true, version)).Append(Nl);
+                    sb.Append(Sleep(holdMs, version)).Append(Nl);
+                    sb.Append(FormatClick(new MacroEvent(0, MacroEventKind.MouseUp, 0, h.X, h.Y, h.Button, 0), isDown: false, version)).Append(Nl);
+                    break;
+                }
                 case DragStep d:
                     var btn = ButtonName(d.Button);
                     sb.Append(version == AhkVersion.V1
@@ -240,6 +265,14 @@ public static class AutoHotkeyExporter
     /// newline would push the rest of the label past the comment onto its own, uncommented
     /// line. Same treatment <see cref="AppendHeader"/> gives the macro name.</summary>
     private static string SanitizeComment(string s) => s.Replace("\r", "").Replace("\n", " ");
+
+    /// <summary>AutoHotkey cannot see the outline, so the export presses unconditionally and says so.</summary>
+    private static string ReachComment(string label, OutlineCheck r)
+    {
+        var size = r.Box is { } b ? FormattableString.Invariant($"{b.W}x{b.H}") : "no box";
+        return FormattableString.Invariant(
+            $"; reach: '{SanitizeComment(label)}' needs a white outline here ({r.MinCount} near-white px in {size}); Ur Task skips the step without one (Ur Task only)");
+    }
 
     private static string Sleep(long ms, AhkVersion version)
         => version == AhkVersion.V1 ? FormattableString.Invariant($"Sleep, {ms}") : FormattableString.Invariant($"Sleep {ms}");

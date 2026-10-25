@@ -46,6 +46,11 @@ public sealed record Macro(
     /// macro without steps plays exactly as v3.</summary>
     public const int CurrentSchemaVersion = 4;
 
+    /// <summary>A ClearAt playback's guard pixel (<see cref="ScreenGuard"/>). Never written to
+    /// a macro file: only the in-memory ClearAt macro carries one.</summary>
+    [JsonIgnore]
+    public ScreenGuard? Guard { get; init; }
+
     /// <summary>Absolute screen pixels — all pre-v3 recordings + AllWindows mode.</summary>
     public const string CoordSpaceScreen = "screen";
 

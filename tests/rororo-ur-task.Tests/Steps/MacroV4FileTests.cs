@@ -238,4 +238,201 @@ public class MacroV4FileTests : IDisposable
         });
         Assert.Equal("Step 1 'Best mine': candidate '#8' has a check with no box.", err);
     }
+
+    [Fact]
+    public void A_hold_round_trips_through_the_store()
+    {
+        var store = new MacroStore(_dir);
+        var m = Sample() with
+        {
+            Steps = new MacroStep[]
+            {
+                new HoldStep(300, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox(), 20)),
+                new HoldStep(0, "h2", null, 1, 1, 2, new HoldCheck(new CheckBox(-1, -1, 3, 3)), MaxMs: 1500),
+            },
+        };
+        store.Save(m);
+        var json = File.ReadAllText(Path.Combine(_dir, m.Id + ".json"));
+        Assert.Contains("\"kind\": \"hold\"", json);
+
+        var loaded = Assert.Single(store.LoadAll().Macros);
+        var a = Assert.IsType<HoldStep>(loaded.Steps![0]);
+        Assert.Equal((300, "spot-N", "Spot N", 400, 244, 1), (a.DelayMs, a.Id, a.Label, a.X, a.Y, a.Button));
+        Assert.Equal(new CheckBox(), a.Check!.Box);
+        Assert.Equal(20, a.Check.Tolerance);
+        Assert.Null(a.MaxMs);
+        var b = Assert.IsType<HoldStep>(loaded.Steps[1]);
+        Assert.Equal((2, 1500), (b.Button, b.MaxMs));
+        Assert.Equal(new CheckBox(-1, -1, 3, 3), b.Check!.Box);
+    }
+
+    [Fact]
+    public void An_agent_written_hold_loads_with_its_defaults()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "coordSpace": "client", "recordedClientW": 800, "recordedClientH": 599,
+          "steps": [ { "kind": "hold", "delayMs": 300, "id": "spot-N", "x": 400, "y": 244,
+                       "check": { "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 } } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        var h = Assert.IsType<HoldStep>(m.Steps![0]);
+        Assert.Equal(1, h.Button);
+        Assert.Equal(ColorCheck.DefaultTolerance, h.Check!.Tolerance);
+        Assert.Null(h.MaxMs);
+        Assert.Null(StepValidator.Validate(m.Steps));
+    }
+
+    [Fact]
+    public void A_hold_check_without_a_box_loads_and_is_refused_with_a_sentence()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "hold", "delayMs": 0, "id": "spot-N", "label": "Spot N", "x": 400, "y": 244,
+                       "check": { "tolerance": 20 } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal("Step 1 'Spot N' has a check with no box.", StepValidator.Validate(m.Steps!));
+    }
+
+    [Fact]
+    public void Validator_refuses_bad_holds_with_a_sentence()
+    {
+        HoldStep H(HoldCheck? check = null, int? maxMs = null, string id = "spot-N")
+            => new(0, id, "Spot N", 400, 244, Check: check, MaxMs: maxMs);
+        var ok = new HoldCheck(new CheckBox());
+
+        Assert.Null(StepValidator.Validate(new MacroStep[] { H(ok) }));
+        Assert.Equal("Step 1 has no point id.", StepValidator.Validate(new MacroStep[] { H(ok, id: " ") }));
+        Assert.Equal("Step 1 'Spot N' is a hold with no check.", StepValidator.Validate(new MacroStep[] { H() }));
+        Assert.Equal("Step 1 'Spot N' has an empty check box.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(0, 0, 0, 5))) }));
+        Assert.Equal("Step 1 'Spot N' has a check box larger than 9x9.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(0, 0, 12, 12))) }));
+        Assert.Equal("Step 1 'Spot N' has a hold tolerance below 1.", StepValidator.Validate(new MacroStep[] { H(new HoldCheck(new CheckBox(), 0)) }));
+        Assert.Equal("Step 1 'Spot N' has a maxMs below 1.", StepValidator.Validate(new MacroStep[] { H(ok, maxMs: 0) }));
+        Assert.Equal("Step 2 reuses point id 'spot-N'.", StepValidator.Validate(new MacroStep[] { new PointStep(0, "spot-N", null, 1, 1), H(ok) }));
+    }
+
+    [Fact]
+    public void A_hold_estimates_its_limit_or_nothing_for_an_open_hold()
+    {
+        Assert.Equal(300 + StepTiming.JumpWiggleMs + 2000, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1, MaxMs: 2000)));
+        Assert.Equal(300 + StepTiming.JumpWiggleMs, StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1)));
+    }
+
+    [Fact]
+    public void SkipIfOther_loads_from_json_by_its_spec_name()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "steps": [ { "kind": "firstMatch", "delayMs": 0, "id": "am-off", "label": "Auto Mine off",
+                       "candidates": [ { "delayMs": 0, "id": "am-off-dot", "x": 40, "y": 300,
+                         "check": { "box": { "offsetX": 15, "offsetY": -11, "w": 3, "h": 3 },
+                                    "expect": { "r": 125, "g": 246, "b": 13 }, "other": { "r": 255, "g": 19, "b": 90 } } } ],
+                       "onNoMatch": "skipIfOther" } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        Assert.Equal(NoMatchAction.SkipIfOther, Assert.IsType<FirstMatchStep>(m.Steps![0]).OnNoMatch);
+        Assert.Null(StepValidator.Validate(m.Steps));
+    }
+
+    [Fact]
+    public void Validator_refuses_skipIfOther_on_a_candidate_with_no_other_colour()
+    {
+        var err = StepValidator.Validate(new MacroStep[]
+        {
+            new FirstMatchStep(0, "am-off", "Auto Mine off", new[]
+            {
+                new PointStep(0, "am-off-dot", "dot", 40, 300, Check: new ColorCheck(new CheckBox(15, -11, 3, 3), new Rgb(125, 246, 13))),
+            }, NoMatchAction.SkipIfOther),
+        });
+        Assert.Equal("Step 1 'Auto Mine off': candidate 'dot' has no other colour, so skipIfOther can never skip.", err);
+    }
+
+    [Fact]
+    public void Reach_round_trips_on_holds_and_points()
+    {
+        var store = new MacroStore(_dir);
+        var m = Sample() with
+        {
+            Steps = new MacroStep[]
+            {
+                new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()),
+                    Reach: new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60)),
+                new PointStep(0, "p1", "Ore", 456, 300, Reach: new OutlineCheck(new CheckBox(-30, -30, 60, 60), 25, 240)),
+            },
+        };
+        store.Save(m);
+        var json = File.ReadAllText(Path.Combine(_dir, m.Id + ".json"));
+        Assert.Contains("\"reach\": {", json);
+        Assert.Contains("\"minCount\": 60", json);
+        Assert.Contains("\"whiteMin\": 225", json);
+
+        var loaded = Assert.Single(store.LoadAll().Macros);
+        var h = Assert.IsType<HoldStep>(loaded.Steps![0]);
+        Assert.Equal(new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60, 225), h.Reach);
+        var p = Assert.IsType<PointStep>(loaded.Steps[1]);
+        Assert.Equal(new OutlineCheck(new CheckBox(-30, -30, 60, 60), 25, 240), p.Reach);
+    }
+
+    [Fact]
+    public void An_agent_written_reach_loads_with_its_default_whiteMin()
+    {
+        Directory.CreateDirectory(_dir);
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(Path.Combine(_dir, id + ".json"), $$"""
+        { "schemaVersion": 4, "id": "{{id}}", "recordedAtUnixMs": 1, "events": [],
+          "coordSpace": "client", "recordedClientW": 800, "recordedClientH": 599,
+          "steps": [ { "kind": "hold", "delayMs": 0, "id": "spot-N", "x": 400, "y": 244,
+                       "check": { "box": { "offsetX": -2, "offsetY": -2, "w": 5, "h": 5 } },
+                       "reach": { "box": { "offsetX": -40, "offsetY": -40, "w": 80, "h": 80 }, "minCount": 60 } } ] }
+        """);
+        var m = Assert.Single(new MacroStore(_dir).LoadAll().Macros);
+        var h = Assert.IsType<HoldStep>(m.Steps![0]);
+        Assert.Equal(OutlineCheck.DefaultWhiteMin, h.Reach!.WhiteMin);
+        Assert.Equal(60, h.Reach.MinCount);
+        Assert.Null(StepValidator.Validate(m.Steps));
+    }
+
+    [Fact]
+    public void Validator_refuses_bad_reach_checks_with_a_sentence()
+    {
+        HoldStep H(OutlineCheck reach) => new(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach);
+        string? V(params MacroStep[] steps) => StepValidator.Validate(steps);
+        var box = new CheckBox(-40, -40, 80, 80);
+
+        Assert.Null(V(H(new OutlineCheck(box, 60))));
+        Assert.Null(V(H(new OutlineCheck(new CheckBox(-120, -120, 240, 240), 57600, 1))));
+        Assert.Equal("Step 1 'Spot N' has a reach check with no box.", V(H(new OutlineCheck(null!, 60))));
+        Assert.Equal("Step 1 'Spot N' has an empty reach box.", V(H(new OutlineCheck(new CheckBox(0, 0, 0, 80), 60))));
+        Assert.Equal("Step 1 'Spot N' has a reach box larger than 240x240.", V(H(new OutlineCheck(new CheckBox(0, 0, 241, 80), 60))));
+        Assert.Equal("Step 1 'Spot N' has a reach minCount below 1.", V(H(new OutlineCheck(box, 0))));
+        Assert.Equal("Step 1 'Spot N' has a reach minCount larger than its box, so it can never pass.", V(H(new OutlineCheck(new CheckBox(0, 0, 4, 4), 17))));
+        Assert.Equal("Step 1 'Spot N' has a reach whiteMin outside 1 to 255.", V(H(new OutlineCheck(box, 60, 256))));
+        Assert.Equal("Step 1 'Spot N' has a reach whiteMin outside 1 to 255.", V(H(new OutlineCheck(box, 60, 0))));
+
+        var green = new ColorCheck(new CheckBox(), new Rgb(139, 224, 58));
+        Assert.Null(V(new PointStep(0, "p1", "Ore", 400, 244, Reach: new OutlineCheck(box, 60))));
+        Assert.Null(V(new PointStep(0, "p1", "Ore", 400, 244, Check: green, CheckEnabled: false, Reach: new OutlineCheck(box, 60))));
+        Assert.Equal("Step 1 'Ore' has a reach minCount below 1.", V(new PointStep(0, "p1", "Ore", 400, 244, Reach: new OutlineCheck(box, 0))));
+        Assert.Equal("Step 1 'Ore' has both a colour check and a reach check; use one.",
+            V(new PointStep(0, "p1", "Ore", 400, 244, Check: green, CheckEnabled: true, Reach: new OutlineCheck(box, 60))));
+        Assert.Equal("Step 1 'Best mine': candidate '#8' has a reach check, which a first match does not use.",
+            V(new FirstMatchStep(0, "f1", "Best mine", new[] { new PointStep(0, "f1a", "#8", 1, 1, Check: green, Reach: new OutlineCheck(box, 60)) })));
+    }
+
+    [Fact]
+    public void A_reach_check_does_not_change_the_estimate()
+    {
+        // The estimate is a floor: a skipped step can end sooner, a held one later.
+        var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
+        Assert.Equal(StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1)), StepTiming.EstimateMs(new HoldStep(300, "h", null, 1, 1, Reach: reach)));
+        Assert.Equal(StepTiming.EstimateMs(new PointStep(300, "p", null, 1, 1)), StepTiming.EstimateMs(new PointStep(300, "p", null, 1, 1, Reach: reach)));
+        Assert.Equal(300, StepTiming.ReachGraceMs);
+    }
 }

@@ -184,4 +184,69 @@ public class MacroPlayerStepPathTests : IDisposable
         Assert.Equal("Alt: step 2 'Tile' could not see the window.", alt.Reason);
         Assert.Equal((498, 373, 5, 5), sampler.Rects.Single());
     }
+
+    [Fact]
+    public async Task A_ClearAt_macro_hands_its_guard_to_the_step_runner()
+    {
+        // The guard is the first thing a ClearAt point samples, before any park or input. The
+        // blind sampler sees nothing there, so the point stops before any input is sent.
+        var metrics = new FakeMetrics { Client = (816, 638), Outer = (10, 20, 832, 677) };
+        var sampler = new BlindSampler();
+        var player = Player(metrics, new FakeScale(100), sampler);
+        var request = new Labs626.UrTask.Ipc.ClearAtRequest("1.0", "ClearAt", "626labs.ur-ocr", "42",
+            new Labs626.UrTask.Ipc.ClearAtClient(816, 638), new[] { new Labs626.UrTask.Ipc.ClearAtPoint(400, 300, "ore 1") },
+            new Labs626.UrTask.Ipc.ClearAtOutline(50, 50, 60), Guard: new Labs626.UrTask.Ipc.ClearAtGuard(55, 289, 3, 3, new Rgb(255, 19, 90), 30));
+        var macro = Labs626.UrTask.Ipc.ClearAtMacro.Build(request, "clearat-pb1");
+
+        var result = await player.PlayAsync(macro, targetUserId: 42);
+
+        Assert.Equal((PlaybackOutcome.Aborted, (int?)0), (result.Outcome, result.StepIndex));
+        Assert.Equal((55, 289, 3, 3), sampler.Rects[0]);
+    }
+
+    [Fact]
+    public async Task A_clean_finish_is_logged()
+    {
+        var metrics = new FakeMetrics { Client = (816, 638), Outer = (10, 20, 832, 677) };
+        var player = Player(metrics, new FakeScale(100));
+
+        await player.PlayAsync(PointMacro(816, 638, 100, new MacroStep[] { new WaitStep(0) }), targetUserId: 42);
+
+        Assert.Contains(File.ReadAllLines(DiagLog.CurrentLogPath),
+            l => l.Contains("playback finished: 'points' on Alt in ") && l.EndsWith(" s."));
+    }
+
+    [Fact]
+    public async Task A_stop_sentence_is_logged()
+    {
+        var metrics = new FakeMetrics { MinOuter = PointMath.RobloxMinOuter(125) };
+        var player = Player(metrics, new FakeScale(125));
+        var check = new ColorCheck(new CheckBox(), new Rgb(139, 224, 58));
+        var macro = PointMacro(1000, 800, 100, new MacroStep[]
+        {
+            new WaitStep(0),
+            new PointStep(0, "p1", "Tile", 400, 300, Check: check, CheckEnabled: true),
+        });
+
+        await player.PlayAsync(macro, targetUserId: 42);
+
+        Assert.Contains(File.ReadAllLines(DiagLog.CurrentLogPath),
+            l => l.Contains("playback stopped at step 2: 'points' on Alt after ")
+                 && l.EndsWith(" s. Alt: step 2 'Tile' could not see the window."));
+    }
+
+    [Fact]
+    public async Task A_v3_playback_logs_its_finish_too()
+    {
+        // No events and no client space: the v3 path runs and sends nothing.
+        var v3 = new Macro(SchemaVersion: 3, Id: "m3", Name: "keys only", RecordMode: "PerWindow",
+            RecordedAgainstUserId: null, RecordedAgainstDisplayName: null, InterAltDelayMs: null,
+            RecordedAtUnixMs: 1, Events: Array.Empty<MacroEvent>());
+        var player = Player(new FakeMetrics(), new FakeScale(100));
+
+        var r = await player.PlayAsync(v3, targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Completed, r.Outcome);
+        Assert.Contains(File.ReadAllLines(DiagLog.CurrentLogPath), l => l.Contains("playback finished: 'keys only' on Alt in "));
+    }
 }

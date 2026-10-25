@@ -89,4 +89,23 @@ public class WindowSpaceMathTests
         Assert.Equal(work.X, x);
         Assert.Equal(rect.Y, y); // Y was already in range — untouched
     }
+
+    [Theory]
+    // Outer rect (100,200) 816x638, client origin (108,231): a 31 px title bar above the client.
+    [InlineData(508, 219, true)]   // client (400,-12): on the title bar
+    [InlineData(508, 231, false)]  // the client's own top row: a block could be there
+    [InlineData(508, 199, false)]  // above the window
+    [InlineData(99, 219, false)]   // left of the window
+    [InlineData(916, 219, false)]  // right of the window (right edge is exclusive)
+    public void OnFrameAboveClient_accepts_only_the_windows_own_frame_above_its_client(int x, int y, bool expected)
+    {
+        Assert.Equal(expected, WindowSpaceMath.OnFrameAboveClient((x, y), (100, 200, 816, 638), (108, 231)));
+    }
+
+    [Fact]
+    public void OnFrameAboveClient_refuses_a_borderless_window()
+    {
+        // Outer rect and client share their top edge: nothing above the client belongs to the window.
+        Assert.False(WindowSpaceMath.OnFrameAboveClient((500, 188), (100, 200, 800, 600), (100, 200)));
+    }
 }

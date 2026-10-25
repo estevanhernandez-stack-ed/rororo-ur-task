@@ -53,4 +53,22 @@ public class PointMathTests
     [InlineData(150, 1224, 957)]
     public void Roblox_minimum_window_scales(int scale, int w, int h)
         => Assert.Equal((w, h), PointMath.RobloxMinOuter(scale));
+
+    [Fact]
+    public void A_reach_box_scales_like_points()
+    {
+        var box = new CheckBox(-40, -40, 80, 80);
+        Assert.Equal((360, 204, 80, 80), PointMath.ScaledRect((400, 244), box, (800, 599), (800, 599)));
+        // 800x599 recorded, 1000x749 actual: x by 1.25, y by 1.2504.
+        Assert.Equal((450, 255, 100, 100), PointMath.ScaledRect((500, 305), box, (800, 599), (1000, 749)));
+    }
+
+    [Fact]
+    public void A_reach_min_count_scales_with_the_smaller_side_and_never_below_one()
+    {
+        Assert.Equal(60, PointMath.ScaledCount(60, (800, 599), (800, 599)));
+        Assert.Equal(75, PointMath.ScaledCount(60, (800, 599), (1000, 749)));
+        Assert.Equal(47, PointMath.ScaledCount(60, (1000, 749), (800, 599))); // 60 * 0.7997, rounded down
+        Assert.Equal(1, PointMath.ScaledCount(1, (800, 599), (400, 300)));
+    }
 }

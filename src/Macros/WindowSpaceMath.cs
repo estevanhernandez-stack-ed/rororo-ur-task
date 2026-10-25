@@ -26,6 +26,16 @@ public static class WindowSpaceMath
             currentOuter.H - currentClient.H + targetClient.H);
 
     /// <summary>
+    /// True when a screen point lies on the window's own frame above its client
+    /// area: inside the outer rect, above the client's top row. That is the title
+    /// bar, where the step path parks the pointer so it hovers nothing in the
+    /// game. A borderless window has no such row, so nothing passes.
+    /// </summary>
+    public static bool OnFrameAboveClient((int X, int Y) screen, (int X, int Y, int W, int H) outer, (int X, int Y) clientOrigin)
+        => screen.X >= outer.X && screen.X < outer.X + outer.W
+        && screen.Y >= outer.Y && screen.Y < clientOrigin.Y;
+
+    /// <summary>
     /// Clamp a target outer rect's POSITION so the whole window fits inside the
     /// monitor work area (screen minus taskbar). Returns the adjusted top-left
     /// and whether it fits at all — false when the window is larger than the

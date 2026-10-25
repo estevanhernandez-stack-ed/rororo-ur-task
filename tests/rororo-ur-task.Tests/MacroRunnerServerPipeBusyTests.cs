@@ -26,6 +26,11 @@ public class MacroRunnerServerPipeBusyTests
             => throw new InvalidOperationException("no connections expected in this test");
         public GetPlaybackResponse GetPlayback(GetPlaybackRequest request)
             => throw new InvalidOperationException("no connections expected in this test");
+        public Task<RunMacroResponse> ClearAtAsync(ClearAtRequest request, CancellationToken ct)
+            => throw new InvalidOperationException("no connections expected in this test");
+
+        public Task<RunMacroResponse> SweepPathAsync(SweepPathRequest request, CancellationToken ct)
+            => throw new InvalidOperationException("no connections expected in this test");
     }
 
     [Fact]

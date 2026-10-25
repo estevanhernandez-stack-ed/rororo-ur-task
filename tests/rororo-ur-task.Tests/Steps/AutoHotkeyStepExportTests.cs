@@ -74,4 +74,44 @@ public class AutoHotkeyStepExportTests
         Assert.Contains("; check: 'Bad Label' expects #8BE03A here (Ur Task only)", text);
         Assert.Contains("; first match 'Multi Line': Ur Task presses the first candidate whose colour matches; exported as 'Cand Label'", text);
     }
+
+    [Fact]
+    public void A_hold_exports_as_a_button_down_a_sleep_and_an_up_with_a_note()
+    {
+        var hold = new HoldStep(300, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()));
+
+        var v1 = AutoHotkeyExporter.Export(M(hold), AhkVersion.V1);
+        Assert.Contains("Sleep, 300\r\n; hold: 'Spot N' stays down until its colour changes (Ur Task only); exported as a 1000 ms hold\r\n", v1);
+        Assert.Contains("Click, 400, 244, Left, , D\r\nSleep, 1000\r\nClick, 400, 244, Left, , U", v1);
+
+        var v2 = AutoHotkeyExporter.Export(M(hold with { MaxMs = 2500, Button = 2, Label = "Two\nLines" }), AhkVersion.V2);
+        Assert.Contains("; hold: 'Two Lines' stays down until its colour changes or 2500 ms pass (Ur Task only); exported as a 2500 ms hold", v2);
+        Assert.Contains("Click \"400 244 Right Down\"\r\nSleep 2500\r\nClick \"400 244 Right Up\"", v2);
+    }
+
+    [Fact]
+    public void Reach_exports_as_a_comment_on_holds_and_points()
+    {
+        var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
+        var text = AutoHotkeyExporter.Export(M(
+            new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach),
+            new PointStep(0, "p1", "Two\nLines", 456, 300, Reach: reach)), AhkVersion.V1);
+
+        Assert.Contains("; reach: 'Spot N' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\n; hold: 'Spot N'", text);
+        Assert.Contains("; reach: 'Two Lines' needs a white outline here (60 near-white px in 80x80); Ur Task skips the step without one (Ur Task only)\r\nClick, 456, 300, Left", text);
+    }
+
+    [Fact]
+    public void A_reach_hold_notes_that_it_holds_longer_until_the_block_breaks()
+    {
+        var reach = new OutlineCheck(new CheckBox(-40, -40, 80, 80), 60);
+        var hold = new HoldStep(0, "spot-N", "Spot N", 400, 244, Check: new HoldCheck(new CheckBox()), Reach: reach);
+
+        var open = AutoHotkeyExporter.Export(M(hold), AhkVersion.V1);
+        Assert.Contains("; hold: 'Spot N' holds for 300 ms, then twice as long each time up to 3000 ms, looking after each, until the outline goes or moves to the next block (Ur Task only); exported as a 1000 ms hold\r\n", open);
+        Assert.DoesNotContain("colour changes", open);
+
+        var capped = AutoHotkeyExporter.Export(M(hold with { MaxMs = 2500 }), AhkVersion.V1);
+        Assert.Contains("; hold: 'Spot N' holds for 300 ms, then twice as long each time up to 3000 ms, looking after each, until the outline goes or moves to the next block, or 2500 ms pressed (Ur Task only); exported as a 2500 ms hold\r\n", capped);
+    }
 }

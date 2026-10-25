@@ -4,13 +4,17 @@ namespace Labs626.UrTask.Hotkeys;
 
 /// <summary>
 /// Registers Ctrl+Shift+R (record toggle), Ctrl+Shift+P (play assignments),
-/// Ctrl+Shift+L (run routine), and Ctrl+Shift+A (abort) as Win32 global hotkeys
+/// Ctrl+Shift+L (run routine), and Ctrl+Shift+F12 (abort) as Win32 global hotkeys
 /// for the plugin's lifetime. Bare Esc is ALSO an abort key, but registered on
 /// demand only while a macro plays (EnableAbortKey/DisableAbortKey) — a
 /// permanent bare-Esc grab swallows Esc system-wide for every app whenever the
 /// plugin runs. v0.1 used bare F8/F5/Esc, which hijacked those keys system-wide
 /// (browser refresh, IDE reload, Roblox Studio play); v0.2 moved record/play to
-/// chords; v0.3.1 closed the same hole on abort.
+/// chords; v0.3.1 closed the same hole on abort. v0.12.0 moved the abort chord
+/// from Ctrl+Shift+A to Ctrl+Shift+F12: typing relayed through Mouse Without
+/// Borders or Chrome Remote Desktop can leave Ctrl and Shift held, and the next
+/// 'a' typed then arrives as Ctrl+Shift+A (live 2026-09-30, it stopped the pulse
+/// loop three times). Typing never produces F12.
 ///
 /// Listens on its own background thread with a message pump — RegisterHotKey
 /// delivers WM_HOTKEY through the thread's message queue and needs a GetMessage
@@ -39,7 +43,7 @@ internal sealed class HotkeyService : IDisposable
     // VK codes
     private const int VK_R = 0x52;
     private const int VK_P = 0x50;
-    private const int VK_A = 0x41;
+    private const int VK_F12 = 0x7B;
     private const int VK_L = 0x4C;
     private const int VK_ESCAPE = 0x1B;
 
@@ -47,7 +51,7 @@ internal sealed class HotkeyService : IDisposable
     private const int ID_RECORD_TOGGLE = 1;
     private const int ID_PLAY = 2;
     private const int ID_ABORT_BARE = 3;   // bare Esc — registered only while a macro plays
-    private const int ID_ABORT_CHORD = 4;  // Ctrl+Shift+A — registered for the plugin's lifetime
+    private const int ID_ABORT_CHORD = 4;  // Ctrl+Shift+F12 — registered for the plugin's lifetime
     private const int ID_RUN_ROUTINE = 5;  // Ctrl+Shift+L — run the selected recipe/loadout routine
 
     private readonly object _lock = new();
@@ -57,14 +61,28 @@ internal sealed class HotkeyService : IDisposable
     private Exception? _startError;
     private volatile bool _running;
 
-    public event Action<HotkeyKind>? HotkeyPressed;
+    /// <summary>A registered hotkey fired: its kind, and where it came from (AbortLog.Source): the
+    /// key's name, and for an abort key also what was in front at that moment, read on this pump
+    /// thread as the WM_HOTKEY arrives. WM_HOTKEY does not say whether the press was injected.</summary>
+    public event Action<HotkeyKind, string>? HotkeyPressed;
+
+    /// <summary>The key a hotkey id stands for, as the log names it.</summary>
+    internal static string KeyName(int id) => id switch
+    {
+        ID_RECORD_TOGGLE => "Ctrl+Shift+R",
+        ID_PLAY => "Ctrl+Shift+P",
+        ID_ABORT_BARE => "Esc",
+        ID_ABORT_CHORD => "Ctrl+Shift+F12",
+        ID_RUN_ROUTINE => "Ctrl+Shift+L",
+        _ => $"hotkey {id}",
+    };
 
     /// <summary>
     /// VK codes the service has registered as chord hotkeys. MacroRecorder consults
     /// this to skip them at record time — but only when Ctrl+Shift is held
     /// (otherwise lowercase 'r'/'p' typing would get eaten).
     /// </summary>
-    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_A, VK_L };
+    public static IReadOnlyCollection<int> ChordHotkeyVkCodes { get; } = new[] { VK_R, VK_P, VK_F12, VK_L };
 
     /// <summary>VK code for the bare Esc hotkey — always filtered at record time.</summary>
     public static int AbortVkCode => VK_ESCAPE;
@@ -148,13 +166,13 @@ internal sealed class HotkeyService : IDisposable
                 throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+P) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_PLAY);
 
-            // Abort is a chord (Ctrl+Shift+A) so it never hijacks a bare key.
+            // Abort is a chord (Ctrl+Shift+F12) so it never hijacks a bare key.
             // Bare Esc is ALSO an abort key, but registered on demand only while a
             // macro plays (see EnableAbortKey/WM_ENABLE_ABORT). v0.3.0 and earlier
             // registered bare Esc here for the whole session, which swallowed Esc
             // system-wide for every app whenever the plugin was running.
-            if (!RegisterHotKey(IntPtr.Zero, ID_ABORT_CHORD, chord, VK_A))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+A) failed, win32 error {Marshal.GetLastWin32Error()}");
+            if (!RegisterHotKey(IntPtr.Zero, ID_ABORT_CHORD, chord, VK_F12))
+                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+F12) failed, win32 error {Marshal.GetLastWin32Error()}");
             registered.Add(ID_ABORT_CHORD);
 
             if (!RegisterHotKey(IntPtr.Zero, ID_RUN_ROUTINE, chord, VK_L))
@@ -183,7 +201,8 @@ internal sealed class HotkeyService : IDisposable
                 }
                 if (msg.message == WM_HOTKEY)
                 {
-                    var kind = msg.wParam.ToInt32() switch
+                    var id = msg.wParam.ToInt32();
+                    var kind = id switch
                     {
                         ID_RECORD_TOGGLE => HotkeyKind.RecordToggle,
                         ID_PLAY => HotkeyKind.Play,
@@ -194,7 +213,13 @@ internal sealed class HotkeyService : IDisposable
                     };
                     if (kind is not null)
                     {
-                        try { HotkeyPressed?.Invoke(kind.Value); }
+                        try
+                        {
+                            var source = kind == HotkeyKind.Abort
+                                ? AbortLog.Source(KeyName(id), PluginHost.Win32Focus.DescribeForeground())
+                                : KeyName(id);
+                            HotkeyPressed?.Invoke(kind.Value, source);
+                        }
                         catch { /* swallow — handler exceptions shouldn't kill the pump */ }
                     }
                 }

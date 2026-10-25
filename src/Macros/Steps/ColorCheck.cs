@@ -50,6 +50,15 @@ public sealed record ColorCheck(
     public const int DefaultTolerance = 15;
 }
 
+/// <summary>
+/// What a hold watches: a box, and how far its average colour may move from the sample taken
+/// just before the press. There is no expected colour: the hold learns it at press time, so one
+/// macro works for every ore.
+/// <para>Hand- or agent-written JSON: a missing <c>box</c> reads as null and <c>StepValidator</c>
+/// refuses it with a sentence before playback.</para>
+/// </summary>
+public sealed record HoldCheck(CheckBox Box, int Tolerance = ColorCheck.DefaultTolerance);
+
 public readonly record struct ColorVerdict(bool Matched, double Distance, double? DistanceToOther);
 
 public static class ColorMatcher

@@ -70,7 +70,7 @@ Portable macro recording and multi-account automation for RoRoRo-managed Roblox 
 | `Ctrl+Shift+R` | Start / stop recording |
 | `Ctrl+Shift+P` | Play assignments (round-robin loop) — press again to stop |
 | `Ctrl+Shift+L` | Run the selected routine on the checked alts |
-| `Ctrl+Shift+A` | Abort current playback |
+| `Ctrl+Shift+F12` | Abort current playback |
 | `Esc` | Abort — but only while a macro is playing, so `Esc` stays yours the rest of the time |
 | `Ctrl+Shift+M` | Toggle compact mode |
 

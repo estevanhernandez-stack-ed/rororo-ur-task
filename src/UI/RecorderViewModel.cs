@@ -42,7 +42,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         Toasts = new ObservableCollection<ToastItem>();
 
         RecordCommand = new RelayCommand(_runtime.TriggerRecordToggle);
-        StopCommand = new RelayCommand(_runtime.TriggerAbort);
+        StopCommand = new RelayCommand(() => _runtime.TriggerAbort("Stop button"));
         ToggleCompactCommand = new RelayCommand(() => IsCompact = !IsCompact);
 
         // Assignment commands
@@ -109,7 +109,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         // Single RUN/STOP toggle for the routine strip button — mirrors
         // TogglePlayStopCommand. Stopping always routes through TriggerAbort
-        // (the same Esc/Ctrl+Shift+A abort surface) rather than calling
+        // (the same Esc/Ctrl+Shift+F12 abort surface) rather than calling
         // _activeRecipeRunner.Abort() directly, because a routine can be a
         // looping recipe (_runner active) OR a loadout mid-position
         // (_sequence active) — TriggerAbort's Abort case already covers both.
@@ -118,7 +118,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             {
                 if (IsRoutineRunning)
                 {
-                    _runtime.TriggerAbort();
+                    _runtime.TriggerAbort("routine Run/Stop button");
                     return;
                 }
                 if (RunRoutineCommand.CanExecute(null)) RunRoutineCommand.Execute(null);
@@ -143,7 +143,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             () => Assignments.Count > 0 && !IsRunnerActive);
 
         StopAssignmentsCommand = new RelayCommand(
-            () => _runtime.TriggerAbort(),
+            () => _runtime.TriggerAbort("Stop assignments button"),
             () => IsRunnerActive);
 
         // Single PLAY/STOP toggle — bound to the unified button. When runner is
@@ -155,7 +155,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             {
                 if (IsRunnerActive)
                 {
-                    _runtime.TriggerAbort();
+                    _runtime.TriggerAbort("Play/Stop button");
                     return;
                 }
                 var mismatched = Assignments.Where(r => r.HasGameMismatch).ToList();

@@ -20,6 +20,18 @@ public class PlaybackRegistryTests
     }
 
     [Fact]
+    public void A_finished_ClearAt_names_its_no_outline_points_and_other_playbacks_name_none()
+    {
+        var reg = new PlaybackRegistry(() => _now);
+        reg.Started("a");
+        reg.Finished("a", PlaybackState.Finished, null, null, null, new[] { 2, 5 });
+        reg.Started("b");
+        reg.Finished("b", PlaybackState.Finished, null, null, null);
+        Assert.Equal(new[] { 2, 5 }, reg.Get("a").NoOutline);
+        Assert.Null(reg.Get("b").NoOutline);
+    }
+
+    [Fact]
     public void Finished_playbacks_expire_after_ten_minutes()
     {
         var reg = new PlaybackRegistry(() => _now);
