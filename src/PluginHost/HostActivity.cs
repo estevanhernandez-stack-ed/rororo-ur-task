@@ -98,7 +98,8 @@ internal sealed class HostActivityPoller(IHostActivity host, Macros.KeepAliveLed
         }
     }
 
-    private async Task PollOnceAsync(CancellationToken ct)
+    /// <summary>One poll. Never throws: a failed or declined read is reported and the ledger stays as it was.</summary>
+    internal async Task PollOnceAsync(CancellationToken ct)
     {
         try
         {

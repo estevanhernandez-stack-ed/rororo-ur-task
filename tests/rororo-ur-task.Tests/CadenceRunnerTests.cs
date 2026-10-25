@@ -742,17 +742,14 @@ public class CadenceRunnerTests
     /// "running" state forever too.
     ///
     /// FakePlayer.AdvanceClockBy throwing simulates PlayAsync itself throwing (the
-    /// real ArgumentOutOfRangeException class of failure) — RunActiveAsync's own
-    /// catch only handles OperationCanceledException, so this propagates all the way
-    /// out of RunAsync, exactly the escape path Critical 2 describes.
-    ///
-    /// Verified by hand: reverting the fix (moving the Stopped emit back to the last
-    /// line of the try block, outside the finally) turns
-    /// <c>Assert.Contains(AssignmentPhase.Stopped, phases)</c> RED — Stopped never
-    /// fires when the exception is the reason the loop ends.
+    /// real ArgumentOutOfRangeException class of failure). Since 0.13.0 the main loop
+    /// treats a service that throws like a miss (logged, 30 s back-off, keep going), so
+    /// the loop now ends on the run's cancellation, and Stopped must still fire and
+    /// IsRunning still clear. An exception that escapes during setup keeps the original
+    /// Critical 2 coverage (FinalFixTests.A_setup_exception_still_emits_Stopped).
     /// </summary>
     [Fact]
-    public async Task ExceptionEscapingLoopBody_StillEmitsStoppedAndClearsIsRunning()
+    public async Task ExceptionInALoopPass_IsSurvived_ThenStopEmitsStoppedAndClearsIsRunning()
     {
         var alt = new Assignment(Alt(1), MacroOfLength(1_000), CadenceRole.Active);
         var rig = Build(new[] { alt }, runForMs: 60 * Min);
@@ -762,9 +759,9 @@ public class CadenceRunnerTests
         var phases = new List<AssignmentPhase>();
         rig.Runner.Progress += (_, p) => phases.Add(p.Phase);
 
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token));
+        await rig.Runner.RunAsync(new[] { alt }, rig.Cts.Token);   // survives every throwing pass
 
+        Assert.True(rig.Player.Plays.Count > 1, "the loop went on after the first throwing pass");
         Assert.Contains(AssignmentPhase.Stopped, phases);
         Assert.False(rig.Runner.IsRunning, "IsRunning must be false once the exception has unwound out of RunAsync");
         Assert.False(rig.Runner.Abort(), "nothing should be left for Abort to cancel after the unwind");

@@ -18,7 +18,7 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
     private static readonly TimeSpan GroupWindow = TimeSpan.FromSeconds(GroupWindowSeconds);
 
     private readonly object _gate = new();
-    private readonly List<(string Name, Miss Miss)> _pending = new();
+    private readonly List<(string Name, Miss Miss, bool Quiet)> _pending = new();
     private readonly HashSet<string> _resetAnnounced = new();
     private DateTimeOffset _groupStart;
     private bool _landedInGroup;
@@ -28,7 +28,9 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
     public static string CauseText(Miss miss) => miss.Cause switch
     {
         MissCause.WindowGone => "window gone",
-        MissCause.FocusRefused => "Windows refused focus",
+        MissCause.FocusRefused => miss.Holder is null
+            ? "Windows refused focus"
+            : $"Windows refused focus while {miss.Holder} was in front",
         MissCause.OtherInFront => $"{miss.Holder ?? "another window"} was in front",
         MissCause.SendRejected => "Windows rejected the input",
         MissCause.HeldOff => $"held off: {miss.Holder ?? "unknown"}",
@@ -73,7 +75,9 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
         Write(lines);
     }
 
-    public void Missed(string name, Miss miss, int consecutive)
+    /// <param name="quiet">The caller already wrote its own line for this miss (the turbo sweep's 0.12.1 skip
+    /// line): it still counts toward the all-at-once line, but gets no per-account line of its own.</param>
+    public void Missed(string name, Miss miss, int consecutive, bool quiet = false)
     {
         var lines = new List<string>();
         lock (_gate)
@@ -87,7 +91,7 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
                 // A landing in the minute before the group opened is part of the same round of due accounts.
                 _landedInGroup = _lastLandedAt is { } landed && now - landed <= GroupWindow;
             }
-            _pending.Add((name, miss));
+            _pending.Add((name, miss, quiet));
         }
         Write(lines);
     }
@@ -132,7 +136,7 @@ internal sealed class MissReporter(Action<string> log, Func<DateTimeOffset> wall
         if (_pending.Count >= 2 && allSame && !_landedInGroup)
             lines.Add($"keep-alive: every due account missed: {CauseText(first)}");
         else
-            foreach (var (name, miss) in _pending)
+            foreach (var (name, miss, _) in _pending.Where(p => !p.Quiet))
                 lines.Add($"keep-alive: missed {name}, {CauseText(miss)}; retry in {RetrySeconds}s");
         _pending.Clear();
         _landedInGroup = false;

@@ -64,7 +64,8 @@ public class RunnerLedgerTests
     /// <param name="focus">the Focus seam; default is a clean success that brings the window forward.</param>
     internal static Rig Build(long startMs, long runForMs, Func<Rig, AccountRegistry.AccountInfo?>? inFront = null,
         string holder = "unknown", bool sendOk = true, Func<int, FocusAttempt>? focus = null,
-        Action<Rig, long>? onSleep = null, Action<string>? markActive = null, FakePlayer? player = null)
+        Action<Rig, long>? onSleep = null, Action<string>? markActive = null, FakePlayer? player = null,
+        Func<CadenceDeps, CadenceDeps>? tweak = null)
     {
         Rig rig = null!;
         var cts = new CancellationTokenSource();
@@ -96,10 +97,11 @@ public class RunnerLedgerTests
             KeepAliveLimitFor = _ => Fifteen,
             MarkActive = markActive ?? (_ => { }),
         };
+        var finalDeps = tweak is null ? deps : tweak(deps);   // a tweak reaches the rig through a captured local
         rig = new Rig
         {
             Cts = cts, Ledger = ledger, NowMs = startMs,
-            Runner = new AssignmentRunner(player ?? new FakePlayer(), new Fg(() => inFront is null ? rig.Target : inFront(rig)), deps, ledger),
+            Runner = new AssignmentRunner(player ?? new FakePlayer(), new Fg(() => inFront is null ? rig.Target : inFront(rig)), finalDeps, ledger),
         };
         return rig;
     }
@@ -242,12 +244,13 @@ public class RunnerLedgerTests
     public async Task A_refused_focus_that_does_not_verify_is_a_FocusRefused_miss()
     {
         var rig = Build(startMs: 10 * Min, runForMs: 10 * Min + 3_000, inFront: _ => null,
+            holder: "'Notepad' (notepad)",
             focus: _ => new FocusAttempt(false, MissCause.FocusRefused, "refused"));
         await rig.Run(Alt(1));
 
         Assert.Equal(0, rig.Sent);
         Assert.Equal(MissCause.FocusRefused, rig.Ledger.Get(1)!.LastMiss!.Cause);
-        Assert.Contains("keep-alive: missed alt1, Windows refused focus; retry in 30s", rig.Log);
+        Assert.Contains("keep-alive: missed alt1, Windows refused focus while 'Notepad' (notepad) was in front; retry in 30s", rig.Log);
     }
 
     [Fact]

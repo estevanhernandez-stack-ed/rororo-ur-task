@@ -215,7 +215,9 @@ public class MembershipTests
         Assert.True(done);
         Assert.True(playsAtRelaunch > 0);
         Assert.True(plays > playsAtRelaunch);        // still farming after the relaunch
-        Assert.Null(rig.Ledger.Get(2));              // never became a keep-alive account
+        // Tracked (GetStatus lists it, macro keys credit it) but never served as keep-alive.
+        Assert.DoesNotContain(rig.Log, l => l.Contains("Space to alt2") || l.Contains("alt2 joined the loop"));
+        Assert.NotEqual(InputSource.KeepAlive, rig.Ledger.Get(2)!.LastSource);
     }
 
     [Fact]

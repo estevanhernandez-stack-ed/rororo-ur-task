@@ -49,6 +49,10 @@ internal sealed record CadenceDeps(
     /// activity clock. Fire-and-forget; must not throw. No-op by default.</summary>
     public Action<string> MarkActive { get; init; } = _ => { };
 
+    /// <summary>One poll of RoRoRo's activity clock into the ledger, awaited (bounded) at loop start so the
+    /// first due times come from both clocks. No-op by default.</summary>
+    public Func<CancellationToken, Task> RefreshHostActivity { get; init; } = _ => Task.CompletedTask;
+
     private sealed class NoGuard : IDisposable
     {
         public static readonly NoGuard Instance = new();
@@ -111,6 +115,8 @@ internal sealed class AssignmentRunner
     private const int UnschedulableRunwayMinutes = 2; // warn when the projected gap comes within this of the limit
     internal const long PreemptMarginMs = 60_000;   // a playback that reaches no boundary is cut at limit - 1 min
     internal const int WatchdogTickMs = 1_000;      // how often the watchdog looks while a playback is in
+    internal const long PreemptFloorMs = 5_000;     // a playback always gets this long to reach a step boundary
+    internal static readonly TimeSpan HostRefreshTimeout = TimeSpan.FromSeconds(2);   // loop start waits this long for RoRoRo's clock
 
     // Turbo keep-alive. One warned sweep services every keep-alive alt due within
     // the batch window, and each alt costs a polled foreground confirm instead of a
@@ -144,6 +150,8 @@ internal sealed class AssignmentRunner
     /// <summary>When the runner first tracked each account: an account with no input on either clock counts
     /// its idle from here, so it can still reach critical. Kept across runs: a restarted loop served nobody.</summary>
     private readonly Dictionary<long, long> _trackedAtMs = new();
+    /// <summary>Accounts whose clamped place override has been logged: said once per account per plugin run.</summary>
+    private readonly HashSet<long> _clampLogged = new();
     private CancellationTokenSource? _activeCts;
     private volatile bool _turboKeepAlive;
 
@@ -286,13 +294,13 @@ internal sealed class AssignmentRunner
         {
             // The same account relaunched: new window identity only. Role, macro, interval and limit stay.
             existing.Assignment = existing.Assignment with { Alt = alt };
-            if (existing.IsKeepAlive) _ledger.Track(alt, existing.Limit!);
+            Track(alt, existing.Limit ?? LimitFor(alt, ClampedIntervalMs(alt)));   // Active too: GetStatus and macro credits
             return;
         }
-        var intervalMs = Math.Clamp(_deps.KeepAliveIntervalMs(alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs);
+        var intervalMs = ClampedIntervalMs(alt);
         var limit = LimitFor(alt, intervalMs);
         var now = _deps.ClockMs();
-        _ledger.Track(alt, limit);   // keeps an off flag set earlier this session
+        Track(alt, limit);   // keeps an off flag set earlier this session
         lock (_trackedAtMs) _trackedAtMs.TryAdd(alt.RobloxUserId, now);
         var due = _ledger.DueAtMs(alt.RobloxUserId);
         var scheduled = new ScheduledAlt
@@ -386,9 +394,7 @@ internal sealed class AssignmentRunner
             {
                 var resolvedRole = Assignment.ResolveRole(a.Macro, a.Role);
                 var coerced = resolvedRole == a.Role ? a : a with { Role = resolvedRole };
-                var intervalMs = coerced.Role == CadenceRole.KeepAlive
-                    ? Math.Clamp(_deps.KeepAliveIntervalMs(coerced.Alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs)
-                    : 0;
+                var intervalMs = coerced.Role == CadenceRole.KeepAlive ? ClampedIntervalMs(coerced.Alt) : 0;
                 return new ScheduledAlt
                 {
                     Assignment = coerced,
@@ -397,6 +403,18 @@ internal sealed class AssignmentRunner
                 };
             }).ToList();
             _scheduled = initialScheduled;   // from here the schedule is replaced, never edited in place (see AddAssignment)
+
+            // Every account is tracked, Active ones too: nothing schedules an Active account for keep-alive,
+            // but GetStatus lists it and its macro's keys are credited. Then one bounded read of RoRoRo's
+            // clock, so an account the user played a minute ago is not due just because the loop started.
+            var trackedAt = _deps.ClockMs();
+            foreach (var alt in initialScheduled)
+            {
+                var a = alt.Assignment.Alt;
+                Track(a, alt.Limit ?? LimitFor(a, ClampedIntervalMs(a)));
+                if (alt.IsKeepAlive) lock (_trackedAtMs) _trackedAtMs.TryAdd(a.RobloxUserId, trackedAt);
+            }
+            await RefreshHostActivityAsync(ct).ConfigureAwait(false);
 
             // The ledger decides who is due: each keep-alive alt is due at its real last input plus its
             // deadline, so starting the loop resets nobody. An alt with no history is due now, and the
@@ -407,8 +425,6 @@ internal sealed class AssignmentRunner
             {
                 if (!alt.IsKeepAlive) { alt.DueAtMs = startMs; continue; }
                 var userId = alt.Assignment.Alt.RobloxUserId;
-                _ledger.Track(alt.Assignment.Alt, alt.Limit!);
-                lock (_trackedAtMs) _trackedAtMs.TryAdd(userId, startMs);
                 var due = _ledger.DueAtMs(userId);
                 alt.DueAtMs = due <= startMs ? startMs + spreadIndex++ * StartSpreadMs : due;
                 alt.ConsecutiveFocusFailures = _ledger.Get(userId)?.ConsecutiveMisses ?? 0;
@@ -464,11 +480,11 @@ internal sealed class AssignmentRunner
 
                     alreadyWarnedUnschedulable.Add(alt);
                     var gapMins = projectedGapMs / 60_000.0;
+                    var limitMins = (int)Min(alt.Limit!.Limit, TimeSpan.FromMinutes(KeepAliveLimits.PlatformIdleKickFloorMinutes)).TotalMinutes;
                     EmitProgress(new AssignmentProgress(
                         0, -1, assignments.Count, alt.Assignment, AssignmentPhase.Warning,
                         $"{alt.Assignment.Alt.DisplayName} may get kicked — its projected keep-alive gap is " +
-                        $"~{gapMins:F0} min, at or near Roblox's {KeepAliveLimits.PlatformIdleKickFloorMinutes}-minute " +
-                        $"idle floor (games may shorten this, none may extend it). " +
+                        $"~{gapMins:F0} min, at or near its game's {limitMins}-minute idle limit. " +
                         $"Shorten the macro, split it, or set this alt to Active."));
                 }
             }
@@ -663,64 +679,77 @@ internal sealed class AssignmentRunner
                 }
                 finally { ReleaseTurn(); }
 
-                switch (decision)
+                try
                 {
-                    case CadenceDecision.SleepUntil sleep:
-                        // The whole point: nothing to do, so do NOTHING. No focus steal.
-                        // Never sleep past the moment the open miss group is due to be written.
-                        var sleepMs = sleep.WakeAtMs - now;
-                        if (_reporter.UntilFlush is { } until)
-                            sleepMs = Math.Min(sleepMs, Math.Max(1_000, (long)until.TotalMilliseconds));
-                        try { await _deps.Sleep(sleepMs, ct).ConfigureAwait(false); }
-                        catch (OperationCanceledException) { }
-                        break;
-
-                    case CadenceDecision.ServiceKeepAlive svc:
+                    switch (decision)
                     {
-                        var genuinelyOverdue = decidedDue <= now;
-                        // Add() also records this attempt for next time; its return
-                        // tells us whether it was ALREADY there from a prior look.
-                        var alreadyGapFitted = !gapFittedSinceActivePass.Add(svc.Alt);
+                        case CadenceDecision.SleepUntil sleep:
+                            // The whole point: nothing to do, so do NOTHING. No focus steal.
+                            // Never sleep past the moment the open miss group is due to be written.
+                            var sleepMs = sleep.WakeAtMs - now;
+                            if (_reporter.UntilFlush is { } until)
+                                sleepMs = Math.Min(sleepMs, Math.Max(1_000, (long)until.TotalMilliseconds));
+                            try { await _deps.Sleep(sleepMs, ct).ConfigureAwait(false); }
+                            catch (OperationCanceledException) { }
+                            break;
 
-                        if (!genuinelyOverdue && alreadyGapFitted)
+                        case CadenceDecision.ServiceKeepAlive svc:
                         {
-                            // Decide handed back an alt we already gap-fitted, and it's
-                            // still not actually due — servicing it again right now
-                            // would be the spin loop. Force real progress instead: run
-                            // the next Active pass.
-                            //
-                            // There is always one to run here. With zero Actives,
-                            // nextActivePassCostMs is 0 (see NextActivePassCostMs), so
-                            // Decide's urgency horizon collapses to exactly `now` — the
-                            // only way an alt reads as urgent is if it's genuinely
-                            // overdue too, which this branch has already excluded. So
-                            // reaching here is proof at least one Active exists; a
-                            // `firstActive is null` fallback would be unreachable dead
-                            // code (an earlier version of this guard had exactly that,
-                            // credited in a since-rewritten test's docstring).
-                            var firstActive = rotated.First(a => !a.IsKeepAlive);
-                            await RunNextActiveAsync(firstActive, ct).ConfigureAwait(false);
+                            var genuinelyOverdue = decidedDue <= now;
+                            // Add() also records this attempt for next time; its return
+                            // tells us whether it was ALREADY there from a prior look.
+                            var alreadyGapFitted = !gapFittedSinceActivePass.Add(svc.Alt);
+
+                            if (!genuinelyOverdue && alreadyGapFitted)
+                            {
+                                // Decide handed back an alt we already gap-fitted, and it's
+                                // still not actually due — servicing it again right now
+                                // would be the spin loop. Force real progress instead: run
+                                // the next Active pass.
+                                //
+                                // There is always one to run here. With zero Actives,
+                                // nextActivePassCostMs is 0 (see NextActivePassCostMs), so
+                                // Decide's urgency horizon collapses to exactly `now` — the
+                                // only way an alt reads as urgent is if it's genuinely
+                                // overdue too, which this branch has already excluded. So
+                                // reaching here is proof at least one Active exists; a
+                                // `firstActive is null` fallback would be unreachable dead
+                                // code (an earlier version of this guard had exactly that,
+                                // credited in a since-rewritten test's docstring).
+                                var firstActive = rotated.First(a => !a.IsKeepAlive);
+                                await RunNextActiveAsync(firstActive, ct).ConfigureAwait(false);
+                                break;
+                            }
+
+                            // Genuinely overdue (never starved), or this is its first look since the last
+                            // Active pass: service it for real, through the gate. Turbo (or a playback that
+                            // parks for the break) sweeps every keep-alive due within the batch window along
+                            // with it, so the user is interrupted once, not once per alt.
+                            if (await TakeTurnAsync(svc.Alt, decidedDue, ct).ConfigureAwait(false))
+                            {
+                                // Its own macro is playing and it can still wait: look again in a tick. The watchdog
+                                // serves it at its limit less a minute if the playback is still in by then.
+                                try { await _deps.Sleep(WatchdogTickMs, ct).ConfigureAwait(false); }
+                                catch (OperationCanceledException) { }
+                            }
                             break;
                         }
 
-                        // Genuinely overdue (never starved), or this is its first look since the last
-                        // Active pass: service it for real, through the gate. Turbo (or a playback that
-                        // parks for the break) sweeps every keep-alive due within the batch window along
-                        // with it, so the user is interrupted once, not once per alt.
-                        if (await TakeTurnAsync(svc.Alt, decidedDue, ct).ConfigureAwait(false))
-                        {
-                            // Its own macro is playing and it can still wait: look again in a tick. The watchdog
-                            // serves it at its limit less a minute if the playback is still in by then.
-                            try { await _deps.Sleep(WatchdogTickMs, ct).ConfigureAwait(false); }
-                            catch (OperationCanceledException) { }
-                        }
-                        break;
+                        case CadenceDecision.RunActive run:
+                            _reporter.FlushMinute(force: true);   // an Active pass can be long; say what happened first
+                            await RunNextActiveAsync(run.Alt, ct).ConfigureAwait(false);
+                            break;
                     }
-
-                    case CadenceDecision.RunActive run:
-                        _reporter.FlushMinute(force: true);   // an Active pass can be long; say what happened first
-                        await RunNextActiveAsync(run.Alt, ct).ConfigureAwait(false);
-                        break;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    // Like the watchdog: a service that throws is a miss, not the end of keep-alive. Logged, the
+                    // 30 s back-off a miss takes, then Decide again. Only cancellation ends the loop.
+                    try { _deps.SweepLog($"keep-alive: a service failed ({ex.Message}); retry in {FocusRetryBackoffMs / 1000}s"); }
+                    catch { /* a log line must never end the loop */ }
+                    try { await _deps.Sleep(FocusRetryBackoffMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
                 }
             }
         }
@@ -894,7 +923,9 @@ internal sealed class AssignmentRunner
     }
 
     /// <summary>How long a playback gets to reach a step boundary before keep-alive cuts it: the most urgent
-    /// alt's limit less a minute, less its idle so far, never below zero. Unknown idle reads as the deadline.</summary>
+    /// alt's limit less a minute, less its idle so far, never below <see cref="PreemptFloorMs"/> (an account
+    /// already past that point still lets a step seconds from its boundary finish). Unknown idle reads as
+    /// the deadline.</summary>
     private TimeSpan PreemptAfter(IEnumerable<ScheduledAlt> alts, long now)
     {
         var runwayMs = long.MaxValue;
@@ -905,7 +936,7 @@ internal sealed class AssignmentRunner
             var idleMs = e?.LastInputMs is { } last ? now - last : (long)limit.Deadline.TotalMilliseconds;
             runwayMs = Math.Min(runwayMs, (long)limit.Limit.TotalMilliseconds - PreemptMarginMs - idleMs);
         }
-        return TimeSpan.FromMilliseconds(runwayMs == long.MaxValue ? 0 : Math.Max(0, runwayMs));
+        return TimeSpan.FromMilliseconds(runwayMs == long.MaxValue ? PreemptFloorMs : Math.Max(PreemptFloorMs, runwayMs));
     }
 
     /// <summary>The account shows as Serving until the scope ends, then Waiting.</summary>
@@ -918,6 +949,45 @@ internal sealed class AssignmentRunner
     private sealed class StateScope(Action end) : IDisposable
     {
         public void Dispose() => end();
+    }
+
+    private long ClampedIntervalMs(AccountRegistry.AccountInfo alt)
+        => Math.Clamp(_deps.KeepAliveIntervalMs(alt), MinKeepAliveIntervalMs, MaxKeepAliveIntervalMs);
+
+    /// <summary>Tracks the account in the ledger. A place override that was clamped up to the minimum deadline
+    /// is said once per account.</summary>
+    private void Track(AccountRegistry.AccountInfo alt, KeepAliveLimit limit)
+    {
+        _ledger.Track(alt, limit);
+        if (!limit.Clamped) return;
+        bool first;
+        lock (_clampLogged) first = _clampLogged.Add(alt.RobloxUserId);
+        if (!first) return;
+        try
+        {
+            _deps.SweepLog($"keep-alive: {alt.DisplayName}'s place override was under {KeepAliveLimits.MinDeadlineMinutes} min; " +
+                           $"using {KeepAliveLimits.MinDeadlineMinutes} min");
+        }
+        catch { /* a log line never blocks */ }
+    }
+
+    /// <summary>One read of RoRoRo's activity clock into the ledger, given <see cref="HostRefreshTimeout"/> at most.
+    /// A slow, failed or declined read starts the loop on Ur Task's own clock; it never stops the loop.</summary>
+    private async Task RefreshHostActivityAsync(CancellationToken ct)
+    {
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bounded.CancelAfter(HostRefreshTimeout);
+        try
+        {
+            await _deps.RefreshHostActivity(bounded.Token).WaitAsync(HostRefreshTimeout, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* stopping: the loop exits on ct */ }
+        catch (Exception ex)
+        {
+            var why = ex is TimeoutException or OperationCanceledException ? "no answer in 2 s" : ex.Message;
+            try { _deps.SweepLog($"keep-alive: RoRoRo's activity clock wasn't read at start ({why}); starting on Ur Task's own clock"); }
+            catch { /* a log line never blocks */ }
+        }
     }
 
     /// <summary>The alt's limit from the deps, or derived from its (clamped) interval when the deps give none.</summary>
@@ -933,7 +1003,8 @@ internal sealed class AssignmentRunner
     /// <summary>
     /// A keep-alive attempt did not land: record it in the ledger (the source of truth for the streak),
     /// back off 30s, say once if a reset is now unavoidable, and surface the 3-miss warning with its cause.
-    /// <paramref name="log"/> is false for the turbo sweep, which writes its own 0.12.1 line.
+    /// <paramref name="log"/> is false for the turbo sweep, which writes its own 0.12.1 line: the reporter still
+    /// counts the miss toward its all-at-once line, it just writes no per-account line of its own.
     /// </summary>
     private void RecordKeepAliveMiss(
         ScheduledAlt alt, Miss miss, int cycle, int index, int total, bool log)
@@ -944,7 +1015,7 @@ internal sealed class AssignmentRunner
         var count = _ledger.RecordMiss(userId, miss);
         alt.ConsecutiveFocusFailures = count > 0 ? count : alt.ConsecutiveFocusFailures + 1;
         alt.DueAtMs = now + FocusRetryBackoffMs;
-        if (log) _reporter.Missed(asn.Alt.DisplayName, miss, alt.ConsecutiveFocusFailures);
+        _reporter.Missed(asn.Alt.DisplayName, miss, alt.ConsecutiveFocusFailures, quiet: !log);
 
         // Idle has reached the deadline and the next retry cannot land before the game's limit.
         if (_ledger.Get(userId) is { LastInputMs: { } last } e)
@@ -1021,9 +1092,7 @@ internal sealed class AssignmentRunner
             var fg = _foreground.ResolveForegroundAccount();
             if (fg is null || fg.RobloxUserId != asn.Alt.RobloxUserId)
             {
-                var miss = refused
-                    ? new Miss(MissCause.FocusRefused, null)
-                    : new Miss(MissCause.OtherInFront, _deps.DescribeForeground());
+                var miss = new Miss(refused ? MissCause.FocusRefused : MissCause.OtherInFront, _deps.DescribeForeground());
                 RecordKeepAliveMiss(alt, miss, cycle, index, total, log: true);
                 return;
             }
@@ -1146,9 +1215,7 @@ internal sealed class AssignmentRunner
                 {
                     // Safety invariant: the foreground never read as this alt within
                     // the cap — send nothing, back off, warn on the streak crossing.
-                    var miss = refused
-                        ? new Miss(MissCause.FocusRefused, null)
-                        : new Miss(MissCause.OtherInFront, _deps.DescribeForeground());
+                    var miss = new Miss(refused ? MissCause.FocusRefused : MissCause.OtherInFront, _deps.DescribeForeground());
                     RecordKeepAliveMiss(alt, miss, cycle, index, total, log: false);
                     _deps.SweepLog(refused
                         ? $"turbo keep-alive: skipped {name}, focus failed; retry in {FocusRetryBackoffMs / 1000}s"
@@ -1289,7 +1356,10 @@ internal sealed class AssignmentRunner
         {
             // Phase: Focusing
             EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
-            if (!_deps.Focus(asn.Alt.Pid).Ok)
+            // Only a gone window is a hard stop. A refusal is soft, as on the keep-alive paths: Windows
+            // sometimes brings the window forward anyway, so it falls through to the verify below.
+            var attempt = _deps.Focus(asn.Alt.Pid);
+            if (!attempt.Ok && attempt.Cause == MissCause.WindowGone)
             {
                 // Bounded retry — same shape as ServiceKeepAliveAsync's focus-fail
                 // exit: count it against the shared streak and reuse the same

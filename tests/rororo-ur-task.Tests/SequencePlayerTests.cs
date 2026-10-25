@@ -315,4 +315,38 @@ public class SequencePlayerTests
         Assert.Equal(new[] { true, false }, result.PerAlt.Select(a => a.SkippedByReach));
         Assert.All(result.PerAlt, a => Assert.Equal(PlaybackOutcome.Completed, a.Outcome));
     }
+    [Fact]
+    public async Task PlayAsync_RefusedFocus_StillVerifies_AndPlaysWhenTheWindowCameForward()
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        // SetForegroundWindow said no, but Windows brought the window forward anyway.
+        var sequence = new SequencePlayer(player, fg, _ => (false, "Windows refused focus"));
+        fg.Resolver = () => target;
+
+        var result = await sequence.PlayAsync(NewMacro(), new[] { target }, interAltDelayMs: 0);
+
+        Assert.Equal(new[] { 47821334L }, player.CalledWithTargets);
+        Assert.Equal(PlaybackOutcome.Completed, Assert.Single(result.PerAlt).Outcome);
+    }
+
+    [Fact]
+    public async Task PlayAsync_GoneWindow_IsAHardStop_WithNoVerify()
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        var verified = false;
+        fg.Resolver = () => { verified = true; return target; };
+        var sequence = new SequencePlayer(player, fg, _ => new FocusAttempt(false, MissCause.WindowGone, "no window"));
+
+        var result = await sequence.PlayAsync(NewMacro(), new[] { target }, interAltDelayMs: 0);
+
+        Assert.False(verified);
+        Assert.Empty(player.CalledWithTargets);
+        var outcome = Assert.Single(result.PerAlt);
+        Assert.Equal(PlaybackOutcome.Refused, outcome.Outcome);
+        Assert.Equal("no window", outcome.Reason);
+    }
 }

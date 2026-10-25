@@ -153,8 +153,9 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         return Task.FromResult(started with { Note = DeadlineNote(macro, targets) });
     }
 
-    /// <summary>A heads-up when this run is long enough to cross another tracked account's keep-alive
-    /// deadline: the earliest such account. Null when it crosses none. Never affects the run.</summary>
+    /// <summary>A heads-up when this run is long enough to cross another account's keep-alive deadline that is
+    /// still ahead: the earliest such account. Null when it crosses none, or keep-alive is not running (the
+    /// deadlines source is empty then). Never affects the run.</summary>
     private string? DeadlineNote(Macro macro, IReadOnlyList<AccountRegistry.AccountInfo> targets)
     {
         try
@@ -163,13 +164,13 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             var ends = now + macro.Duration;
             var own = targets.Select(t => t.RobloxUserId).ToHashSet();
             var hit = _deadlines()
-                .Where(d => !d.Off && !own.Contains(d.UserId) && d.At < ends)
+                .Where(d => !d.Off && !own.Contains(d.UserId) && d.At > now && d.At < ends)
                 .OrderBy(d => d.At)
                 .FirstOrDefault();
             if (hit is null) return null;
             var minutes = (int)Math.Ceiling(macro.Duration.TotalMinutes);
             return string.Create(CultureInfo.InvariantCulture,
-                $"This run (about {minutes} min) crosses {hit.Name}'s keep-alive deadline at {hit.At:HH:mm}; it will pause there for a Space.");
+                $"This run (about {minutes} min) crosses {hit.Name}'s keep-alive deadline at {hit.At:HH:mm}; keep-alive will pause or stop it there for a Space.");
         }
         catch (Exception ex)
         {

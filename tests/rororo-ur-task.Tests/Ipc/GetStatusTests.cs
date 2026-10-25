@@ -261,7 +261,7 @@ public class GetStatusTests
             new KeepAliveDeadline(5, "beyond", Start.AddMinutes(30), false));
         var r = await inv.RunAsync(Req(), default);
         Assert.True(r.Ok);
-        Assert.Equal("This run (about 10 min) crosses sooner's keep-alive deadline at 12:05; it will pause there for a Space.", r.Note);
+        Assert.Equal("This run (about 10 min) crosses sooner's keep-alive deadline at 12:05; keep-alive will pause or stop it there for a Space.", r.Note);
     }
 
     [Fact]
@@ -276,5 +276,31 @@ public class GetStatusTests
     {
         var inv = InvokerWith(MacroOfMillis(90_000), new KeepAliveDeadline(2, "o", Start.AddMinutes(1), false));
         Assert.Contains("(about 2 min)", (await inv.RunAsync(Req(), default)).Note);
+    }
+    [Fact]
+    public async Task RunMacro_NoNote_ForADeadlineAlreadyPast()
+    {
+        var inv = InvokerWith(MacroOfMillis(10 * 60_000), new KeepAliveDeadline(2, "overdue", Start.AddMinutes(-1), false));
+        Assert.Null((await inv.RunAsync(Req(), default)).Note);
+    }
+
+    [Fact]
+    public void Deadlines_AreEmpty_WhileKeepAliveIsStopped()
+    {
+        var rig = new Rig();
+        rig.Track(7, "A");
+        Assert.Empty(rig.Provider.Deadlines());
+        rig.Running = true;
+        Assert.Single(rig.Provider.Deadlines());
+    }
+
+    [Fact]
+    public void Deadlines_LeaveOutActiveAccounts()
+    {
+        var rig = new Rig { Running = true };
+        rig.Track(7, "A");
+        rig.Track(8, "B");
+        rig.Active.Add(7);
+        Assert.Equal(new[] { 8L }, rig.Provider.Deadlines().Select(d => d.UserId));
     }
 }

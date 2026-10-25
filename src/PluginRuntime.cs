@@ -35,6 +35,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
     private readonly PluginHost.IHostActivity _hostActivity;
+    private readonly PluginHost.HostActivityPoller _activityPoller;
     private readonly CancellationTokenSource _activityCts = new();
 
     /// <summary>The keep-alive ledger shared by the runner and everything that reads or credits idle time.</summary>
@@ -110,6 +111,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Accounts.AccountAdded += (_, info) =>
         {
             Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+            // Tracked from launch, loop or no loop: RoRoRo's activity clock can only reach accounts the ledger
+            // knows, so the first Ctrl+Shift+P finds real idle times instead of sweeping everyone. The startup
+            // snapshot arrives through this same event.
+            TrackAccount(info);
             // A running keep-alive loop takes the new account in (unless it was switched off this session).
             if (_runner.IsRunning) _runner.AddAssignment(new Assignment(info, null, CadenceRole.KeepAlive));
         };
@@ -142,8 +147,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _client = new PluginClient(PluginId, Accounts);
         _hostActivity = new PluginHost.HostActivity(_client, Log);
         var hostActivity = _hostActivity;
+        _activityPoller = new PluginHost.HostActivityPoller(_hostActivity, Ledger, Log);
+        var poller = _activityPoller;
         _runner = new AssignmentRunner(_player, _foreground,
-            CadenceDeps.Real with { MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None) },
+            CadenceDeps.Real with
+            {
+                MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None),
+                RefreshHostActivity = poller.PollOnceAsync,
+            },
             Ledger, Gate) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
         _hold = new BreakglassHold(Ledger,
             new MissReporter(Log, () => Ledger.ToWall(Environment.TickCount64)), () => Environment.TickCount64);
@@ -690,8 +701,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
             IsConnected = true;
             RaiseUI(() => ConnectionChanged?.Invoke());
             Log($"Connected. Host version {HostVersion}. Snapshot has {Accounts.Snapshot().Count} accounts.");
-            _ = new PluginHost.HostActivityPoller(_hostActivity, Ledger, Log)
-                .RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
+            // Belt and braces: the snapshot came in through AccountAdded, which tracked it already.
+            foreach (var info in Accounts.Snapshot()) TrackAccount(info);
+            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
         }
         catch (Exception ex)
         {
@@ -699,6 +711,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
             IsConnected = false;
             RaiseUI(() => ConnectionChanged?.Invoke());
         }
+    }
+
+    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history.</summary>
+    private void TrackAccount(AccountRegistry.AccountInfo info)
+    {
+        try { Ledger.Track(info, KeepAliveLimits.For(info.PlaceId, info.PlaceName, UI.UserPreferences.Load())); }
+        catch (Exception ex) { Log($"keep-alive: couldn't track {info.DisplayName}: {ex.Message}"); }
     }
 
     public async ValueTask DisposeAsync()

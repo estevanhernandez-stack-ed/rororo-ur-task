@@ -220,7 +220,6 @@ internal sealed class ForegroundGate(Func<long> monoMs, Action<string> log)
         cut.Cancel(); // outside the lock: the runner's continuations may run inline
     }
 
-    /// <summary>Under the lock.</summary>
     /// <summary>Under the lock. The caller stops the preempt timer once it has let go of the lock
     /// (a cancelled Task.Delay may resume its awaiter inline).</summary>
     private static void Grant(Break b)

@@ -16,7 +16,7 @@ internal sealed class SequencePlayer
 
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
-    private readonly Func<int, (bool ok, string? error)> _focus;
+    private readonly Func<int, FocusAttempt> _focus;
     private readonly ForegroundGate? _gate;
     private CancellationTokenSource? _activeCts;
 
@@ -26,7 +26,8 @@ internal sealed class SequencePlayer
     /// <param name="gate">Keep-alive's foreground gate. The sequence waits out a break before each
     /// target, so an old event-list macro, which has no step boundaries, pauses between targets
     /// and between passes. Null: never waits.</param>
-    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus, ForegroundGate? gate = null)
+    /// <param name="focus">The focus seam. An old (ok, error) lambda still fits: false reads as a refusal.</param>
+    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, FocusAttempt> focus, ForegroundGate? gate = null)
     {
         _player = player ?? throw new ArgumentNullException(nameof(player));
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
@@ -102,17 +103,19 @@ internal sealed class SequencePlayer
                 }
                 if (!ok)
                 {
+                    // The window is gone: nothing to verify, nothing to wait for.
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
                     failed++;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
                     continue;
                 }
 
-                // Verify foreground actually flipped.
+                // Verify foreground actually flipped. A refused focus lands here too (focusErr carries the
+                // refusal): Windows sometimes brings the window forward anyway, and the verify decides.
                 var fg = _foreground.ResolveForegroundAccount();
                 if (fg is null || fg.RobloxUserId != target.RobloxUserId)
                 {
-                    var focusFlipReason = $"Couldn't focus {target.DisplayName} — window may be minimized or frozen.";
+                    var focusFlipReason = focusErr ?? $"Couldn't focus {target.DisplayName} — window may be minimized or frozen.";
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusFlipReason));
                     failed++;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusFlipReason));
@@ -162,15 +165,17 @@ internal sealed class SequencePlayer
 
     /// <summary>Focus, then the inter-alt delay. A break granted during the delay (nothing was in,
     /// so keep-alive got it at once) has moved the foreground: wait it out and focus again, so the
-    /// target is never focused or played while keep-alive holds the foreground.</summary>
+    /// target is never focused or played while keep-alive holds the foreground. Only a gone window
+    /// fails here; a refusal comes back Ok with its detail, for the caller's foreground verify.</summary>
     private async Task<(bool Ok, string? Error)> FocusOutsideBreaksAsync(AccountRegistry.AccountInfo target, int delay, CancellationToken ct)
     {
         while (true)
         {
-            var (ok, err) = _focus(target.Pid);
-            if (!ok) return (false, err);
+            var attempt = _focus(target.Pid);
+            if (!attempt.Ok && attempt.Cause == MissCause.WindowGone) return (false, attempt.Detail);
             await Task.Delay(delay, ct).ConfigureAwait(false);
-            if (_gate is null || !await _gate.WaitWhileBreakHeldAsync(ct).ConfigureAwait(false)) return (true, null);
+            if (_gate is null || !await _gate.WaitWhileBreakHeldAsync(ct).ConfigureAwait(false))
+                return (true, attempt.Ok ? null : attempt.Detail);
         }
     }
 
@@ -188,9 +193,5 @@ internal sealed class SequencePlayer
     }
 
     // Delegates to Win32Focus so the AttachThreadInput P/Invokes live in one place.
-    private static (bool, string?) DefaultFocus(int pid)
-    {
-        var a = Win32Focus.AttachAndFocus(pid);
-        return (a.Ok, a.Detail);
-    }
+    private static FocusAttempt DefaultFocus(int pid) => Win32Focus.AttachAndFocus(pid);
 }

@@ -47,11 +47,17 @@ internal sealed class StatusProvider(
         return new GetStatusResponse(true, keepAlive, accounts, pbs, null, null);
     }
 
-    /// <summary>Every tracked account's deadline, for the RunMacro note.</summary>
+    /// <summary>The deadline of every account keep-alive serves, for the RunMacro note. Empty while keep-alive is
+    /// stopped (no break will come) and without Active accounts (keep-alive never serves them).</summary>
     public IReadOnlyList<KeepAliveDeadline> Deadlines()
-        => ledger.Snapshot()
+    {
+        if (!isRunnerRunning()) return [];
+        var active = activeUserIds();
+        return ledger.Snapshot()
+            .Where(e => !active.Contains(e.UserId))
             .Select(e => new KeepAliveDeadline(e.UserId, e.DisplayName, ledger.ToWall(ledger.DueAtMs(e.UserId)), e.Off))
             .ToArray();
+    }
 
     private AccountStatus ToAccount(AccountLedgerEntry e, IReadOnlySet<long> active)
     {
