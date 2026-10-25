@@ -34,13 +34,18 @@ internal sealed class MacroPlayer : IMacroPlayer
     private readonly IDisplayScale _displayScale;
     private readonly PointAdjustmentStore _adjustments;
     private readonly KeepAliveLedger? _ledger;
+    private readonly ForegroundGate? _gate;
     private CancellationTokenSource? _activeCts;
 
+    /// <param name="gate">Keep-alive's foreground gate. Every targeted playback registers with it, so
+    /// a break waits for its next step boundary (an event-list macro has none: it waits for the
+    /// end) and preempts it when the runway runs out. Null: no coordination.</param>
     public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics,
         IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null,
-        KeepAliveLedger? ledger = null)
+        KeepAliveLedger? ledger = null, ForegroundGate? gate = null)
     {
         _ledger = ledger;
+        _gate = gate;
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
         _sampler = sampler ?? new ScreenSampler(metrics);
@@ -92,7 +97,9 @@ internal sealed class MacroPlayer : IMacroPlayer
             if (sizeRefusal is not null) return sizeRefusal;
         }
 
-        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        using var playback = _gate?.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
+        var preempt = _gate?.PreemptToken ?? CancellationToken.None;
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external, preempt);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();
         PlaybackResult? result = null; // stays null only if something throws; the log line says so
@@ -149,6 +156,10 @@ internal sealed class MacroPlayer : IMacroPlayer
                 TrackHeldState(toSend, heldKeys, heldButtons);
             }
             return result = PlaybackResult.Completed();
+        }
+        catch (OperationCanceledException) when (preempt.IsCancellationRequested && !external.IsCancellationRequested)
+        {
+            return result = PlaybackResult.KeepAlivePreempted();
         }
         catch (OperationCanceledException)
         {
@@ -343,6 +354,8 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (refusal is not null) return refusal;
         var actual = _metrics.ClientSize(hwnd) ?? target;
 
+        // StepRunner links the gate's preempt token itself and reports it as keep-alive-preempted.
+        using var playback = _gate?.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();
@@ -353,7 +366,8 @@ internal sealed class MacroPlayer : IMacroPlayer
                 pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
                 line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"),
                 SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard,
-                OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src));
+                OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src),
+                Gate: _gate);
             var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
@@ -703,6 +717,16 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
+
+    /// <summary>A stable code for callers to branch on, beside the human <see cref="Reason"/>.
+    /// Null for every result that has none yet.</summary>
+    public string? Code { get; init; }
+
+    /// <summary>Keep-alive cut in: the playback reached no step boundary within the runway
+    /// (<see cref="ForegroundGate"/>). No StepIndex: it is no check failure.</summary>
+    public static PlaybackResult KeepAlivePreempted() => new(PlaybackOutcome.Aborted,
+        "Stopped for keep-alive: a step ran longer than the keep-alive runway allows. Give long holds a max so keep-alive can take its turn.")
+    { Code = "keep-alive-preempted" };
 
     /// <summary>
     /// A Completed run that pressed nothing because reach checks skipped: at least one step was

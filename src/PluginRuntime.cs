@@ -39,6 +39,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     /// <summary>The keep-alive ledger shared by the runner and everything that reads or credits idle time.</summary>
     internal KeepAliveLedger Ledger { get; }
+    /// <summary>Keep-alive's foreground gate: playbacks park at a step boundary when it asks for a break.</summary>
+    internal ForegroundGate Gate { get; }
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
     private readonly PluginHost.WindowArrangeService _arranger;
 
@@ -125,8 +127,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _recorder = new MacroRecorder();
         // One ledger for the plugin's lifetime: it outlives every stop/start of the keep-alive loop.
         Ledger = new KeepAliveLedger(() => Environment.TickCount64, () => DateTimeOffset.Now);
-        _player = new MacroPlayer(_foreground, _metrics, ledger: Ledger);
-        _sequence = new SequencePlayer(_player, _foreground);
+        // One gate for every playback: keep-alive asks it for the foreground (spec "Pause and pick up").
+        Gate = new ForegroundGate(() => Environment.TickCount64, line => Diagnostics.DiagLog.Write(line));
+        _player = new MacroPlayer(_foreground, _metrics, ledger: Ledger, gate: Gate);
+        _sequence = new SequencePlayer(_player, _foreground, Gate);
         _client = new PluginClient(PluginId, Accounts);
         _hostActivity = new PluginHost.HostActivity(_client, Log);
         var hostActivity = _hostActivity;

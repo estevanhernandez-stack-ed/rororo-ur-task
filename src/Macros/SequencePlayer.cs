@@ -17,16 +17,21 @@ internal sealed class SequencePlayer
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
     private readonly Func<int, (bool ok, string? error)> _focus;
+    private readonly ForegroundGate? _gate;
     private CancellationTokenSource? _activeCts;
 
-    public SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground)
-        : this(player, foreground, DefaultFocus) { }
+    public SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, ForegroundGate? gate = null)
+        : this(player, foreground, DefaultFocus, gate) { }
 
-    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus)
+    /// <param name="gate">Keep-alive's foreground gate. The sequence waits out a break before each
+    /// target, so an old event-list macro, which has no step boundaries, pauses between targets
+    /// and between passes. Null: never waits.</param>
+    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus, ForegroundGate? gate = null)
     {
         _player = player ?? throw new ArgumentNullException(nameof(player));
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _focus = focus ?? throw new ArgumentNullException(nameof(focus));
+        _gate = gate;
     }
 
     public event EventHandler<SequenceProgress>? Progress;
@@ -62,6 +67,14 @@ internal sealed class SequencePlayer
         {
             for (int i = 0; i < orderedTargets.Count; i++)
             {
+                // A keep-alive break holds the foreground: nothing is focused until it ends. Before
+                // the first target too, which is the boundary between passes.
+                if (_gate is not null)
+                {
+                    try { await _gate.AtBoundaryAsync(i, orderedTargets.Count, _activeCts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { /* aborted during the break: skipped just below */ }
+                }
+
                 if (_activeCts.IsCancellationRequested)
                 {
                     for (int j = i; j < orderedTargets.Count; j++)
