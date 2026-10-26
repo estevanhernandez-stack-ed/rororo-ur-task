@@ -16,17 +16,23 @@ internal sealed class SequencePlayer
 
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
-    private readonly Func<int, (bool ok, string? error)> _focus;
+    private readonly Func<int, FocusAttempt> _focus;
+    private readonly ForegroundGate? _gate;
     private CancellationTokenSource? _activeCts;
 
-    public SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground)
-        : this(player, foreground, DefaultFocus) { }
+    public SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, ForegroundGate? gate = null)
+        : this(player, foreground, DefaultFocus, gate) { }
 
-    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus)
+    /// <param name="gate">Keep-alive's foreground gate. The sequence waits out a break before each
+    /// target, so an old event-list macro, which has no step boundaries, pauses between targets
+    /// and between passes. Null: never waits.</param>
+    /// <param name="focus">The focus seam. An old (ok, error) lambda still fits: false reads as a refusal.</param>
+    internal SequencePlayer(IMacroPlayer player, IForegroundWatcher foreground, Func<int, FocusAttempt> focus, ForegroundGate? gate = null)
     {
         _player = player ?? throw new ArgumentNullException(nameof(player));
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _focus = focus ?? throw new ArgumentNullException(nameof(focus));
+        _gate = gate;
     }
 
     public event EventHandler<SequenceProgress>? Progress;
@@ -62,6 +68,15 @@ internal sealed class SequencePlayer
         {
             for (int i = 0; i < orderedTargets.Count; i++)
             {
+                // A held keep-alive break owns the foreground: nothing is focused until it ends. Before
+                // the first target too, which is the boundary between passes. Wait-only: the sequence
+                // is no playback, so it never grants a break (another playback may be mid-step).
+                if (_gate is not null)
+                {
+                    try { await _gate.WaitWhileBreakHeldAsync(_activeCts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { /* aborted during the break: skipped just below */ }
+                }
+
                 if (_activeCts.IsCancellationRequested)
                 {
                     for (int j = i; j < orderedTargets.Count; j++)
@@ -77,27 +92,30 @@ internal sealed class SequencePlayer
 
                 // Phase: Focusing
                 EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Focusing, completed, failed, skipped));
-                var (ok, focusErr) = _focus(target.Pid);
-                if (!ok)
-                {
-                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
-                    failed++;
-                    EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
-                    continue;
-                }
-                try { await Task.Delay(delay, _activeCts.Token).ConfigureAwait(false); }
+                bool ok;
+                string? focusErr;
+                try { (ok, focusErr) = await FocusOutsideBreaksAsync(target, delay, _activeCts.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException)
                 {
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Skipped, "Sequence aborted."));
                     skipped++;
                     continue;
                 }
+                if (!ok)
+                {
+                    // The window is gone: nothing to verify, nothing to wait for.
+                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
+                    failed++;
+                    EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
+                    continue;
+                }
 
-                // Verify foreground actually flipped.
+                // Verify foreground actually flipped. A refused focus lands here too (focusErr carries the
+                // refusal): Windows sometimes brings the window forward anyway, and the verify decides.
                 var fg = _foreground.ResolveForegroundAccount();
                 if (fg is null || fg.RobloxUserId != target.RobloxUserId)
                 {
-                    var focusFlipReason = $"Couldn't focus {target.DisplayName} — window may be minimized or frozen.";
+                    var focusFlipReason = focusErr ?? $"Couldn't focus {target.DisplayName} — window may be minimized or frozen.";
                     perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusFlipReason));
                     failed++;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusFlipReason));
@@ -118,7 +136,7 @@ internal sealed class SequencePlayer
                     continue;
                 }
 
-                perAlt.Add(new AltOutcome(target, playResult.Outcome, playResult.Reason, playResult.StepIndex, playResult.SkippedByReach, playResult.NoOutline));
+                perAlt.Add(new AltOutcome(target, playResult.Outcome, playResult.Reason, playResult.StepIndex, playResult.SkippedByReach, playResult.NoOutline, playResult.Code));
                 switch (playResult.Outcome)
                 {
                     case PlaybackOutcome.Completed: completed++; break;
@@ -145,6 +163,22 @@ internal sealed class SequencePlayer
         }
     }
 
+    /// <summary>Focus, then the inter-alt delay. A break granted during the delay (nothing was in,
+    /// so keep-alive got it at once) has moved the foreground: wait it out and focus again, so the
+    /// target is never focused or played while keep-alive holds the foreground. Only a gone window
+    /// fails here; a refusal comes back Ok with its detail, for the caller's foreground verify.</summary>
+    private async Task<(bool Ok, string? Error)> FocusOutsideBreaksAsync(AccountRegistry.AccountInfo target, int delay, CancellationToken ct)
+    {
+        while (true)
+        {
+            var attempt = _focus(target.Pid);
+            if (!attempt.Ok && attempt.Cause == MissCause.WindowGone) return (false, attempt.Detail);
+            await Task.Delay(delay, ct).ConfigureAwait(false);
+            if (_gate is null || !await _gate.WaitWhileBreakHeldAsync(ct).ConfigureAwait(false))
+                return (true, attempt.Ok ? null : attempt.Detail);
+        }
+    }
+
     public bool Abort()
     {
         var cts = _activeCts;
@@ -159,5 +193,5 @@ internal sealed class SequencePlayer
     }
 
     // Delegates to Win32Focus so the AttachThreadInput P/Invokes live in one place.
-    private static (bool, string?) DefaultFocus(int pid) => Win32Focus.AttachAndFocus(pid);
+    private static FocusAttempt DefaultFocus(int pid) => Win32Focus.AttachAndFocus(pid);
 }

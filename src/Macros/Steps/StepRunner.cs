@@ -28,11 +28,16 @@ internal interface IStepIo
 /// <param name="Guard">A ClearAt pass's guard pixel, sampled before every hold's first input and
 /// before every press; a changed colour stops the playback (StepRunner.CheckGuard). Null: none.</param>
 /// <param name="Clipboard">What a paste step reads and writes. Null: the real clipboard.</param>
+/// <param name="OnKeyLanded">Called after a key-down was sent (a paste calls it once, as Paste). Key-ups and
+/// mouse input never call it: only keys are known to reset Roblox's idle clock. Null: nobody listens.</param>
+/// <param name="Gate">Keep-alive's foreground gate: the run parks at a step boundary when a break is
+/// wanted, and stops when the gate preempts it. Null: never pauses.</param>
 internal sealed record StepContext(
     string AccountName, long UserId, string MacroId,
     (int W, int H) RecordedClient, (int W, int H) ActualClient, int DisplayScale,
     Func<string, PointAdjustment?> Adjust, Action<string> Log, bool SharedBaseline = false,
-    ScreenGuard? Guard = null, IStepClipboard? Clipboard = null);
+    ScreenGuard? Guard = null, IStepClipboard? Clipboard = null, Action<InputSource>? OnKeyLanded = null,
+    ForegroundGate? Gate = null);
 
 /// <summary>
 /// Plays v4 steps. A point with its check on treats its delay as a ceiling: it presses as soon
@@ -118,11 +123,27 @@ internal static class StepRunner
         io = new PressWatchIo(io, tally);
         var heldKeys = new HashSet<int>();
         var heldButtons = new HashSet<int>();
+        // Keep-alive's preempt joins the caller's token; the caller's (Esc, StopMacro) keeps its result.
+        var caller = ct;
+        var preempt = ctx.Gate?.PreemptToken ?? CancellationToken.None;
+        var run = ctx.Gate is null ? null : CancellationTokenSource.CreateLinkedTokenSource(caller, preempt);
+        if (run is not null) ct = run.Token;
         int i = 0;
         try
         {
             for (; i < steps.Count; i++)
             {
+                if (ctx.Gate is { BreakWanted: true } gate)
+                {
+                    // Parked on the caller's token: a preempt decided as it parked must not end a
+                    // playback that reached its boundary. The gate hands out a fresh preempt token.
+                    await ParkAsync(gate, i, steps.Count, ctx, io, heldKeys, heldButtons, caller);
+                    run!.Dispose();
+                    preempt = gate.PreemptToken;
+                    run = CancellationTokenSource.CreateLinkedTokenSource(caller, preempt);
+                    ct = run.Token;
+                }
+
                 // Not a check failure: no StepIndex, so GetPlayback reports "aborted", not "check-failed".
                 if (!io.TargetInForeground())
                     return PlaybackResult.Aborted($"Foreground shifted away from {ctx.AccountName} at step {i + 1}/{steps.Count}.");
@@ -132,7 +153,8 @@ internal static class StepRunner
                     case KeyStep k:
                         await io.Delay(k.DelayMs, ct);
                         SendGuarded(io, new MacroEvent(0, k.Down ? MacroEventKind.KeyDown : MacroEventKind.KeyUp, k.VirtualKeyCode, 0, 0, 0, 0));
-                        if (k.Down) heldKeys.Add(k.VirtualKeyCode); else heldKeys.Remove(k.VirtualKeyCode);
+                        if (k.Down) { heldKeys.Add(k.VirtualKeyCode); ctx.OnKeyLanded?.Invoke(InputSource.Macro); }
+                        else heldKeys.Remove(k.VirtualKeyCode);
                         break;
                     case PointStep p:
                         await PlayPointAsync(p, i, ctx, io, heldButtons, tally, ct);
@@ -185,12 +207,17 @@ internal static class StepRunner
         {
             return PlaybackResult.AbortedAt(s.Message, s.StepIndex);
         }
+        catch (OperationCanceledException) when (preempt.IsCancellationRequested && !caller.IsCancellationRequested)
+        {
+            return PlaybackResult.KeepAlivePreempted();
+        }
         catch (OperationCanceledException)
         {
             return PlaybackResult.Aborted("Playback cancelled."); // Esc or StopMacro, not a check failure
         }
         finally
         {
+            run?.Dispose();
             // Keys need no window. Buttons go up in screen space at the cursor, never through the
             // client-space Send: when the window has gone (AutoStopCoordinator aborts exactly
             // then), Send drops the event and the button would stay down system-wide.
@@ -199,6 +226,47 @@ internal static class StepRunner
             if (shared is not null)
                 ctx.Log(string.Create(CultureInfo.InvariantCulture,
                     $"ClearAt: shared baseline ({shared.Parks} {(shared.Parks == 1 ? "park" : "parks")} for {shared.Points} {(shared.Points == 1 ? "point" : "points")})"));
+        }
+    }
+
+    // ---------- pause and pick up (keep-alive's foreground gate) ----------
+
+    private const int ResumePollMs = 50;
+    private const int ResumeWaitMs = 1000;
+
+    /// <summary>
+    /// Parks at the boundary before step <paramref name="index"/> for a keep-alive break. Nothing
+    /// is held across it: keys go up through the window, still the target since the last step ran
+    /// in front, and buttons go up in screen space. On resume it waits up to
+    /// <see cref="ResumeWaitMs"/> for the target to come back in front, then presses the keys again
+    /// through the guarded send. Buttons are not pressed again: a press is a click somewhere. Still
+    /// not in front, it presses nothing, and the loop's foreground check ends the run as it would
+    /// any other step.
+    /// </summary>
+    private static async Task ParkAsync(ForegroundGate gate, int index, int count, StepContext ctx, IStepIo io, HashSet<int> heldKeys, HashSet<int> heldButtons, CancellationToken ct)
+    {
+        var keys = heldKeys.ToList();
+        var buttons = heldButtons.ToList();
+        foreach (var vk in keys) io.Send(new MacroEvent(0, MacroEventKind.KeyUp, vk, 0, 0, 0, 0));
+        foreach (var b in buttons) io.ReleaseButton(b);
+        heldKeys.Clear();
+        heldButtons.Clear();
+
+        ctx.Log($"paused at step {index + 1}/{count} for {gate.Status.For ?? "keep-alive"}");
+        var parkedAt = io.NowMs;
+        await gate.AtBoundaryAsync(index, count, ct);
+        for (int waited = 0; !io.TargetInForeground() && waited < ResumeWaitMs; waited += ResumePollMs)
+            await io.Delay(ResumePollMs, ct);
+        var secs = (long)Math.Round((io.NowMs - parkedAt) / 1000.0, MidpointRounding.AwayFromZero);
+        ctx.Log(string.Create(CultureInfo.InvariantCulture, $"resumed at step {index + 1}/{count} (paused {secs} s)"));
+        foreach (var b in buttons) ctx.Log(string.Create(CultureInfo.InvariantCulture, $"resumed without re-pressing button {b}"));
+
+        if (!io.TargetInForeground()) return; // the step's own foreground check ends the run
+        foreach (var vk in keys)
+        {
+            SendGuarded(io, new MacroEvent(0, MacroEventKind.KeyDown, vk, 0, 0, 0, 0));
+            heldKeys.Add(vk);
+            ctx.OnKeyLanded?.Invoke(InputSource.Macro);
         }
     }
 
@@ -871,6 +939,7 @@ internal static class StepRunner
             SendKey(VK_CONTROL, down: true);
             await io.Delay(StepTiming.PasteKeyGapMs, ct);
             SendKey(VK_V, down: true);
+            ctx.OnKeyLanded?.Invoke(InputSource.Paste);
             await io.Delay(StepTiming.PasteKeyHoldMs, ct);
             SendKey(VK_V, down: false);
             SendKey(VK_CONTROL, down: false);
@@ -1013,7 +1082,7 @@ internal static class StepRunner
             SendGuarded(io, ev);
             switch (ev.Kind)
             {
-                case MacroEventKind.KeyDown: heldKeys.Add(ev.VirtualKeyCode); break;
+                case MacroEventKind.KeyDown: heldKeys.Add(ev.VirtualKeyCode); ctx.OnKeyLanded?.Invoke(InputSource.Macro); break;
                 case MacroEventKind.KeyUp: heldKeys.Remove(ev.VirtualKeyCode); break;
                 case MacroEventKind.MouseDown: heldButtons.Add(ev.MouseButton); break;
                 case MacroEventKind.MouseUp: heldButtons.Remove(ev.MouseButton); break;

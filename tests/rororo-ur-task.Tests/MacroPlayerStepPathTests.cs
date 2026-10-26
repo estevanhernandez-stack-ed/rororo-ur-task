@@ -31,7 +31,8 @@ public class MacroPlayerStepPathTests : IDisposable
     private sealed class FakeForeground : IForegroundWatcher
     {
         public AccountRegistry.AccountInfo? Current { get; set; }
-        public AccountRegistry.AccountInfo? ResolveForegroundAccount() => Current;
+        public int Resolves;
+        public AccountRegistry.AccountInfo? ResolveForegroundAccount() { Interlocked.Increment(ref Resolves); return Current; }
     }
 
     private sealed class FakeScale(int percent) : IDisplayScale
@@ -104,6 +105,60 @@ public class MacroPlayerStepPathTests : IDisposable
     private MacroPlayer Player(FakeMetrics metrics, IDisplayScale scale, IScreenSampler? sampler = null)
         => new(new FakeForeground { Current = Target }, metrics, sampler ?? new BlindSampler(), scale,
             new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")));
+
+    // ---------- keep-alive's foreground gate ----------
+
+    private static Macro EventListMacro() => new(2, "ev", "events", "PerWindow", null, null, null, 0, Array.Empty<MacroEvent>());
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_held_break_holds_a_playback_before_any_window_work(bool steps)
+    {
+        // Granted while nothing was in (a sequence between targets, say): the playback starting now
+        // waits it out before the preflight, the resize or any input.
+        var metrics = new FakeMetrics { MinOuter = PointMath.RobloxMinOuter(125) }; // a resize is due
+        var fg = new FakeForeground { Current = Target };
+        var gate = new ForegroundGate(() => 0, _ => { });
+        var player = new MacroPlayer(fg, metrics, new BlindSampler(), new FakeScale(125),
+            new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")), gate: gate);
+        bool started = false;
+        player.Started += (_, _) => started = true;
+        var macro = steps ? PointMacro(1000, 800, 100, new MacroStep[] { new WaitStep(0) }) : EventListMacro();
+
+        var lease = await gate.RequestBreakAsync("Due Alt", TimeSpan.FromMinutes(5), default);
+        var play = player.PlayAsync(macro, targetUserId: 42);
+        await Task.Delay(100);
+        Assert.False(play.IsCompleted);
+        Assert.True(player.IsPlaying); // a second playback is refused, not queued
+        Assert.Equal(PlaybackOutcome.Refused, (await player.PlayAsync(macro, 42)).Outcome);
+        Assert.Equal(0, fg.Resolves);
+        Assert.Equal(0, metrics.HwndForPidCalls);
+        Assert.Empty(metrics.SetCalls);
+        Assert.False(started);
+
+        lease.Dispose();
+        var result = await play.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
+        Assert.True(started);
+        Assert.Equal(steps, metrics.SetCalls.Count == 1);
+    }
+
+    [Fact]
+    public async Task Esc_reaches_a_playback_waiting_out_a_break()
+    {
+        var fg = new FakeForeground { Current = Target };
+        var gate = new ForegroundGate(() => 0, _ => { });
+        var player = new MacroPlayer(fg, new FakeMetrics(), new BlindSampler(), new FakeScale(100),
+            new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")), gate: gate);
+        using var lease = await gate.RequestBreakAsync("Due Alt", TimeSpan.FromMinutes(5), default);
+        var play = player.PlayAsync(EventListMacro(), targetUserId: 42);
+        await Task.Delay(50);
+        Assert.True(player.Abort());
+        Assert.Equal(PlaybackResult.Aborted("Playback cancelled."), await play.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(player.IsPlaying);
+        Assert.Equal(0, fg.Resolves);
+    }
 
     [Fact]
     public async Task A_macro_with_steps_plays_the_steps_not_the_recorded_events()

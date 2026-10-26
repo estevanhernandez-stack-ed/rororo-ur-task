@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.PluginHost;
 
@@ -28,8 +29,25 @@ internal static class Win32Focus
     /// (Hotkeys.AbortLog.Foreground). Best-effort: a process that exits meanwhile reads as gone.</summary>
     public static string DescribeForeground()
     {
+        var (hwnd, title, pid, process) = ReadForeground();
+        return Hotkeys.AbortLog.Foreground(hwnd, title, pid, process);
+    }
+
+    /// <summary>Who is in front, short enough for a keep-alive log line: title (cut to 60 characters)
+    /// in single quotes, then the process in parentheses. "nothing" when no window has the foreground.</summary>
+    public static string DescribeForegroundShort()
+    {
+        var (hwnd, title, _, process) = ReadForeground();
+        if (hwnd == IntPtr.Zero) return "nothing";
+        var t = title ?? "";
+        if (t.Length > 60) t = t[..60];
+        return $"'{t}' ({process ?? "unknown"})";
+    }
+
+    private static (IntPtr hwnd, string? title, int pid, string? process) ReadForeground()
+    {
         var hwnd = GetForegroundWindow();
-        if (hwnd == IntPtr.Zero) return Hotkeys.AbortLog.Foreground(hwnd, null, 0, null);
+        if (hwnd == IntPtr.Zero) return (hwnd, null, 0, null);
         var text = new System.Text.StringBuilder(256);
         _ = GetWindowTextW(hwnd, text, text.Capacity);
         _ = GetWindowThreadProcessId(hwnd, out var pid);
@@ -37,7 +55,7 @@ internal static class Win32Focus
         try { using var p = Process.GetProcessById((int)pid); process = p.ProcessName; }
         catch (ArgumentException) { }
         catch (InvalidOperationException) { }
-        return Hotkeys.AbortLog.Foreground(hwnd, text.ToString(), (int)pid, process);
+        return (hwnd, text.ToString(), (int)pid, process);
     }
 
     /// <summary>
@@ -53,18 +71,19 @@ internal static class Win32Focus
         catch { return false; }
     }
 
-    public static (bool ok, string? error) AttachAndFocus(int pid)
+    public static FocusAttempt AttachAndFocus(int pid)
     {
         try
         {
             var hwnd = Process.GetProcessById(pid).MainWindowHandle;
-            if (hwnd == IntPtr.Zero) return (false, "MainWindowHandle is null.");
+            if (hwnd == IntPtr.Zero) return new FocusAttempt(false, MissCause.WindowGone, "MainWindowHandle is null.");
             if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
-            FocusHwnd(hwnd);
-            return (true, null);
+            return FocusHwnd(hwnd)
+                ? new FocusAttempt(true, null, null)
+                : new FocusAttempt(false, MissCause.FocusRefused, "Windows refused focus");
         }
-        catch (ArgumentException) { return (false, "Process not found (pid stale)."); }
-        catch (Exception ex) { return (false, ex.Message); }
+        catch (ArgumentException) { return new FocusAttempt(false, MissCause.WindowGone, "Process not found (pid stale)."); }
+        catch (Exception ex) { return new FocusAttempt(false, MissCause.FocusRefused, ex.Message); }
     }
 
     /// <summary>
@@ -91,9 +110,9 @@ internal static class Win32Focus
                 SystemParametersInfoSet(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, SPIF_SENDCHANGE);
                 loweredLock = true;
             }
-            SetForegroundWindow(hwnd);
+            var accepted = SetForegroundWindow(hwnd);
             BringWindowToTop(hwnd);
-            return true;
+            return accepted;
         }
         finally
         {

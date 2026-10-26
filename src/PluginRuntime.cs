@@ -34,6 +34,14 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly ClaimFile _claim = new();
     private readonly HotkeyService _hotkeys;
     private readonly PluginClient _client;
+    private readonly PluginHost.IHostActivity _hostActivity;
+    private readonly PluginHost.HostActivityPoller _activityPoller;
+    private readonly CancellationTokenSource _activityCts = new();
+
+    /// <summary>The keep-alive ledger shared by the runner and everything that reads or credits idle time.</summary>
+    internal KeepAliveLedger Ledger { get; }
+    /// <summary>Keep-alive's foreground gate: playbacks park at a step boundary when it asks for a break.</summary>
+    internal ForegroundGate Gate { get; }
     private readonly PluginHost.IWindowMetrics _metrics = new PluginHost.WindowMetrics();
     private readonly PluginHost.WindowArrangeService _arranger;
 
@@ -42,6 +50,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private Ipc.MacroRunInvoker? _bridgeInvoker;
     // Ctrl+Shift+F11: the user has the wheel. Reads the flag file, so a restart keeps hands off.
     private readonly Hotkeys.Breakglass _breakglass = new();
+    private BreakglassHold? _hold;
+    private System.Threading.Timer? _holdTimer;
+    private readonly object _holdLock = new();
 
     private AccountRegistry.AccountInfo? _recordingBoundAccount;
     private IntPtr _recordingAnchorHwnd = IntPtr.Zero;
@@ -98,7 +109,15 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         Accounts = new AccountRegistry();
         Accounts.AccountAdded += (_, info) =>
+        {
             Log($"account launched: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
+            // Tracked from launch, loop or no loop: RoRoRo's activity clock can only reach accounts the ledger
+            // knows, so the first Ctrl+Shift+P finds real idle times instead of sweeping everyone. The startup
+            // snapshot arrives through this same event.
+            TrackAccount(info);
+            // A running keep-alive loop takes the new account in (unless it was switched off this session).
+            if (_runner.IsRunning) _runner.AddAssignment(new Assignment(info, null, CadenceRole.KeepAlive));
+        };
         Accounts.AccountRemoved += (_, info) =>
         {
             Log($"account exited: {info.DisplayName} (user {info.RobloxUserId}, pid {info.Pid})");
@@ -115,12 +134,30 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // backgrounded PID would have inherited pre-pruning. Drop both pieces
             // of stale state together.
             _assignments.Remove(info.Pid);
+            _runner.RemoveAssignment(info.RobloxUserId, info.Pid);
         };
         _foreground = new ForegroundWatcher(Accounts);
         _recorder = new MacroRecorder();
-        _player = new MacroPlayer(_foreground, _metrics);
-        _sequence = new SequencePlayer(_player, _foreground);
-        _runner = new AssignmentRunner(_player, _foreground) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
+        // One ledger for the plugin's lifetime: it outlives every stop/start of the keep-alive loop.
+        Ledger = new KeepAliveLedger(() => Environment.TickCount64, () => DateTimeOffset.Now);
+        // One gate for every playback: keep-alive asks it for the foreground (spec "Pause and pick up").
+        Gate = new ForegroundGate(() => Environment.TickCount64, line => Diagnostics.DiagLog.Write(line));
+        _player = new MacroPlayer(_foreground, _metrics, ledger: Ledger, gate: Gate);
+        _sequence = new SequencePlayer(_player, _foreground, Gate);
+        _client = new PluginClient(PluginId, Accounts);
+        _hostActivity = new PluginHost.HostActivity(_client, Log);
+        var hostActivity = _hostActivity;
+        _activityPoller = new PluginHost.HostActivityPoller(_hostActivity, Ledger, Log);
+        var poller = _activityPoller;
+        _runner = new AssignmentRunner(_player, _foreground,
+            CadenceDeps.Real with
+            {
+                MarkActive = id => _ = hostActivity.MarkActiveAsync(id, CancellationToken.None),
+                RefreshHostActivity = poller.PollOnceAsync,
+            },
+            Ledger, Gate) { TurboKeepAlive = UI.UserPreferences.Load().TurboKeepAlive };
+        _hold = new BreakglassHold(Ledger,
+            new MissReporter(Log, () => Ledger.ToWall(Environment.TickCount64)), () => Environment.TickCount64);
         _arranger = new PluginHost.WindowArrangeService(Accounts, _metrics, _foreground);
         // Assigned before the _sequence.Progress subscription below captures it, so the
         // closure sees a definitely-assigned field (the event can't fire until playback).
@@ -131,10 +168,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // on-disk library the recorder/sequence player use.
         if (UI.UserPreferences.Load().AcceptPluginRunRequests)
         {
+            var playbacks = new Ipc.PlaybackRegistry();
+            var status = new Ipc.StatusProvider(Ledger, Gate, playbacks,
+                () => _breakglass.IsOn, () => _runner.IsRunning, () => _runner.TurboKeepAlive, () => _runner.ActiveUserIds);
             var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
-                isBreakglass: () => _breakglass.IsOn);
+                isBreakglass: () => _breakglass.IsOn, deadlines: status.Deadlines, registry: playbacks);
             _bridgeInvoker = invoker;
-            _bridgeServer = new Ipc.MacroRunnerServer(invoker);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
 
@@ -199,7 +239,6 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _ = new AutoStopCoordinator(_player, Accounts);
         Store = new MacroStore();
         Recipes = new RecipeStore();
-        _client = new PluginClient(PluginId, Accounts);
         _client.HostLost += OnHostLost;
         // Forwarded rather than handled here: the runtime owns behaviour, not brushes.
         _client.ThemeChanged += p => ThemeChanged?.Invoke(p);
@@ -401,6 +440,22 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     // ---------- Recipes (Task 7: wire RecipeRunner to the real runners) ----------
 
+    private readonly HashSet<string> _loggedLoadFailures = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The readable macros; each file that failed to load is logged once per plugin
+    /// lifetime (#39), so a recipe lookup does not drop it silently or repeat it on every call.</summary>
+    private IReadOnlyList<Macro> LoadMacrosLoggingFailuresOnce()
+    {
+        var loaded = Store.LoadAll();
+        foreach (var f in loaded.Failures)
+        {
+            bool first;
+            lock (_loggedLoadFailures) first = _loggedLoadFailures.Add(f.Path);
+            if (first) Log($"  ! load failed: {Path.GetFileName(f.Path)} — {f.Reason}");
+        }
+        return loaded.Macros;
+    }
+
     /// <summary>
     /// Compose a <see cref="RecipeRunner"/> over the live <see cref="SequencePlayer"/>
     /// (RunOnce position steps) and <see cref="AssignmentRunner"/> (terminal Loop/
@@ -443,7 +498,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // position step plus once for a Loop terminal, and re-reading + re-deserializing
         // every macro file on each call turns an N-step recipe into N+1 full library
         // reloads. Snapshot into a dictionary instead.
-        var macros = Store.LoadAll().Macros.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        var macros = LoadMacrosLoggingFailuresOnce().ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
@@ -524,7 +579,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         try
         {
-            var library = Store.LoadAll().Macros;
+            var library = LoadMacrosLoggingFailuresOnce();
             var alts = Accounts.Snapshot().OrderBy(a => a.DisplayName).ToList();
             var editor = new UI.RecipeEditorWindow(library, alts, this) { Owner = owner };
             editor.Saved += (_, _) =>
@@ -584,6 +639,34 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _claim.Stop(); } catch (Exception ex) { Log($"Claim release failed (non-fatal — TTL expiry covers it): {ex.Message}"); }
     }
 
+    // ---------- Break-glass hold ----------
+
+    /// <summary>Break-glass is on: tracked accounts show as held and a deadline reached meanwhile is said out loud.
+    /// The first tick comes after a second so the aborted loop's last state writes land first.</summary>
+    private void StartHold()
+    {
+        lock (_holdLock)
+        {
+            _holdTimer?.Dispose();
+            var hold = _hold!;
+            _holdTimer = new System.Threading.Timer(_ =>
+            {
+                try { hold.Tick(); } catch (Exception ex) { Log($"break-glass hold: {ex.Message}"); }
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
+            hold.Begin();
+        }
+    }
+
+    private void StopHold()
+    {
+        lock (_holdLock)
+        {
+            _holdTimer?.Dispose();
+            _holdTimer = null;
+            _hold!.End();
+        }
+    }
+
     // ---------- Lifecycle ----------
 
     public async Task StartAsync()
@@ -592,12 +675,19 @@ internal sealed class PluginRuntime : IAsyncDisposable
         {
             _hotkeys.Start();
             Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
-            if (_breakglass.IsOn) Log(Hotkeys.Breakglass.StillOnAtStartLine);
+            if (_breakglass.IsOn)
+            {
+                Log(Hotkeys.Breakglass.StillOnAtStartLine);
+                StartHold();
+            }
 
             var loaded = Store.LoadAll();
             Log($"Loaded {loaded.Macros.Count} macros from {Store.Directory}.");
             foreach (var f in loaded.Failures)
+            {
+                lock (_loggedLoadFailures) _loggedLoadFailures.Add(f.Path); // the recipe lookups need not repeat it
                 Log($"  ! load failed: {Path.GetFileName(f.Path)} — {f.Reason}");
+            }
             if (loaded.Macros.Count > 0)
             {
                 _lastMacro = loaded.Macros[^1];
@@ -611,6 +701,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
             IsConnected = true;
             RaiseUI(() => ConnectionChanged?.Invoke());
             Log($"Connected. Host version {HostVersion}. Snapshot has {Accounts.Snapshot().Count} accounts.");
+            // Belt and braces: the snapshot came in through AccountAdded, which tracked it already.
+            foreach (var info in Accounts.Snapshot()) TrackAccount(info);
+            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
         }
         catch (Exception ex)
         {
@@ -620,10 +713,19 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history.</summary>
+    private void TrackAccount(AccountRegistry.AccountInfo info)
+    {
+        try { Ledger.Track(info, KeepAliveLimits.For(info.PlaceId, info.PlaceName, UI.UserPreferences.Load())); }
+        catch (Exception ex) { Log($"keep-alive: couldn't track {info.DisplayName}: {ex.Message}"); }
+    }
+
     public async ValueTask DisposeAsync()
     {
         try { _bridgeCts.Cancel(); } catch { }
         try { _bridgeCts.Dispose(); } catch { }
+        try { _activityCts.Cancel(); } catch { }
+        try { _holdTimer?.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         try { _activeRecipeRunner?.Abort(); } catch { }
@@ -784,10 +886,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
                     if (_player.Abort()) count++;
                     if (_activeRecipeRunner?.Abort() ?? false) count++;
                     Log(Hotkeys.Breakglass.OnLine(count, keepAlivePlaying) + $" ({source ?? "unknown source"})");
+                    StartHold();
                 }
                 else
                 {
                     Log(Hotkeys.Breakglass.OffLine(restoreKeepAlive));
+                    StopHold();
                     if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
                 }
                 break;

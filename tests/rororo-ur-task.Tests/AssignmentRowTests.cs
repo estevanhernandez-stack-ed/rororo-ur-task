@@ -101,28 +101,108 @@ public class AssignmentRowTests
         Assert.True(row.HasMacro);
     }
 
-    /// Proof-of-life: a keep-alive row shows when it next fires. Without this the
-    /// scheduler is invisible — a quiet screen reads as "broken."
-    [Fact]
-    public void KeepAliveRow_ShowsNextDueCountdown()
+
+    private static readonly KeepAliveLimit Fifteen = new(TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(9), false);
+
+    private sealed class Clock { public long Now = 10 * 60_000; }
+
+    private static (AssignmentRow row, KeepAliveLedger ledger, Clock clock) KeepAliveRow()
     {
-        var row = Row();
-        row.Role = CadenceRole.KeepAlive;
+        var clock = new Clock();
+        var ledger = new KeepAliveLedger(() => clock.Now, () => DateTimeOffset.UnixEpoch);
+        var gate = new ForegroundGate(() => clock.Now, _ => { });
+        var view = new KeepAliveView(ledger, gate, () => clock.Now, _ => Fifteen);
+        var row = new AssignmentRow(Alt(1), view) { Role = CadenceRole.KeepAlive };
+        return (row, ledger, clock);
+    }
 
-        row.SetNextDue(TimeSpan.FromMinutes(8));
+    private static void StampAgo(KeepAliveLedger ledger, Clock clock, long userId, long agoMs)
+    {
+        var now = clock.Now;
+        clock.Now = now - agoMs;
+        ledger.StampLanded(userId, InputSource.KeepAlive);
+        clock.Now = now;
+    }
 
-        Assert.Equal("next: 8m", row.NextDueText);
+    /// Proof-of-life: a keep-alive row shows when it next fires, read from the ledger.
+    [Fact]
+    public void Next_due_text_comes_from_the_ledger()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        StampAgo(ledger, clock, row.Alt.RobloxUserId, 5 * 60_000);   // deadline 9 min: 4 min left
+
+        Assert.Equal("next: 4m", row.NextDueText);
+    }
+
+    [Fact]
+    public void Next_due_text_rounds_up_and_never_goes_negative()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        StampAgo(ledger, clock, row.Alt.RobloxUserId, 5 * 60_000 + 30_000);   // 3 min 30 s left
+        Assert.Equal("next: 4m", row.NextDueText);
+
+        clock.Now += 20 * 60_000;
+        Assert.Equal("next: 0m", row.NextDueText);   // overdue
+    }
+
+    [Fact]
+    public void Next_due_text_is_empty_before_the_loop_has_seen_the_account()
+    {
+        var (row, _, _) = KeepAliveRow();
+        Assert.Equal(string.Empty, row.NextDueText);
     }
 
     [Fact]
     public void ActiveRow_ShowsNoCountdown()
     {
-        var row = Row();
+        var (row, ledger, _) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
         row.AssignedMacro = NewMacro();
         row.Role = CadenceRole.Active;
 
-        row.SetNextDue(TimeSpan.FromMinutes(8));   // even if set, an Active row shows nothing
+        Assert.Equal(string.Empty, row.NextDueText);
+    }
 
+    [Fact]
+    public void Keep_alive_off_sets_the_ledger_and_shows_off()
+    {
+        var (row, ledger, _) = KeepAliveRow();
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.KeepAliveOff = true;
+
+        Assert.True(ledger.Get(row.Alt.RobloxUserId)!.Off);   // tracked on demand: the loop may not have started
+        Assert.True(row.KeepAliveOff);
+        Assert.Equal("off", row.NextDueText);
+        Assert.Contains(nameof(AssignmentRow.KeepAliveOff), raised);
+
+        row.KeepAliveOff = false;
+        Assert.False(ledger.Get(row.Alt.RobloxUserId)!.Off);
+        Assert.StartsWith("next:", row.NextDueText);
+    }
+
+    [Fact]
+    public void Held_under_breakglass_and_paused_with_nobody_to_name()
+    {
+        var (row, ledger, _) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+
+        ledger.SetState(row.Alt.RobloxUserId, AccountKeepAliveState.Held);
+        Assert.Equal("held", row.NextDueText);
+
+        ledger.SetState(row.Alt.RobloxUserId, AccountKeepAliveState.PausedForMacro);
+        Assert.Equal("paused", row.NextDueText);   // no break pending: nobody to name
+    }
+
+    [Fact]
+    public void A_row_without_a_keep_alive_view_shows_nothing_and_ignores_the_toggle()
+    {
+        var row = new AssignmentRow(Alt(1)) { Role = CadenceRole.KeepAlive };
+        row.KeepAliveOff = true;
+        Assert.False(row.KeepAliveOff);
         Assert.Equal(string.Empty, row.NextDueText);
     }
 }

@@ -1065,6 +1065,14 @@
                                                                 <ComboBoxItem Content="ACTIVE" Tag="{x:Static macros:CadenceRole.Active}" />
                                                                 <ComboBoxItem Content="KEEP-ALIVE" Tag="{x:Static macros:CadenceRole.KeepAlive}" />
                                                             </ComboBox>
+                                                            <!-- Keep-alive off: this account never gets a keep-alive Space. Macros
+                                                                 still run on it. Ends on untick or when Ur Task restarts. -->
+                                                            <CheckBox Content="Keep-alive off"
+                                                                      IsChecked="{Binding KeepAliveOff, Mode=TwoWay}"
+                                                                      FontSize="9"
+                                                                      VerticalAlignment="Center"
+                                                                      Margin="0,0,6,0"
+                                                                      ToolTip="Keep-alive skips this account, so it can be reset. Macros still run on it. Resets when Ur Task restarts." />
                                                             <!-- "One focused, rest background" — per row, since FocusOneCommand
                                                                  needs to know WHICH alt to focus. FocusOneCommand lives on the
                                                                  window's DataContext (RecorderViewModel), not this row, hence

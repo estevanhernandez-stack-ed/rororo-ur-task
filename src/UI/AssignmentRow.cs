@@ -7,7 +7,13 @@ namespace Labs626.UrTask.UI;
 
 internal sealed class AssignmentRow : INotifyPropertyChanged
 {
-    public AssignmentRow(AccountRegistry.AccountInfo alt) { Alt = alt; }
+    private readonly KeepAliveView? _keepAlive;
+
+    public AssignmentRow(AccountRegistry.AccountInfo alt, KeepAliveView? keepAlive = null)
+    {
+        Alt = alt;
+        _keepAlive = keepAlive;
+    }
 
     public AccountRegistry.AccountInfo Alt { get; }
 
@@ -66,17 +72,45 @@ internal sealed class AssignmentRow : INotifyPropertyChanged
         set { if (_role == value) return; _role = value; OnPropertyChanged(); OnPropertyChanged(nameof(NextDueText)); }
     }
 
-    private TimeSpan? _nextDue;
-
-    /// <summary>Proof-of-life for a sleeping scheduler. Empty for Active rows.</summary>
-    public string NextDueText => Role == CadenceRole.KeepAlive && _nextDue is TimeSpan t
-        ? $"next: {Math.Max(0, (int)Math.Round(t.TotalMinutes))}m"
-        : string.Empty;
-
-    public void SetNextDue(TimeSpan? due)
+    /// <summary>Proof-of-life for a sleeping scheduler, read from the keep-alive ledger: when the account
+    /// next needs input, or why it will not get any. Empty for Active rows and before the loop has seen the account.</summary>
+    public string NextDueText
     {
-        _nextDue = due;
+        get
+        {
+            if (Role != CadenceRole.KeepAlive || _keepAlive is null) return string.Empty;
+            var e = _keepAlive.Ledger.Get(Alt.RobloxUserId);
+            if (e is null) return string.Empty;
+            if (e.Off) return "off";
+            if (e.State == AccountKeepAliveState.Held) return "held";
+            if (e.State == AccountKeepAliveState.PausedForMacro)
+                return _keepAlive.Gate.Status.For is { Length: > 0 } name ? $"paused for {name}" : "paused";
+            var untilMs = Math.Max(0, _keepAlive.Ledger.DueAtMs(Alt.RobloxUserId) - _keepAlive.NowMs());
+            return $"next: {(int)Math.Ceiling(untilMs / 60_000.0)}m";
+        }
+    }
+
+    /// <summary>Re-reads the ledger (the UI's refresh tick calls this).</summary>
+    public void RefreshKeepAlive()
+    {
         OnPropertyChanged(nameof(NextDueText));
+        OnPropertyChanged(nameof(KeepAliveOff));
+    }
+
+    /// <summary>Keep-alive off for this account: until the user turns it back on or Ur Task restarts.
+    /// Macros still run on an off account; off is about keep-alive only.</summary>
+    public bool KeepAliveOff
+    {
+        get => _keepAlive?.Ledger.Get(Alt.RobloxUserId)?.Off ?? false;
+        set
+        {
+            if (_keepAlive is null || KeepAliveOff == value) return;
+            // Tracked first: the flag lives on the ledger entry, and the loop may not have started yet.
+            _keepAlive.Ledger.Track(Alt, _keepAlive.LimitFor(Alt));
+            _keepAlive.Ledger.SetOff(Alt.RobloxUserId, value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(NextDueText));
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

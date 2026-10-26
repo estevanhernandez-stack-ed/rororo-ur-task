@@ -17,7 +17,7 @@ namespace Labs626.UrTask.Hotkeys;
 internal sealed class Breakglass
 {
     public const string Chord = "Ctrl+Shift+F11";
-    public const string RefusalReason = "breakglass";
+    public const string RefusalReason = Ipc.Reasons.Breakglass;
     public const string RefusalDetail = "The user has taken the wheel (Ctrl+Shift+F11). Wait for 'Break-glass OFF' in ur-task.log.";
 
     private readonly object _gate = new();

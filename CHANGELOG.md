@@ -2,6 +2,61 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## 0.13.0 — unreleased
+
+Keep-alive you can trust: it works from how long each account has really been idle, tells you
+when it misses and why, and stops fighting your macros.
+
+### Added
+
+- **Keep-alive now schedules from each account's real idle time.** It used to count from the
+  moment Ur Task started. Now every account has its own clock, and anything that counts as input
+  resets it: Ur Task's own Space, a macro's key presses, and what RoRoRo sees you do in that
+  window (RoRoRo's input clock is read too, from the moment an account launches). Starting
+  keep-alive no longer jumps everyone at once: an account with recent input on either clock waits
+  for its real deadline, and only accounts with no input history anywhere go first, a couple of
+  seconds apart. The "next" time in the window comes from real idle, not from when you pressed
+  play.
+- **Misses say why, and recoveries say so too.** When a Space doesn't land, the log and the
+  window name the cause: the game window is gone, Windows refused to give it focus (and which
+  window was in front when it refused), another window was in front, the input was rejected, or
+  keep-alive was held off. If every account due at once missed for the same reason you get one
+  line, not a pile, with Turbo keep-alive on or off. When an account lands again you get a line
+  for that. If an account has run past its deadline and the next retry can't land before the
+  game's limit, one line says "expect a reset or kick around HH:mm" so you know what's coming.
+- **A macro pauses for another account's Space, then picks up where it stopped.** If a macro is
+  running on one account and another reaches its deadline, the macro pauses at the next step
+  boundary, the other account gets its Space, and the macro continues from the same step. A step
+  in progress always finishes first. A long hold with no max can't be paused safely, so it may be
+  stopped, with advice on how to set a max.
+- **Keep-alive off, per account.** A new "Keep-alive off" switch on each account row takes that
+  account out of the loop. It is never focused until you turn it back on or restart Ur Task.
+- **Accounts launched while keep-alive runs join it.** Launch an alt mid-run and it is picked up
+  by the loop instead of waiting for a restart.
+- **Game limits are built in.** Ur Task knows how long a game lets an account sit idle. Pet
+  Simulator 99 was measured: its own anti-AFK resets an idle account after about 15 minutes, so
+  keep-alive aims to act 6 minutes before the limit. Games it doesn't know get a safe default.
+- **Agents can read all of it.** The action bridge has a new `GetStatus`, and Ur MCP 0.5.0 exposes
+  it as `keepalive_status`: whether keep-alive is running, every account's idle time and deadline,
+  which are off, and any paused playbacks. Agents can read the off switch but not flip it.
+- **Unreadable macros say why.** Refusals now carry a stable reason code with who asked and what
+  to try next. A macro file that can't be read is reported as `macro-unreadable` instead of
+  looking missing (#39).
+- **RoRoRo will ask for two new permissions.** Ur Task asks to read account activity and to mark
+  an account active (so a Space it sent counts on RoRoRo's side too). If you decline either,
+  keep-alive still works and uses its own clock; you just lose RoRoRo's view of what you did in
+  that window.
+
+### Fixed
+
+- **A relaunched account no longer drops out of keep-alive or stops farming.** An alt that
+  relaunched mid-run (a crash, a rejoin) used to fall out of the loop until you restarted it. Now
+  the new window stays in the loop with the same role and macro: a keep-alive account keeps
+  getting its Spaces, and an Active one keeps farming. The old window closing after the new one
+  opened does not take it back out.
+- **A keep-alive service that fails no longer stops the loop.** It is logged and retried in
+  30 seconds, the same as a miss.
+
 ## 0.12.1 — unreleased
 
 ### Added

@@ -33,11 +33,19 @@ internal sealed class MacroPlayer : IMacroPlayer
     private readonly IScreenSampler _sampler;
     private readonly IDisplayScale _displayScale;
     private readonly PointAdjustmentStore _adjustments;
+    private readonly KeepAliveLedger? _ledger;
+    private readonly ForegroundGate? _gate;
     private CancellationTokenSource? _activeCts;
 
+    /// <param name="gate">Keep-alive's foreground gate. Every targeted playback registers with it, so
+    /// a break waits for its next step boundary (an event-list macro has none: it waits for the
+    /// end) and preempts it when the runway runs out. Null: no coordination.</param>
     public MacroPlayer(IForegroundWatcher foreground, IWindowMetrics metrics,
-        IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null)
+        IScreenSampler? sampler = null, IDisplayScale? displayScale = null, PointAdjustmentStore? adjustments = null,
+        KeepAliveLedger? ledger = null, ForegroundGate? gate = null)
     {
+        _ledger = ledger;
+        _gate = gate;
         _foreground = foreground ?? throw new ArgumentNullException(nameof(foreground));
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
         _sampler = sampler ?? new ScreenSampler(metrics);
@@ -45,7 +53,10 @@ internal sealed class MacroPlayer : IMacroPlayer
         _adjustments = adjustments ?? new PointAdjustmentStore(PointAdjustmentStore.DefaultPath());
     }
 
-    public bool IsPlaying => _activeCts is not null;
+    /// <summary>Set while a playback waits out a keep-alive break before it starts.</summary>
+    private CancellationTokenSource? _waitingCts;
+
+    public bool IsPlaying => _activeCts is not null || _waitingCts is not null;
 
     public event EventHandler<PlaybackStartedArgs>? Started;
     public event EventHandler<PlaybackEndedArgs>? Ended;
@@ -60,7 +71,30 @@ internal sealed class MacroPlayer : IMacroPlayer
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
+        if (_gate is null) return await PlayInAsync(macro, targetUserId, external).ConfigureAwait(false);
 
+        // One registration around the whole playback, step path and event-list path alike. Its
+        // first boundary comes before any window work: a break held now (granted while nothing was
+        // in, say a sequence between targets) is waited out before the preflight, the resize or
+        // any input, so the playback never touches a window keep-alive is using.
+        using var playback = _gate.EnterPlayback(targetUserId, macro.Name ?? macro.Id);
+        var waiting = CancellationTokenSource.CreateLinkedTokenSource(external);
+        _waitingCts = waiting; // Esc and StopMacro reach a playback waiting here too
+        try
+        {
+            await _gate.AtBoundaryAsync(0, macro.HasSteps ? macro.Steps!.Count : macro.Events.Count, waiting.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { return PlaybackResult.Aborted("Playback cancelled."); }
+        finally
+        {
+            _waitingCts = null;
+            waiting.Dispose();
+        }
+        return await PlayInAsync(macro, targetUserId, external).ConfigureAwait(false);
+    }
+
+    private async Task<PlaybackResult> PlayInAsync(Macro macro, long targetUserId, CancellationToken external)
+    {
         var preflight = _foreground.ResolveForegroundAccount();
         if (preflight is null)
             return PlaybackResult.Refused("No RoRoRo-managed window is currently in the foreground.");
@@ -89,7 +123,8 @@ internal sealed class MacroPlayer : IMacroPlayer
             if (sizeRefusal is not null) return sizeRefusal;
         }
 
-        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
+        var preempt = _gate?.PreemptToken ?? CancellationToken.None; // read after the boundary: a park may renew it
+        _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external, preempt);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();
         PlaybackResult? result = null; // stays null only if something throws; the log line says so
@@ -141,10 +176,15 @@ internal sealed class MacroPlayer : IMacroPlayer
                     var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
                     toSend = evt with { X = sx, Y = sy };
                 }
-                SendMacroEvent(toSend);
+                var landed = SendMacroEvent(toSend);
+                if (landed && toSend.Kind == MacroEventKind.KeyDown) _ledger?.StampLanded(targetUserId, InputSource.Macro);
                 TrackHeldState(toSend, heldKeys, heldButtons);
             }
             return result = PlaybackResult.Completed();
+        }
+        catch (OperationCanceledException) when (preempt.IsCancellationRequested && !external.IsCancellationRequested)
+        {
+            return result = PlaybackResult.KeepAlivePreempted();
         }
         catch (OperationCanceledException)
         {
@@ -214,7 +254,7 @@ internal sealed class MacroPlayer : IMacroPlayer
     /// </summary>
     public bool Abort()
     {
-        var cts = _activeCts;
+        var cts = _activeCts ?? _waitingCts;
         if (cts is null) return false;
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with finally */ }
         return true;
@@ -339,6 +379,7 @@ internal sealed class MacroPlayer : IMacroPlayer
         if (refusal is not null) return refusal;
         var actual = _metrics.ClientSize(hwnd) ?? target;
 
+        // StepRunner links the gate's preempt token itself and reports it as keep-alive-preempted.
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
         Started?.Invoke(this, new PlaybackStartedArgs(macro, preflight, targetUserId));
         var ended = Stopwatch.StartNew();
@@ -348,7 +389,9 @@ internal sealed class MacroPlayer : IMacroPlayer
             var ctx = new StepContext(preflight.DisplayName, targetUserId, macro.Id, (rw, rh), actual, scale,
                 pointId => _adjustments.Get(macro.Id, pointId, targetUserId, scale),
                 line => Diagnostics.DiagLog.Write($"{preflight.DisplayName}: {line}"),
-                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard);
+                SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard,
+                OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src),
+                Gate: _gate);
             var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
@@ -698,6 +741,16 @@ public sealed record PlaybackResult(PlaybackOutcome Outcome, string? Reason, int
     public static PlaybackResult Completed() => new(PlaybackOutcome.Completed, null);
     public static PlaybackResult Aborted(string reason) => new(PlaybackOutcome.Aborted, reason);
     public static PlaybackResult Skipped(string reason) => new(PlaybackOutcome.Skipped, reason);
+
+    /// <summary>A stable code for callers to branch on, beside the human <see cref="Reason"/>.
+    /// Null for every result that has none yet.</summary>
+    public string? Code { get; init; }
+
+    /// <summary>Keep-alive cut in: the playback reached no step boundary within the runway
+    /// (<see cref="ForegroundGate"/>). No StepIndex: it is no check failure.</summary>
+    public static PlaybackResult KeepAlivePreempted() => new(PlaybackOutcome.Aborted,
+        "Stopped for keep-alive: a step ran longer than the keep-alive runway allows. Give long holds a max so keep-alive can take its turn.")
+    { Code = Ipc.Reasons.KeepAlivePreempted };
 
     /// <summary>
     /// A Completed run that pressed nothing because reach checks skipped: at least one step was
