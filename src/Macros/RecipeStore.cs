@@ -64,7 +64,7 @@ public sealed class RecipeStore
         try
         {
             File.WriteAllText(tmp, json);
-            File.Move(tmp, target, overwrite: true);
+            MacroStore.ReplaceFile(tmp, target);
         }
         catch
         {

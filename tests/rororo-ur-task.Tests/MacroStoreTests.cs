@@ -93,6 +93,53 @@ public class MacroStoreTests : IDisposable
         Assert.False(File.Exists(PathOf(macro) + ".tmp"));
     }
 
+    /// <summary>
+    /// Replacing a file in one rename fails while anything has the old file open, even a reader
+    /// that shares delete (the delete-then-move it replaced got past those). Such handles last
+    /// milliseconds, so the replace tries again a few times. The wait is passed in here, so the
+    /// test decides when the other handle lets go instead of racing a timer.
+    /// </summary>
+    [Fact]
+    public void ReplaceFile_WhenTheFileIsBusyForAMoment_TriesAgain_AndSucceeds()
+    {
+        Directory.CreateDirectory(_dir);
+        var target = Path.Combine(_dir, "macro.json");
+        var tmp = target + ".tmp";
+        File.WriteAllText(target, "old");
+        File.WriteAllText(tmp, "new");
+        var scanner = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var waits = new List<int>();
+
+        try
+        {
+            MacroStore.ReplaceFile(tmp, target, wait: ms => { waits.Add(ms); scanner.Dispose(); });
+        }
+        finally { scanner.Dispose(); }
+
+        Assert.Equal(new[] { MacroStore.ReplaceRetryMs }, waits);
+        Assert.Equal("new", File.ReadAllText(target));
+        Assert.False(File.Exists(tmp));
+    }
+
+    [Fact]
+    public void ReplaceFile_WhenTheFileStaysBusy_GivesUpAfterAFewTries_AndTheOldFileIsIntact()
+    {
+        Directory.CreateDirectory(_dir);
+        var target = Path.Combine(_dir, "macro.json");
+        var tmp = target + ".tmp";
+        File.WriteAllText(target, "old");
+        File.WriteAllText(tmp, "new");
+        var waits = 0;
+
+        using (new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.ThrowsAny<Exception>(() => MacroStore.ReplaceFile(tmp, target, wait: _ => waits++));
+        }
+
+        Assert.Equal(MacroStore.ReplaceAttempts - 1, waits);
+        Assert.Equal("old", File.ReadAllText(target));
+    }
+
     // ---------- L5-04: the id decides the file, so the store checks it at load ----------
 
     private static string FileJson(string? idJson, string name) => $$"""

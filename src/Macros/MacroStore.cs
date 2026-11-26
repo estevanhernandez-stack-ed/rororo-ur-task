@@ -214,13 +214,45 @@ public sealed class MacroStore
         try
         {
             File.WriteAllText(tmp, json);
-            File.Move(tmp, target, overwrite: true);
+            ReplaceFile(tmp, target);
         }
         catch
         {
             // Best effort: the save failed, so don't leave its half behind in the folder.
             try { File.Delete(tmp); } catch { }
             throw;
+        }
+    }
+
+    /// <summary>How many times a save tries to move its .tmp into place, and how long it waits
+    /// between tries. Three waits of 25 ms: long enough for a reader or a scanner to let go,
+    /// short enough to do on the UI thread, where saves run.</summary>
+    internal const int ReplaceAttempts = 4;
+    internal const int ReplaceRetryMs = 25;
+
+    /// <summary>
+    /// Replace <paramref name="target"/> with <paramref name="tmp"/> in one rename. The rename
+    /// fails while anything at all has the target open, even a reader that shares delete (the
+    /// delete-then-move this replaced got past those), with IOException or
+    /// UnauthorizedAccessException depending on who holds it. Those handles (the bridge thread
+    /// reading the library, a virus scanner on a file just written) last milliseconds, so try a
+    /// few times before giving up. The target is untouched until a try succeeds.
+    /// Shared with <see cref="RecipeStore"/>. <paramref name="wait"/> is the test seam.
+    /// </summary>
+    internal static void ReplaceFile(string tmp, string target, Action<int>? wait = null)
+    {
+        wait ??= Thread.Sleep;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(tmp, target, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < ReplaceAttempts && ex is IOException or UnauthorizedAccessException)
+            {
+                wait(ReplaceRetryMs);
+            }
         }
     }
 
