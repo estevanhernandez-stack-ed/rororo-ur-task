@@ -270,7 +270,15 @@ internal sealed class PluginClient : IAsyncDisposable
             case null:
             case OperationCanceledException:
             case RpcException { StatusCode: StatusCode.Cancelled }:
-                return new(StreamEnd.Normal, null);
+                // Our own shutdown ends a stream this way, and so does a host that closes down
+                // gracefully: its stream handlers swallow their cancellation and simply return.
+                // Only our own token tells the two apart. Read as a normal stop when we did not
+                // ask for it, the plugin ran on with a frozen account list and never noticed.
+                if (ownTokenCancelled) return new(StreamEnd.Normal, null);
+                var how = ex is null ? "ended with no error" : $"was cancelled ({(ex as RpcException)?.StatusCode.ToString() ?? ex.GetType().Name})";
+                return new(StreamEnd.HostLost,
+                    $"Accounts: the {what} {how}, and the plugin did not ask it to. The host has gone, "
+                    + "so treating it as lost rather than running on with an account list that can no longer change.");
             case RpcException rpc:
                 return new(StreamEnd.HostLost,
                     $"Accounts: the {what} failed (RpcException, status {rpc.StatusCode}: {rpc.Status.Detail}). Treating the host as lost.");

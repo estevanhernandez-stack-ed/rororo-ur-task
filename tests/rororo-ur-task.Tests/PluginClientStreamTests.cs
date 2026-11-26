@@ -139,6 +139,58 @@ public class PluginClientStreamTests
             PluginClient.Classify(PluginClient.ExitedStream, null, ownTokenCancelled: true));
     }
 
+    // ---------- L4-11: a stream that ends while the plugin is still running ----------
+
+    [Fact]
+    public async Task A_stream_that_ends_cleanly_while_the_plugin_runs_reports_the_host_lost()
+    {
+        // RoRoRo's stream handlers swallow their own cancellation, so a host that shuts down
+        // gracefully ends the stream with no error at all.
+        var o = await Consume(new[] { 1 }, thenThrow: null);
+
+        Assert.Equal(1, o.HostLost);
+        Assert.Equal(0, o.Degraded);
+        var line = Assert.Single(o.Log);
+        Assert.Contains("account-exited", line);
+        Assert.Contains("ended", line);
+    }
+
+    [Fact]
+    public async Task A_stream_the_host_cancels_while_the_plugin_runs_reports_the_host_lost()
+    {
+        var o = await Consume(Array.Empty<int>(), Rpc(StatusCode.Cancelled));
+
+        Assert.Equal(1, o.HostLost);
+        var line = Assert.Single(o.Log);
+        Assert.Contains("Cancelled", line);
+    }
+
+    [Fact]
+    public async Task The_plugins_own_shutdown_ends_a_stream_silently()
+    {
+        using var own = new CancellationTokenSource();
+        own.Cancel();
+
+        foreach (var end in new Exception?[] { null, Rpc(StatusCode.Cancelled), new OperationCanceledException() })
+        {
+            var o = await Consume(Array.Empty<int>(), end, ct: own.Token);
+            Assert.Equal(0, o.HostLost);
+            Assert.Equal(0, o.Degraded);
+            Assert.Empty(o.Log);
+        }
+    }
+
+    [Fact]
+    public void Classify_reads_an_unasked_for_end_as_a_lost_host()
+    {
+        foreach (var end in new Exception?[] { null, Rpc(StatusCode.Cancelled), new OperationCanceledException() })
+        {
+            var verdict = PluginClient.Classify("account-launched stream", end, ownTokenCancelled: false);
+            Assert.Equal(StreamEnd.HostLost, verdict.End);
+            Assert.Contains("account-launched stream", verdict.Log);
+        }
+    }
+
     // ---------- the degraded mode: polling the ungated snapshot ----------
 
     private static AccountRegistry.AccountInfo Acct(int pid, string name = "Alt", long place = 0)
