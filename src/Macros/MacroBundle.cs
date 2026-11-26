@@ -107,7 +107,7 @@ public static class MacroBundle
                     try
                     {
                         var macro = MacroV1Migrator.LoadAndMigrate(el.GetRawText());
-                        if (SizeProblem(macro) is { } tooBig) failures.Add(new EntryFailure(label, tooBig));
+                        if (ImportProblem(macro) is { } problem) failures.Add(new EntryFailure(label, problem));
                         else macros.Add(macro);
                     }
                     catch (Exception ex)
@@ -121,7 +121,7 @@ public static class MacroBundle
                 try
                 {
                     var macro = MacroV1Migrator.LoadAndMigrate(json);
-                    if (SizeProblem(macro) is { } tooBig) failures.Add(new EntryFailure(WholeFileLabel, tooBig));
+                    if (ImportProblem(macro) is { } problem) failures.Add(new EntryFailure(WholeFileLabel, problem));
                     else macros.Add(macro);
                 }
                 catch (Exception ex)
@@ -137,6 +137,10 @@ public static class MacroBundle
 
         return new ParseResult(macros, failures);
     }
+
+    /// <summary>Why this one macro is left out of an import, or null: too large, or something
+    /// no macro may contain (<see cref="MacroSafety"/>). The rest of the bundle still imports.</summary>
+    private static string? ImportProblem(Macro macro) => SizeProblem(macro) ?? MacroSafety.FirstProblem(macro);
 
     private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
 

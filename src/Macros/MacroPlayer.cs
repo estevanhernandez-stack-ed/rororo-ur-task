@@ -70,6 +70,10 @@ internal sealed class MacroPlayer : IMacroPlayer
     public async Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
+        // Every targeted playback comes through here (the assignment loop, a sequence, a recipe,
+        // the bridge), step macros and event lists alike, so this is where a macro that may not
+        // play is refused: before the gate, the preflight or any window work.
+        if (MacroSafety.FirstProblem(macro) is { } unsafeToPlay) return PlaybackResult.Refused(unsafeToPlay);
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
         if (_gate is null) return await PlayInAsync(macro, targetUserId, external).ConfigureAwait(false);
 
@@ -208,6 +212,7 @@ internal sealed class MacroPlayer : IMacroPlayer
     public async Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
+        if (MacroSafety.FirstProblem(macro) is { } unsafeToPlay) return PlaybackResult.Refused(unsafeToPlay);
         if (IsPlaying) return PlaybackResult.Refused("Playback already in progress.");
 
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
