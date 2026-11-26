@@ -196,4 +196,97 @@ public class StepConverterTests
         var p = Assert.IsType<PointStep>(Assert.Single(StepConverter.Convert(evs)));
         Assert.InRange(p.DelayMs, 950, 1050);
     }
+
+    // ---- L3-13: a recording ends when the stop chord is pressed, not at its last input ----
+
+    private static readonly MacroEvent[] OneClick =
+    {
+        Ev(100, MacroEventKind.MouseDown, 50, 50, btn: 1), Ev(180, MacroEventKind.MouseUp, 50, 50, btn: 1),
+    };
+
+    [Fact]
+    public void The_wait_before_the_stop_becomes_a_last_wait_step()
+    {
+        // "Click, wait 30 s, stop" plays back as the click and then 30 s, so a loop repeats every 30 s.
+        var steps = StepConverter.Convert(OneClick, endMs: 30_180);
+
+        Assert.Equal(2, steps.Count);
+        Assert.IsType<PointStep>(steps[0]);
+        Assert.Equal(new WaitStep(30_000), steps[1]);
+    }
+
+    [Fact]
+    public void No_end_time_means_no_wait_step()
+        => Assert.IsType<PointStep>(Assert.Single(StepConverter.Convert(OneClick)));
+
+    [Theory]
+    [InlineData(180)]   // stopped on the last input
+    [InlineData(90)]    // an end time before the last input is not a wait
+    public void An_end_time_at_or_before_the_last_step_adds_nothing(long endMs)
+        => Assert.IsType<PointStep>(Assert.Single(StepConverter.Convert(OneClick, endMs)));
+
+    [Fact]
+    public void The_wait_is_measured_from_the_last_step_not_from_a_later_mouse_move()
+    {
+        var evs = OneClick.Append(Ev(400, MacroEventKind.MouseMove, 300, 300)).ToArray();
+
+        var steps = StepConverter.Convert(evs, endMs: 1180);
+
+        Assert.Equal(new WaitStep(1000), steps[^1]);
+    }
+
+    [Fact]
+    public void Stop_chord_keys_left_in_the_recording_are_dropped_and_their_time_goes_to_the_wait()
+    {
+        // Untrimmed input: LCtrl down, LShift down at the very end. The converter drops both, and
+        // the wait still runs from the click to the stop.
+        var evs = OneClick.Concat(new[]
+        {
+            Ev(5000, MacroEventKind.KeyDown, vk: 0xA2), Ev(5010, MacroEventKind.KeyDown, vk: 0xA0),
+        }).ToArray();
+
+        var steps = StepConverter.Convert(evs, endMs: 5050);
+
+        Assert.Equal(2, steps.Count);
+        Assert.Equal(new WaitStep(4870), steps[1]);
+    }
+
+    [Fact]
+    public void A_complete_modifier_tap_at_the_end_keeps_its_place_before_the_wait()
+    {
+        // Shift pressed and released is a real press and stays; only the unreleased Ctrl goes.
+        var evs = OneClick.Concat(new[]
+        {
+            Ev(1000, MacroEventKind.KeyDown, vk: 0xA0), Ev(1100, MacroEventKind.KeyUp, vk: 0xA0),
+            Ev(5000, MacroEventKind.KeyDown, vk: 0xA2),
+        }).ToArray();
+
+        var steps = StepConverter.Convert(evs, endMs: 5100);
+
+        Assert.Equal(4, steps.Count);
+        Assert.Equal(new KeyStep(100, 0xA0, false), steps[2]);
+        Assert.Equal(new WaitStep(4000), steps[3]);
+    }
+
+    [Fact]
+    public void After_a_button_that_was_never_released_the_wait_runs_from_the_last_recorded_event()
+    {
+        var steps = StepConverter.Convert(
+            new[] { Ev(0, MacroEventKind.MouseDown, 10, 10, btn: 1), Ev(50, MacroEventKind.MouseMove, 20, 20) }, endMs: 550);
+
+        Assert.IsType<RawStep>(steps[0]);
+        Assert.Equal(new WaitStep(500), steps[1]);
+    }
+
+    [Fact]
+    public void A_recording_with_no_steps_does_not_become_a_lone_wait()
+        => Assert.Empty(StepConverter.Convert(Array.Empty<MacroEvent>(), endMs: 500));
+
+    [Fact]
+    public void The_wait_counts_toward_the_macro_duration()
+    {
+        var steps = StepConverter.Convert(OneClick, endMs: 30_180);
+
+        Assert.Equal(30_000, StepTiming.EstimateMs(steps[^1]));
+    }
 }

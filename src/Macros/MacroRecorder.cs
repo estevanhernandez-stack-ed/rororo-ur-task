@@ -69,6 +69,10 @@ public sealed class MacroRecorder
     /// <summary>True between <see cref="Start"/> and <see cref="Stop"/>.</summary>
     public bool IsRecording => _events is not null;
 
+    /// <summary>The recording clock's reading when <see cref="Stop"/> last ended a recording: when the
+    /// stop chord (or button) landed, on the same clock as the event timestamps.</summary>
+    public long StoppedAtMs { get; private set; }
+
     /// <summary>
     /// Begin recording. Blocks until the hooks are installed (or installation
     /// fails). Throws on installation failure so the caller can surface it
@@ -159,6 +163,7 @@ public sealed class MacroRecorder
             if (!IsRecording) return Array.Empty<MacroEvent>();
             thread = _hookThread;
             captured = _events;
+            StoppedAtMs = _clock?.ElapsedMilliseconds ?? 0;
             threadId = _hookThreadId;
             _events = null;
             _clock = null;
@@ -365,6 +370,16 @@ public sealed class MacroRecorder
         _ = GetWindowThreadProcessId(hwnd, out var pid);
         return pid == _boundProcessId;
     }
+
+    /// <summary>
+    /// When a recording ended, on its own clock. A recording ends when the stop chord is pressed, not
+    /// at the last real key: "press E, wait 30 s, stop" is E and then 30 s (owner ruling, 0.13.1).
+    /// <see cref="TrimHotkeyKeys"/> drops the chord's keys, so this must be read from the untrimmed
+    /// list. The recorder's own stop time is the truth; the last captured event (the chord's Ctrl
+    /// or Shift press) stands in for it when that time is missing. Pure: the test seam.
+    /// </summary>
+    internal static long RecordingEndMs(IReadOnlyList<MacroEvent> captured, long stoppedAtMs)
+        => Math.Max(stoppedAtMs, captured.Count == 0 ? 0 : captured[^1].TimestampMs);
 
     private (int X, int Y)? ResolveClientOrigin()
     {

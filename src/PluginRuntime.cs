@@ -1105,7 +1105,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     {
         _recordingExitWatch?.Clear();
         // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
-        var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
+        var captured = _recorder.Stop();
+        // Read before the trim: the chord's keys go, the moment it was pressed is when the recording ended.
+        var endedAtMs = MacroRecorder.RecordingEndMs(captured, _recorder.StoppedAtMs);
+        var events = MacroRecorder.TrimHotkeyKeys(captured);
         var bound = _recordingBoundAccount;
         var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;
@@ -1168,7 +1171,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // cost a recording: on failure the v3 file stays, and the log says why.
             try
             {
-                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
+                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null, endedAtMs);
                 if (!ReferenceEquals(converted, macro))
                 {
                     Store.Save(converted);
