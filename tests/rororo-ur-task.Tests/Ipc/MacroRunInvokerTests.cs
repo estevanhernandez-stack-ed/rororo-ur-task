@@ -596,6 +596,65 @@ public class MacroRunInvokerTests
             Assert.Single(lines));
     }
 
+    [Fact]
+    public async Task A_playback_whose_end_bookkeeping_throws_still_leaves_the_active_set()
+    {
+        // The end of a playback records its state and writes a log line before it leaves the
+        // active set. Anything thrown there (a null macro id did it) skipped the removal, and the
+        // bridge answered busy until Ur Task was restarted.
+        var m = NewMacro(Guid.NewGuid().ToString(), "Farm");
+        var alt = Alt(123);
+        var ok = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(ok),
+            log: line => { if (line.StartsWith("bridge playback", StringComparison.Ordinal)) throw new IOException("log disk full"); });
+
+        var first = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Assert.True(first.Ok);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        // Its state was recorded before the log line threw, and the next start is not refused busy.
+        Assert.Equal("finished", Status(inv, first.PlaybackId).State);
+        var second = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Assert.True(second.Ok);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+    }
+
+    [Fact]
+    public async Task A_playback_whose_state_cannot_be_recorded_reads_failed_not_running_forever()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Farm");
+        var alt = Alt(123);
+        var ok = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero);
+        // The registry's clock throws once, on the first Finished call.
+        bool failNext = false;
+        var registry = new PlaybackRegistry(() =>
+        {
+            if (Volatile.Read(ref failNext)) { Volatile.Write(ref failNext, false); throw new InvalidOperationException("clock broke"); }
+            return DateTimeOffset.UtcNow;
+        });
+        var gate = new TaskCompletionSource();
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: async (_, _, _, _) => { await gate.Task; return ok; },
+            registry: registry);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Volatile.Write(ref failNext, true);
+        gate.TrySetResult();
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, run.PlaybackId);
+        Assert.Equal(("failed", "error"), (status.State, status.Reason));
+    }
+
     // ---------- ClearAt ----------
 
     private static ClearAtRequest ClearAt(string target = "123", int points = 2) => new(

@@ -465,21 +465,43 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         catch (Exception ex) { state = PlaybackState.Failed; reason = Reasons.Error; detail = ex.Message; }
         finally
         {
-            // A finished ClearAt names the points that showed no outline, so Ur OCR stops
-            // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
-            // macro's steps are not caller points, and a failed or stopped pass never looked at
-            // the rest. A repeat reports its last pass, like everything else here.
-            var noOutline = state == PlaybackState.Finished && ClearAtMacro.SharesBaseline(macro.Id)
-                            && last?.PerAlt is { Count: > 0 } played
-                ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
-                : null;
-            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline, actor, advice);
-            // Same state string GetPlayback returns, and before the removal below, so anything
-            // waiting for the playback to leave the active set finds the line already written.
-            _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
-            _playbacks.TryRemove(playbackId, out _);
-            playbackCts.Dispose();
-            RaiseActivePlaybacksChanged();
+            // The removal at the bottom must run whatever happens above it: a playback left in
+            // the active set makes the bridge answer busy until Ur Task is restarted (a macro
+            // with a null id threw here once, from SharesBaseline).
+            bool recorded = false;
+            try
+            {
+                // A finished ClearAt names the points that showed no outline, so Ur OCR stops
+                // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
+                // macro's steps are not caller points, and a failed or stopped pass never looked at
+                // the rest. A repeat reports its last pass, like everything else here.
+                var noOutline = state == PlaybackState.Finished && macro.Id is { } id && ClearAtMacro.SharesBaseline(id)
+                                && last?.PerAlt is { Count: > 0 } played
+                    ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
+                    : null;
+                _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline, actor, advice);
+                recorded = true;
+                // Same state string GetPlayback returns, and before the removal below, so anything
+                // waiting for the playback to leave the active set finds the line already written.
+                _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
+            }
+            catch (Exception ex)
+            {
+                // Not recorded: say it failed, so GetPlayback does not read "running" for good.
+                if (!recorded)
+                {
+                    try { _registry.Finished(playbackId, PlaybackState.Failed, Reasons.Error, ex.Message, null); }
+                    catch { /* the registry itself is broken; the removal below still runs */ }
+                }
+                try { _log($"  ! bridge playback {playbackId}: could not record how it ended: {ex.Message}"); }
+                catch { /* the log is what threw */ }
+            }
+            finally
+            {
+                _playbacks.TryRemove(playbackId, out _);
+                try { playbackCts.Dispose(); } catch { /* nothing left to release */ }
+                RaiseActivePlaybacksChanged();
+            }
         }
     }
 
