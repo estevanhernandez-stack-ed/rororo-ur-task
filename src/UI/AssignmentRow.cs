@@ -82,6 +82,8 @@ internal sealed class AssignmentRow : INotifyPropertyChanged
             var e = _keepAlive.Ledger.Get(Alt.RobloxUserId);
             if (e is null) return string.Empty;
             if (e.Off) return "off";
+            // The ledger keeps a deadline whether or not the loop runs; a countdown to a loop that is not coming reads as "about to happen".
+            if (!_keepAlive.IsLoopRunning()) return "stopped";
             if (e.State == AccountKeepAliveState.Held) return "held";
             if (e.State == AccountKeepAliveState.PausedForMacro)
                 return _keepAlive.Gate.Status.For is { Length: > 0 } name ? $"paused for {name}" : "paused";

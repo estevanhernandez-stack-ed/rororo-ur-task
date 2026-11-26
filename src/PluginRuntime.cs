@@ -254,7 +254,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             if (!args.Macro.IsClientSpace && args.Macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
                 or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
             {
-                Log("Legacy screen-coordinate macro — window position matters; use STACK or re-record for window-relative playback.");
+                Log("This macro was recorded with screen positions, so its clicks land where the window was. Keep the game window where it was when you recorded, or record it again.");
             }
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
@@ -341,7 +341,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// this into IsRoutineRunning to drive the routine strip's RUN/STOP toggle,
     /// same shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
     /// </summary>
-    public bool IsRecipeRunning => _activeRecipeRunner?.IsRunning ?? false;
+    // Not the runner's own IsRunning: that flips inside RunAsync, after RunRecipe has already raised
+    // RecipeRunningChanged, so the button read false for the whole run. The field is set at start and
+    // cleared in the run's finally (only by the run that still owns it), so it is the true window.
+    public bool IsRecipeRunning => _activeRecipeRunner is not null;
 
     /// <summary>Fires whenever a recipe run starts or ends — see <see cref="IsRecipeRunning"/>.
     /// Fires on whatever thread the transition happened on; the subscriber marshals.</summary>

@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using Hardcodet.Wpf.TaskbarNotification;
 using Labs626.UrTask.Diagnostics;
+using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.UI;
 
@@ -27,23 +28,40 @@ internal sealed class TrayService : IDisposable
         _icon = new TaskbarIcon
         {
             IconSource = new BitmapImage(new Uri("pack://application:,,,/icon.png")),
-            ToolTipText = "RoRoRo Ur Task — idle",
+            ToolTipText = TooltipFor(PluginState.Idle, loopRunning: false),
             ContextMenu = BuildMenu(),
         };
         _icon.TrayLeftMouseUp += (_, _) => SurfaceWindow();
         _icon.TrayMouseDoubleClick += (_, _) => SurfaceWindow();
+
+        // The keep-alive loop never changes PluginState (only the macro player does), so follow its own
+        // progress events, the same ones the recorder window's PLAY/STOP button follows. They arrive on the UI thread.
+        _runtime.AssignmentProgressed += p =>
+        {
+            _loopRunning = p.Phase != AssignmentPhase.Stopped;
+            Refresh();
+        };
     }
+
+    private PluginState _state = PluginState.Idle;
+    private bool _loopRunning;
 
     public void UpdateState(PluginState state)
     {
-        var label = state switch
-        {
-            PluginState.Recording => "recording",
-            PluginState.Playing => "playing",
-            _ => "idle",
-        };
-        _icon.ToolTipText = $"RoRoRo Ur Task — {label}";
+        _state = state;
+        Refresh();
     }
+
+    private void Refresh() => _icon.ToolTipText = TooltipFor(_state, _loopRunning);
+
+    /// <summary>Recording and playing win; otherwise say whether keep-alive is on, because "idle" read the same
+    /// whether it was running or had been stopped by accident.</summary>
+    internal static string TooltipFor(PluginState state, bool loopRunning) => state switch
+    {
+        PluginState.Recording => "RoRoRo Ur Task: recording.",
+        PluginState.Playing => "RoRoRo Ur Task: playing.",
+        _ => loopRunning ? "RoRoRo Ur Task: keep-alive is on." : "RoRoRo Ur Task: keep-alive is off.",
+    };
 
     public void Dispose() => _icon.Dispose();
 

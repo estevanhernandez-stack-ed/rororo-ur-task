@@ -379,7 +379,7 @@
                                     <Button Grid.Column="3"
                                             Content="EXPORT"
                                             Style="{StaticResource SecondaryButton}"
-                                            ToolTip="Export all macros to a shareable bundle file"
+                                            ToolTip="Export the macros shown to a file you can share."
                                             FontSize="9"
                                             Padding="9,3"
                                             IsEnabled="{Binding HasMacros}"
@@ -409,7 +409,7 @@
                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Mouse events recorded — stack all alt windows at the same screen position for playback to land clicks correctly."
+                                    <TextBlock Text="Mouse clicks are recorded relative to the game window. Play back with the window the same size."
                                                FontSize="9"
                                                Foreground="{DynamicResource MagentaBrush}"
                                                TextWrapping="Wrap"
@@ -680,10 +680,8 @@
                                                                     <ContextMenu>
                                                                         <MenuItem Header="Rename" Click="OnMacroRenameClicked" Tag="{Binding}" />
                                                                         <MenuItem Header="Export…" Click="OnMacroExportClicked" Tag="{Binding}" />
-                                                                        <MenuItem Header="Export as AutoHotkey">
-                                                                            <MenuItem Header="v1…" Click="OnMacroExportAhkV1Clicked" Tag="{Binding}" />
-                                                                            <MenuItem Header="v2…" Click="OnMacroExportAhkV2Clicked" Tag="{Binding}" />
-                                                                        </MenuItem>
+                                                                        <MenuItem Header="Export as AutoHotkey v1…" Click="OnMacroExportAhkV1Clicked" Tag="{Binding}" />
+                                                                        <MenuItem Header="Export as AutoHotkey v2…" Click="OnMacroExportAhkV2Clicked" Tag="{Binding}" />
                                                                         <MenuItem Header="Allow in all games"
                                                                                   IsCheckable="True"
                                                                                   IsChecked="{Binding AllGames, Mode=OneWay}"

@@ -31,7 +31,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _keepAliveView = new KeepAliveView(_runtime.Ledger, _runtime.Gate, () => Environment.TickCount64,
-            alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, _prefs));
+            alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, _prefs), () => IsRunnerActive);
 
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
@@ -148,9 +148,14 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // active, this calls abort (same as Esc); otherwise starts the loop.
         // Prevents the rc11 trap where hitting PLAY again started a NEW round
         // instead of stopping the current one.
+        // IsRunnerActive only flips once the runner's Started event is dispatched back here, so the second
+        // click of a double-click still sees "not running", reaches the runtime already holding its claim,
+        // and is read as "stop". Drop a repeat inside the window.
+        var toggleDebounce = new ClickDebounce(TimeSpan.FromMilliseconds(500));
         TogglePlayStopCommand = new RelayCommand(
             () =>
             {
+                if (!toggleDebounce.TryEnter()) return;
                 if (IsRunnerActive)
                 {
                     _runtime.TriggerAbort("Play/Stop button");
@@ -336,6 +341,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            // The play and routine buttons depend on the row count too, and RelayCommand never re-queries on its own.
+            (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
         });
         _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() =>
         {
@@ -344,6 +354,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            // The play and routine buttons depend on the row count too, and RelayCommand never re-queries on its own.
+            (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
         });
 
         // Seed current alts on construction
@@ -701,6 +716,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(StatusLabel));
             OnPropertyChanged(nameof(StatusMeta));
             OnPropertyChanged(nameof(CurrentRunnerAltPid));
+            RefreshKeepAliveCountdowns(); // rows read IsRunnerActive; don't wait for the 10 s tick
             // Refresh command CanExecute
             (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
