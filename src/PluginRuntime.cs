@@ -1023,7 +1023,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
             };
         }
 
-        var served = _runner.KeepAliveUserIds;   // read before the stop: the schedule goes with the loop
+        // Read before the stop: the schedule goes with the loop. Active accounts count too. Their macros
+        // stop with the loop, so they sit as idle as the keep-alive ones while the recording runs.
+        IReadOnlyCollection<long> served = _runner.KeepAliveUserIds.Concat(_runner.ActiveUserIds).ToHashSet();
         if (!_recordingPause.Begin(_runner.IsRunning)) return;
 
         _runner.Abort();
