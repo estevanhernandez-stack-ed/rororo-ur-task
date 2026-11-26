@@ -51,16 +51,22 @@ Each takes under a minute and each decides whether a fix is needed or which one.
 4. **L3-01.** Hold Ctrl+Shift+P for a full second and read the log.
 5. **L1-07.** `keepalive_status` on a PS99 account launched after Ur Task connected. A 12-minute deadline confirms it. One reading at 20:05 on 2026-11-25 already fits.
 
-## Calls that are Este's
+## Rulings, 2026-11-25
 
-1. **L3-05 / L1-03.** Keep-alive's Spaces get recorded into macros, and in turbo the user's own keys go missing. Drop all injected input in the recorder now (breaks recording through remote-desktop tools), or wait for wave B's marker?
-2. **L3-13.** The 0.12.1 trim removed the wait at the end of a keyboard recording, so "press E, wait 30 s" loops every 2 s. Restore the tail?
-3. **L3-08.** Clicks made outside the game window during a recording are kept and replayed. The code comment calls it intended.
-4. **L2-08.** Check the foreground during long holds so Shift does not stay down system-wide after an alt-tab? Small change, in the heart of the engine.
-5. **L5-10.** Refuse Win and app-launch keys in imported macros, and show what an import will type before it lands?
-6. **L1-16.** Keep-alive restores windows that STACK minimized. Re-minimize after the Space?
-7. **L7-14.** A checkbox for "accept run requests from other plugins", or reword the docs to say it is a file setting?
-8. **The copy vocabulary.** Rename STACK to what it does, pick one word each for recipe, pair and stop.
+Este approved **band A as 0.13.1** and ruled on the eight behaviour calls. Where a ruling differs from a row's proposed disposition below, the ruling wins.
+
+| # | Finding | Ruling | Lands in |
+| --- | --- | --- | --- |
+| 1 | L3-05 / L1-03, keep-alive's Spaces recorded into macros | **Keep-alive and recording do not run at the same time.** Pressing record pauses keep-alive and stopping the recording brings it back, the way break-glass does. If a paused account nears its idle limit mid-recording, the activity list names it and the time. This was Este's own option, not one of the three offered. It also removes the turbo case where a sweep eats the user's keys mid-recording. The own-input marker stays in wave B. | 0.13.1 |
+| 2 | L3-13, the trimmed trailing wait | **Restore it.** A recording ends when the stop chord is pressed. The chord's stray Ctrl is still trimmed. If the current file format cannot carry the end time, it waits for wave C. | 0.13.1 |
+| 3 | L3-08, clicks outside the game window | **Drop presses that start outside** the bound window's client area. Releases are always kept, so a drag that ends outside still records correctly. | 0.13.2 |
+| 4 | L2-08, held keys through a long wait | **Yes, in the second patch.** Check the foreground during a wait while anything is held. It gets its own tests and a live hold-and-alt-tab check. | 0.13.2 |
+| 5 | L5-10, what an imported macro can reach | **Checks now, summary later.** 0.13.1 refuses macros that use Windows-key, app-launch or sleep keys, and click points outside the game window. An import summary listing every pasted text is a later feature. | 0.13.1, summary unscheduled |
+| 6 | L1-16, keep-alive undoes STACK | **Re-minimize.** A window that was minimized when keep-alive reached it is minimized again after its Space. | 0.13.2 |
+| 7 | L7-14, the bridge switch | **Docs now, checkbox next.** 0.13.1 rewords README and FEATURES to say it is a file setting. 0.13.2 adds the checkbox. | 0.13.1 and 0.13.2 |
+| 8 | The copy vocabulary | **Its own pass in 0.14.0.** The patches fix only strings that are wrong or say nothing. Renames happen once, with a changelog entry. | 0.14.0 |
+
+Standing ruling from earlier the same day: bare Esc is the easy kill key and stays. No fix may remove or narrow it.
 
 ## What this review did not do
 
