@@ -6,6 +6,9 @@ namespace Labs626.UrTask.Macros.Steps;
 internal interface IStepIo
 {
     bool Send(MacroEvent clientEvent);
+    /// <summary>True when the last <see cref="Send"/> returned false because another window sits
+    /// over that point of the target, so the runner can say so in place of "could not send input".</summary>
+    bool LastSendCovered => false;
     /// <summary>Button up in screen space at wherever the cursor is now. Needs no window, so a
     /// held button still comes up after the target has closed (the v3 release rule).</summary>
     bool ReleaseButton(int button);
@@ -55,6 +58,8 @@ internal static class StepRunner
     private sealed class InputBlockedException(bool sendFailed) : Exception
     {
         public bool SendFailed { get; } = sendFailed;
+        /// <summary>The send was refused because another window covers the point (IStepIo.LastSendCovered).</summary>
+        public bool Covered { get; init; }
     }
 
     /// <summary>What a run did, for <see cref="PlaybackResult.SkippedByReach"/>.</summary>
@@ -102,6 +107,7 @@ internal static class StepRunner
             if (clientEvent.Kind is MacroEventKind.MouseDown or MacroEventKind.KeyDown) tally.Pressed = true;
             return inner.Send(clientEvent);
         }
+        public bool LastSendCovered => inner.LastSendCovered;
         public bool ReleaseButton(int button) => inner.ReleaseButton(button);
         public bool MoveRelative(int dx, int dy) => inner.MoveRelative(dx, dy);
         public bool ParkPointer(int clientX, int clientY) => inner.ParkPointer(clientX, clientY);
@@ -199,7 +205,9 @@ internal static class StepRunner
         catch (InputBlockedException b)
         {
             // Same shape as the step-boundary abort: no StepIndex, so it never reads as check-failed.
-            return PlaybackResult.Aborted(b.SendFailed
+            return PlaybackResult.Aborted(b.Covered
+                ? $"Another window is covering the spot step {i + 1} uses in {ctx.AccountName}'s game window. Move that window out of the way, then run the macro again."
+                : b.SendFailed
                 ? $"Could not send input to {ctx.AccountName} at step {i + 1}/{steps.Count}."
                 : $"Foreground shifted away from {ctx.AccountName} at step {i + 1}/{steps.Count}.");
         }
@@ -966,7 +974,7 @@ internal static class StepRunner
     private static void SendGuarded(IStepIo io, MacroEvent e)
     {
         GuardForeground(io);
-        if (!io.Send(e)) throw new InputBlockedException(sendFailed: true);
+        if (!io.Send(e)) throw new InputBlockedException(sendFailed: true) { Covered = io.LastSendCovered };
     }
 
     private static void GuardForeground(IStepIo io)

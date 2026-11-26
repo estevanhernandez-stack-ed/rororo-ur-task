@@ -34,8 +34,14 @@ public class StepRunnerTests
         // Whether a mouse button is down right now: the game hides the white outline while one is.
         public bool ButtonDown;
 
+        // Another window sits over the point of these events: the send is refused and says why.
+        public Func<MacroEvent, bool>? Covers;
+        public bool LastSendCovered { get; private set; }
+
         public bool Send(MacroEvent e)
         {
+            LastSendCovered = Covers?.Invoke(e) == true;
+            if (LastSendCovered) return false;
             Sent.Add(e with { TimestampMs = NowMs });
             if (e.Kind == MacroEventKind.MouseMove) Cursor = (e.X, e.Y);
             if (e.Kind == MacroEventKind.MouseDown) ButtonDown = true;
@@ -1081,6 +1087,17 @@ public class StepRunnerTests
         var after = io.Sent.Skip(sentAtDrop).ToList();
         var release = Assert.Single(after); // no further moves, only the finally's release
         Assert.Equal((MacroEventKind.MouseUp, 2), (release.Kind, release.MouseButton));
+    }
+
+    [Fact]
+    public async Task A_press_refused_because_another_window_covers_the_spot_says_so()
+    {
+        var io = new FakeIo { Covers = e => e.Kind == MacroEventKind.MouseDown };
+        var r = await StepRunner.RunAsync(new MacroStep[] { new WaitStep(0), new PointStep(0, "p1", null, 42, 398) }, Ctx(), io, default);
+        Assert.Equal(PlaybackOutcome.Aborted, r.Outcome);
+        Assert.Null(r.StepIndex); // not a check failure
+        Assert.Equal("Another window is covering the spot step 2 uses in CElCPapa's game window. Move that window out of the way, then run the macro again.", r.Reason);
+        Assert.DoesNotContain(io.Sent, e => e.Kind == MacroEventKind.MouseDown);
     }
 
     [Fact]

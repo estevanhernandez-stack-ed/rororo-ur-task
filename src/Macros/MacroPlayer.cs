@@ -174,6 +174,13 @@ internal sealed class MacroPlayer : IMacroPlayer
                     if (origin is null)
                         return result = PlaybackResult.Aborted($"Target window vanished at event {i + 1}/{macro.Events.Count}.");
                     var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
+                    // Mouse input goes to the window under the pointer, not the one in front, and
+                    // the check above only knows which is in front. An always-on-top window over
+                    // the point (Ur Task's own compact window, a notification) would take the click.
+                    if (WindowUnderPoint.Guards(evt.Kind) && RootWindowAt(sx, sy) != clientHwnd)
+                        return result = PlaybackResult.Aborted(
+                            $"Another window is covering the spot this macro clicks in {preflight.DisplayName}'s game window (event {i + 1}/{macro.Events.Count}). " +
+                            "Move that window out of the way, then run the macro again.");
                     toSend = evt with { X = sx, Y = sy };
                 }
                 var landed = SendMacroEvent(toSend);
@@ -362,22 +369,73 @@ internal sealed class MacroPlayer : IMacroPlayer
         return $"Couldn't size this window to the macro's recorded {wanted.W}x{wanted.H} (got {got?.W}x{got?.H}). It looks recorded on a larger screen — move the window fully on-screen and retry, or re-record the macro on this monitor.";
     }
 
+    /// <summary>The top-level window under a screen point. A seam: the Win32 lookup means nothing
+    /// against a test's fake window. Both playback paths ask it before a press or a wheel notch.</summary>
+    internal Func<int, int, IntPtr> RootWindowAt { get; init; } = WindowUnderPoint.Root;
+
+    /// <summary>
+    /// True when any part of a step macro is a place in the window: a click, drag, scroll, a
+    /// colour or reach check, a raw stretch with mouse events, or a ClearAt guard pixel. Only such
+    /// a macro is tied to the size it was recorded at. Keys, waits, pastes and relative pointer
+    /// moves carry no coordinates, the same split the event-list path makes for a keyboard-only
+    /// recording. A step kind not listed here counts as needing positions, so a new kind is sized
+    /// until someone decides otherwise.
+    /// </summary>
+    internal static bool NeedsPositions(Macro macro)
+    {
+        if (macro.Guard is not null) return true;
+        foreach (var step in macro.Steps ?? Array.Empty<MacroStep>())
+        {
+            switch (step)
+            {
+                case KeyStep or WaitStep or PasteStep or PointerMoveStep:
+                    continue;
+                case RawStep raw when raw.Events is not null
+                    && raw.Events.All(e => e.Kind is MacroEventKind.KeyDown or MacroEventKind.KeyUp):
+                    continue;
+                default:
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private async Task<PlaybackResult> PlayStepsAsync(Macro macro, AccountRegistry.AccountInfo preflight, long targetUserId, CancellationToken external)
     {
-        if (!macro.IsClientSpace || macro.RecordedClientW is not int rw || macro.RecordedClientH is not int rh)
-            return PlaybackResult.Refused("Point macros need a window-relative recording with its size — re-record it.");
+        // A macro with nothing to place used to be held to all of this anyway: it had to declare a
+        // size just to load, was refused on a display scale where Roblox cannot shrink to that
+        // size, and had its window resized and moved even when the playback was then refused.
+        var needsPositions = NeedsPositions(macro);
+        int rw = 0, rh = 0;
+        if (needsPositions)
+        {
+            if (!macro.IsClientSpace || macro.RecordedClientW is not int w0 || macro.RecordedClientH is not int h0)
+                return PlaybackResult.Refused("Point macros need a window-relative recording with its size — re-record it.");
+            (rw, rh) = (w0, h0);
+        }
 
         var hwnd = _metrics.HwndForPid(preflight.Pid);
         if (hwnd == IntPtr.Zero) return PlaybackResult.Refused("Target window handle unavailable.");
 
         var scale = _displayScale.ScalePercentFor(hwnd);
-        var target = PointMath.TargetClientSize((rw, rh), macro.RecordedDisplayScale, scale);
-        var slop = macro.RecordedDisplayScale is int rs && rs != scale ? 6 : 2;
-        if (macro.RecordedDisplayScale is int r0 && r0 != scale)
-            Diagnostics.DiagLog.Write($"Display scale differs: recorded at {r0}%, playing at {scale}% — scaling to {target.W}x{target.H}.");
-        var refusal = EnsureClientSize(hwnd, macro, target, slop, scale);
-        if (refusal is not null) return refusal;
-        var actual = _metrics.ClientSize(hwnd) ?? target;
+        (int W, int H) actual;
+        if (needsPositions)
+        {
+            var target = PointMath.TargetClientSize((rw, rh), macro.RecordedDisplayScale, scale);
+            var slop = macro.RecordedDisplayScale is int rs && rs != scale ? 6 : 2;
+            if (macro.RecordedDisplayScale is int r0 && r0 != scale)
+                Diagnostics.DiagLog.Write($"Display scale differs: recorded at {r0}%, playing at {scale}% — scaling to {target.W}x{target.H}.");
+            var refusal = EnsureClientSize(hwnd, macro, target, slop, scale);
+            if (refusal is not null) return refusal;
+            actual = _metrics.ClientSize(hwnd) ?? target;
+        }
+        else
+        {
+            // The window is left exactly as it is. Its live size stands in for the recorded size
+            // too, so placement is the identity should anything ever ask for it.
+            actual = _metrics.ClientSize(hwnd) is { W: > 0, H: > 0 } live ? live : (1, 1);
+            (rw, rh) = actual;
+        }
 
         // StepRunner links the gate's preempt token itself and reports it as keep-alive-preempted.
         _activeCts = CancellationTokenSource.CreateLinkedTokenSource(external);
@@ -392,7 +450,7 @@ internal sealed class MacroPlayer : IMacroPlayer
                 SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard,
                 OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src),
                 Gate: _gate);
-            var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
+            var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId, RootWindowAt);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
         finally

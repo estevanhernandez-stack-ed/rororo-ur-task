@@ -132,6 +132,82 @@ public class MacroPlayerClientSpaceTests : IDisposable
 
     private static readonly AccountRegistry.AccountInfo Target = new(Pid: 111, RobloxUserId: 42, DisplayName: "Alt", AccountId: "a1");
 
+    // ---------- another window over the click point (L2-03) ----------
+
+    // Button 9 is no real button: SendMouseButton sends nothing for it and reports success, so
+    // these events run the whole loop without one real click reaching SendInput.
+    private static MacroEvent NoButton(MacroEventKind kind) => new(0, kind, 0, 5, 5, MouseButton: 9, WheelDelta: 0);
+
+    [Fact]
+    public async Task ClientMacro_PressWithAnotherWindowOverThePoint_StopsAndSaysSo()
+    {
+        var metrics = new FakeMetrics { Client = (816, 638), Origin = (100, 50) };
+        var asked = new List<(int, int)>();
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics)
+        {
+            RootWindowAt = (x, y) => { asked.Add((x, y)); return new IntPtr(0x9999); },
+        };
+
+        var result = await player.PlayAsync(ClientMacro(events: new[] { NoButton(MacroEventKind.MouseDown) }), targetUserId: 42);
+
+        Assert.Equal(PlaybackResult.Aborted(
+            "Another window is covering the spot this macro clicks in Alt's game window (event 1/1). "
+            + "Move that window out of the way, then run the macro again."), result);
+        Assert.Equal((105, 55), Assert.Single(asked)); // the screen point, after client to screen
+    }
+
+    [Fact]
+    public async Task ClientMacro_PressWithTheTargetAtThePoint_PlaysAsBefore()
+    {
+        var metrics = new FakeMetrics { Client = (816, 638), Origin = (100, 50) };
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics)
+        {
+            RootWindowAt = (_, _) => metrics.Hwnd,
+        };
+
+        var result = await player.PlayAsync(ClientMacro(events: new[] { NoButton(MacroEventKind.MouseDown) }), targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
+    }
+
+    [Fact]
+    public async Task ClientMacro_ReleaseWithAnotherWindowOverThePoint_IsNeverRefused()
+    {
+        var metrics = new FakeMetrics { Client = (816, 638), Origin = (100, 50) };
+        int asked = 0;
+        var player = new MacroPlayer(new FakeForeground { Current = Target }, metrics)
+        {
+            RootWindowAt = (_, _) => { asked++; return new IntPtr(0x9999); },
+        };
+
+        var result = await player.PlayAsync(ClientMacro(events: new[] { NoButton(MacroEventKind.MouseUp) }), targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
+        Assert.Equal(0, asked);
+    }
+
+    [Fact]
+    public async Task ClientMacro_ForegroundLost_StillReportsTheForegroundNotTheCover()
+    {
+        // The foreground refusal comes first and reads exactly as it did.
+        var metrics = new FakeMetrics { Client = (816, 638), Origin = (100, 50) };
+        var fg = new CountedForeground { Current = Target, GoneAfter = 1 };
+        var player = new MacroPlayer(fg, metrics) { RootWindowAt = (_, _) => new IntPtr(0x9999) };
+
+        var result = await player.PlayAsync(ClientMacro(events: new[] { NoButton(MacroEventKind.MouseDown) }), targetUserId: 42);
+
+        Assert.Equal(PlaybackResult.Aborted("Foreground shifted to non-RoRoRo window at event 1/1."), result);
+    }
+
+    private sealed class CountedForeground : IForegroundWatcher
+    {
+        public AccountRegistry.AccountInfo? Current { get; set; }
+        public int? GoneAfter;
+        private int _resolves;
+        public AccountRegistry.AccountInfo? ResolveForegroundAccount()
+            => GoneAfter is int g && Interlocked.Increment(ref _resolves) > g ? null : Current;
+    }
+
     /// <summary>
     /// Client-space preflight only runs when the macro actually has mouse events
     /// (see MacroPlayer.PlayAsync's gate) — a bare-timestamp macro would otherwise
