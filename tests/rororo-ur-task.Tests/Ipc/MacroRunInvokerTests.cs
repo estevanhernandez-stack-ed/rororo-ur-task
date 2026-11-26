@@ -102,6 +102,39 @@ public class MacroRunInvokerTests
         Assert.Equal(new long[] { 123 }, played);
     }
 
+    [Theory]
+    [InlineData(-1)]      // Task.Delay(-1) waits forever: the playback hung and every later start was refused busy
+    [InlineData(-2)]      // below -1 Task.Delay throws
+    [InlineData(60001)]
+    [InlineData(int.MaxValue)]
+    public async Task A_delay_between_accounts_outside_0_to_60000_is_refused_before_anything_plays(int delayMs)
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var played = new List<long>();
+        var inv = Build(new[] { m }, new[] { Alt(123) }, busy: false, playedUserIds: played);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, delayMs, "626labs.ur-mcp"), default);
+
+        Assert.Equal((false, "refused", $"The delay between accounts (interAltDelayMs) must be 0 to 60000 ms; got {delayMs}.", "agent:626labs.ur-mcp"),
+            (r.Ok, r.Reason, r.Detail, r.Actor));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+        Assert.Empty(played);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(60000)]
+    public async Task A_delay_between_accounts_inside_the_range_or_left_out_is_accepted(int? delayMs)
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var inv = Build(new[] { m }, new[] { Alt(123) }, busy: false);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, delayMs, "626labs.ur-mcp"), default);
+
+        Assert.True(r.Ok);
+    }
+
     /// <summary>
     /// Core regression guard: RunAsync must return Accepted immediately even when the
     /// underlying playback never completes. The caller (Ur-OCR 5Hz tick) must not be blocked.

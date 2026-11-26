@@ -331,6 +331,35 @@ public class SequencePlayerTests
         Assert.Equal(PlaybackOutcome.Completed, Assert.Single(result.PerAlt).Outcome);
     }
 
+    [Theory]
+    [InlineData(-1)]   // Task.Delay(-1) is an infinite wait: the first target was focused and nothing ever played
+    [InlineData(-2)]   // below -1 Task.Delay throws ArgumentOutOfRangeException
+    public async Task PlayAsync_ANegativeDelayFromTheMacroFile_PlaysWithNoDelayInsteadOfHangingOrThrowing(int fileDelayMs)
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        fg.Resolver = () => target;
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+        var macro = NewMacro() with { InterAltDelayMs = fileDelayMs };
+
+        var result = await sequence.PlayAsync(macro, new[] { target }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(PlaybackOutcome.Completed, Assert.Single(result.PerAlt).Outcome);
+        Assert.False(sequence.IsRunning);
+    }
+
+    [Theory]
+    [InlineData(null, null, 500)]        // neither says: the default
+    [InlineData(null, 250, 250)]         // the macro file's own delay
+    [InlineData(100, 250, 100)]          // the caller's wins
+    [InlineData(-1, null, 0)]
+    [InlineData(null, -7, 0)]
+    [InlineData(60001, null, 60000)]
+    [InlineData(null, int.MaxValue, 60000)]
+    public void EffectiveInterAltDelayMs_IsClampedTo0To60000_WhateverItsSource(int? requested, int? fromFile, int expected)
+        => Assert.Equal(expected, SequencePlayer.EffectiveInterAltDelayMs(requested, fromFile));
+
     [Fact]
     public async Task PlayAsync_GoneWindow_IsAHardStop_WithNoVerify()
     {

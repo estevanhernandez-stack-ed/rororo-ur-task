@@ -147,6 +147,10 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
         if (BreakglassRefusal() is { } handsOff) return handsOff;
+        // Shape before busy, as ClearAt and SweepPath do: a malformed call is refused as malformed
+        // even while something is playing.
+        if (Malformed(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Refused, problem, Actors.AgentOrNull(request.CallerPluginId)));
         if (_isBusy() || !_playbacks.IsEmpty)
             return Task.FromResult(RunMacroResponse.Refused(Reasons.Busy, "A sequence is already running."));
 
@@ -172,6 +176,17 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
         var started = Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct);
         return Task.FromResult(started with { Note = DeadlineNote(macro, targets) });
+    }
+
+    /// <summary>What is wrong with a RunMacro request's own values, or null. The delay goes into
+    /// Task.Delay: -1 there waits forever, which hung the playback with the first target focused
+    /// and left every later start refused busy.</summary>
+    private static string? Malformed(RunMacroRequest request)
+    {
+        if (request.InterAltDelayMs is { } delay && (delay < 0 || delay > SequencePlayer.MaxInterAltDelayMs))
+            return string.Create(CultureInfo.InvariantCulture,
+                $"The delay between accounts (interAltDelayMs) must be 0 to {SequencePlayer.MaxInterAltDelayMs} ms; got {delay}.");
+        return null;
     }
 
     /// <summary>A heads-up when this run is long enough to cross another account's keep-alive deadline that is

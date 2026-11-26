@@ -14,6 +14,10 @@ internal sealed class SequencePlayer
 {
     private const int DefaultInterAltDelayMs = 500;
 
+    /// <summary>The longest delay after focusing a target. The delay goes straight into Task.Delay,
+    /// where -1 is an infinite wait and anything lower throws, so it is clamped whatever its source.</summary>
+    internal const int MaxInterAltDelayMs = 60_000;
+
     /// <summary><see cref="AltOutcome.Code"/> for a target refused because its window is gone, so a
     /// caller can tell it from a window that merely would not come forward. In memory only: it is
     /// no bridge reason code and never goes on the wire.</summary>
@@ -42,6 +46,11 @@ internal sealed class SequencePlayer
 
     public event EventHandler<SequenceProgress>? Progress;
 
+    /// <summary>The delay after focusing each target: the caller's, else the macro file's, else the
+    /// default, kept inside 0 to <see cref="MaxInterAltDelayMs"/>. A macro file can carry any number.</summary>
+    internal static int EffectiveInterAltDelayMs(int? requested, int? fromFile)
+        => Math.Clamp(requested ?? fromFile ?? DefaultInterAltDelayMs, 0, MaxInterAltDelayMs);
+
     public bool IsRunning => _activeCts is not null;
 
     public async Task<SequenceResult> PlayAsync(
@@ -54,7 +63,7 @@ internal sealed class SequencePlayer
         if (orderedTargets is null) throw new ArgumentNullException(nameof(orderedTargets));
         if (orderedTargets.Count == 0) throw new ArgumentException("Empty target list.", nameof(orderedTargets));
 
-        var delay = interAltDelayMs ?? macro.InterAltDelayMs ?? DefaultInterAltDelayMs;
+        var delay = EffectiveInterAltDelayMs(interAltDelayMs, macro.InterAltDelayMs);
 
         // Atomic single-flight claim. Only one sequence may run at a time. A second
         // concurrent entry must NOT clobber the in-flight sequence's token — it
