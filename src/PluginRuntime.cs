@@ -718,7 +718,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log($"Connected. Host version {HostVersion}. Snapshot has {Accounts.Snapshot().Count} accounts.");
             // Belt and braces: the snapshot came in through AccountAdded, which tracked it already.
             foreach (var info in Accounts.Snapshot()) TrackAccount(info);
-            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
+            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token, RefreshGameIdentityAsync);
         }
         catch (Exception ex)
         {
@@ -728,12 +728,30 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
-    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history.</summary>
+    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history
+    /// and moves only the limit: when an account's game fills in after its launch, that is said once.</summary>
     private void TrackAccount(AccountRegistry.AccountInfo info)
     {
-        try { Ledger.Track(info, KeepAliveLimits.For(info.PlaceId, info.PlaceName, UI.UserPreferences.Load())); }
+        try
+        {
+            var prefs = UI.UserPreferences.Load();
+            var changed = KeepAliveLimits.TrackAnnounced(
+                Ledger, info, a => KeepAliveLimits.For(a.PlaceId, a.PlaceName, prefs));
+            if (changed is not null) Log(changed);
+        }
         catch (Exception ex) { Log($"keep-alive: couldn't track {info.DisplayName}: {ex.Message}"); }
     }
+
+    /// <summary>
+    /// RoRoRo fills in an account's game from presence, after the launch event, and re-sends nothing when
+    /// it does. So on each activity poll, while any running account still has no game, RoRoRo is asked for
+    /// its running accounts again. The registry raises AccountAdded only for an account whose info
+    /// changed, so this says nothing until a game arrives; then the AccountAdded handler re-tracks the account.
+    /// </summary>
+    private Task RefreshGameIdentityAsync(CancellationToken ct)
+        => KeepAliveLimits.AnyGameMissing(Accounts.Snapshot())
+            ? _client.RefreshRunningAccountsAsync(ct)
+            : Task.CompletedTask;
 
     public async ValueTask DisposeAsync()
     {

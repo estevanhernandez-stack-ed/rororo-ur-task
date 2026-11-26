@@ -36,6 +36,10 @@ public sealed class AccountRegistry
         long placeId = 0, string placeName = "")
     {
         var info = new AccountInfo(pid, userId, displayName, accountId, placeId, placeName);
+        // A snapshot refresh re-sends every running account. One that says nothing new is not an event:
+        // keep-alive asks for a refresh every 30 s while any game is still unknown, and raising this for
+        // every unchanged account each time would log, re-track and re-band the library on every poll.
+        if (_byPid.TryGetValue(pid, out var known) && known == info) return;
         _byPid[pid] = info;
         AccountAdded?.Invoke(this, info);
     }
@@ -48,7 +52,8 @@ public sealed class AccountRegistry
         }
     }
 
-    /// <summary>Raised when an account-launched event populates a new pid.</summary>
+    /// <summary>Raised when an account-launched event populates a new pid, and again when a later
+    /// announce of the same pid carries different info (its game filled in). Not raised for a repeat.</summary>
     public event EventHandler<AccountInfo>? AccountAdded;
 
     /// <summary>Raised when an account-exited event removes a pid.</summary>

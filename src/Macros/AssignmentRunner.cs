@@ -117,6 +117,8 @@ internal sealed class AssignmentRunner
     internal const int WatchdogTickMs = 1_000;      // how often the watchdog looks while a playback is in
     internal const long PreemptFloorMs = 5_000;     // a playback always gets this long to reach a step boundary
     internal static readonly TimeSpan HostRefreshTimeout = TimeSpan.FromSeconds(2);   // loop start waits this long for RoRoRo's clock
+    internal const long MaxSleepMs = 5_000;         // no single sleep is longer: an account that joins or is switched back
+                                                    // on mid-sleep is looked at within this, not at the old wake time
 
     // Turbo keep-alive. One warned sweep services every keep-alive alt due within
     // the batch window, and each alt costs a polled foreground confirm instead of a
@@ -163,6 +165,9 @@ internal sealed class AssignmentRunner
     /// <summary>Membership changes waiting for the turn: AddAssignment/RemoveAssignment must not block the
     /// caller behind a service, so they queue and whoever next holds _turn applies them.</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action<IReadOnlyList<ScheduledAlt>>> _membership = new();
+    /// <summary>The account a keep-alive service is on right now, so a service that throws part-way through
+    /// a sweep backs off the account it was actually on. Written and read only while holding _turn.</summary>
+    private ScheduledAlt? _inService;
 
     private IReadOnlyList<ScheduledAlt> Schedule => _scheduled ?? [];
 
@@ -284,18 +289,28 @@ internal sealed class AssignmentRunner
         ReleaseTurn();
     }
 
+    /// <summary>A loop has claimed the run and not yet published its schedule. A change that arrives now is
+    /// for that loop: it stays queued, and the start-up applies it the moment the schedule exists.</summary>
+    private bool StartingUp => _scheduled is null && _activeCts is not null;
+
     /// <summary>Applies queued membership changes while holding _turn, then lets go of it. A change queued
-    /// after the drain but before the release is picked up by the re-check.</summary>
+    /// after the drain but before the release is picked up by the re-check. With no loop at all a change is
+    /// dropped; while one is starting up it is kept (see <see cref="StartingUp"/>).</summary>
     private void ReleaseTurn()
     {
         try
         {
-            while (_membership.TryDequeue(out var change))
+            while (!StartingUp && _membership.TryDequeue(out var change))
                 if (_scheduled is { } cur) change(cur);
         }
         finally { _turn.Release(); }
-        if (!_membership.IsEmpty) TryApplyMembership();
+        if (!_membership.IsEmpty && !StartingUp) TryApplyMembership();
     }
+
+    /// <summary>The account's list position, for progress events. One with none is given the next position
+    /// at the end of the list: a missing index is never a throw, which used to wedge the whole loop.</summary>
+    private int IndexOf(ScheduledAlt alt)
+        => _indexOf.GetOrAdd(alt, _ => Interlocked.Increment(ref _nextIndex) - 1);
 
     private void AddNow(IReadOnlyList<ScheduledAlt> cur, Assignment a)
     {
@@ -304,9 +319,25 @@ internal sealed class AssignmentRunner
         var existing = cur.FirstOrDefault(x => x.Assignment.Alt.RobloxUserId == alt.RobloxUserId);
         if (existing is not null)
         {
-            // The same account relaunched: new window identity only. Role, macro, interval and limit stay.
+            // The same account announced again (relaunched, or presence filled its game in): new window
+            // identity. Role and macro stay. The limit follows the game: RoRoRo learns the game after the
+            // launch event, so the first announce has none and the account starts on the unknown-game limit.
+            // Keeping that for good would time "critical", the preempt and the reset warning against 18
+            // minutes in a game that resets at 15. An announce with no game keeps the limit already held.
             existing.Assignment = existing.Assignment with { Alt = alt };
-            Track(alt, existing.Limit ?? LimitFor(alt, ClampedIntervalMs(alt)));   // Active too: GetStatus and macro credits
+            var userId = alt.RobloxUserId;
+            var announced = KeepAliveLimits.OnAnnounce(
+                alt, existing.Limit ?? _ledger.Get(userId)?.Limit, a => LimitFor(a, ClampedIntervalMs(a)));
+            Track(alt, announced);   // Active too: GetStatus and macro credits. Re-tracking keeps the input history.
+            if (existing.IsKeepAlive && announced != existing.Limit)
+            {
+                existing.Limit = announced;
+                existing.IntervalMs = ClampedIntervalMs(alt);
+                // The due time follows the new deadline. Only ever earlier here: a later one is picked up
+                // by the loop's own refresh from the ledger, and an account with no input yet is due anyway.
+                if (_ledger.Get(userId) is { LastInputMs: not null })
+                    existing.DueAtMs = Math.Min(existing.DueAtMs, _ledger.DueAtMs(userId));
+            }
             return;
         }
         var intervalMs = ClampedIntervalMs(alt);
@@ -414,7 +445,17 @@ internal sealed class AssignmentRunner
                     Limit = coerced.Role == CadenceRole.KeepAlive ? LimitFor(coerced.Alt, intervalMs) : null,
                 };
             }).ToList();
+
+            // Original list position of each alt, set BEFORE the schedule is published: from the publish on
+            // AddAssignment hands a joining account the next position, and nothing here may wipe it. (It used
+            // to be cleared and refilled after the await below, which dropped the position of any account
+            // that joined during it; the loop then threw on that account for ever.) Nothing can add a
+            // position between the claim and the publish: a join in that gap stays queued (see StartingUp).
+            _indexOf.Clear();
+            for (int i = 0; i < initialScheduled.Count; i++) _indexOf[initialScheduled[i]] = i;
+            _nextIndex = initialScheduled.Count;
             _scheduled = initialScheduled;   // from here the schedule is replaced, never edited in place (see AddAssignment)
+            TryApplyMembership();            // an account that joined between the claim and the publish joins now
 
             // Every account is tracked, Active ones too: nothing schedules an Active account for keep-alive,
             // but GetStatus lists it and its macro's keys are credited. Then one bounded read of RoRoRo's
@@ -503,17 +544,13 @@ internal sealed class AssignmentRunner
 
             CheckUnschedulableWarnings();
 
-            // Original list position of each alt — this is what IndexInCycle/TotalInCycle
-            // report. The scheduler services one alt at a time (not a fixed sweep through the
-            // list), so "cycle" below tracks logical PASSES: it advances the first time an
-            // alt is serviced a second time since the last pass boundary, mirroring what the
-            // old strict round-robin meant by "cycle" — one full lap — without requiring every
-            // alt to actually be revisited in list order (a keep-alive miles from due just
-            // rides along without incrementing anything).
-            var indexOf = _indexOf;
-            indexOf.Clear();
-            for (int i = 0; i < initialScheduled.Count; i++) indexOf[initialScheduled[i]] = i;
-            _nextIndex = initialScheduled.Count;
+            // Each alt's original list position (set above, before the publish) is what
+            // IndexInCycle/TotalInCycle report. The scheduler services one alt at a time (not a
+            // fixed sweep through the list), so "cycle" below tracks logical PASSES: it advances
+            // the first time an alt is serviced a second time since the last pass boundary,
+            // mirroring what the old strict round-robin meant by "cycle" — one full lap — without
+            // requiring every alt to actually be revisited in list order (a keep-alive miles from
+            // due just rides along without incrementing anything).
             var servicedThisPass = new HashSet<ScheduledAlt>();
             cycle = 1;   // declared ahead of the try (see above) so finally can read it too
 
@@ -551,9 +588,17 @@ internal sealed class AssignmentRunner
 
             async Task RunNextActiveAsync(ScheduledAlt alt, CancellationToken token)
             {
-                await RunActiveAsync(alt, AdvancePass(alt), indexOf[alt], assignments.Count, token).ConfigureAwait(false);
-                var activeCount = ActiveCount();
-                activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
+                try
+                {
+                    await RunActiveAsync(alt, AdvancePass(alt), IndexOf(alt), assignments.Count, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    // In a finally: a pass that throws still gives up its turn, so the loop's catch (which
+                    // takes the 30 s back-off) retries the NEXT Active, not this one for ever.
+                    var activeCount = ActiveCount();
+                    activeCursor = activeCount == 0 ? 0 : (activeCursor + 1) % activeCount;   // bounded — never overflows
+                }
                 gapFittedSinceActivePass.Clear();   // real progress happened; every alt earns another look
                 // IMPORTANT 1 fix: a completed pass is exactly when ObservedPassCostMs
                 // may have just ratcheted up (see RunActiveAsync's finally) — re-check
@@ -610,6 +655,7 @@ internal sealed class AssignmentRunner
                         if (urgent.Count == 0) return chosen is not null;
                         var first = urgent[0];
                         if (paused is { } p) _ledger.SetState(p, AccountKeepAliveState.PausedForMacro);
+                        _inService = null;
                         try
                         {
                             if (paused is not null || TurboKeepAlive)
@@ -619,13 +665,31 @@ internal sealed class AssignmentRunner
                                 var batch = BreakBatch(Schedule, urgent, paused, _deps.ClockMs());
                                 if (chosen is not null) foreach (var a in batch) gapFittedSinceActivePass.Add(a);
                                 await ServiceKeepAliveSweepAsync(
-                                    batch, AdvancePass, indexOf, assignments.Count, token).ConfigureAwait(false);
+                                    batch, AdvancePass, assignments.Count, token).ConfigureAwait(false);
                             }
                             else
                             {
                                 await ServiceKeepAliveAsync(
-                                    first, AdvancePass(first), indexOf[first], assignments.Count, token).ConfigureAwait(false);
+                                    first, AdvancePass(first), IndexOf(first), assignments.Count, token).ConfigureAwait(false);
                             }
+                        }
+                        catch (Exception ex) when (!token.IsCancellationRequested)
+                        {
+                            // A service that throws is a miss, not the end of keep-alive, and the miss belongs
+                            // to the account it was on: that one takes the 30 s back-off on ITS due time, here,
+                            // still holding the turn. Decide then moves on to the others. (The back-off used to
+                            // be a 30 s sleep of the whole loop with the due time left alone, so Decide picked
+                            // the same most-overdue account for ever and nobody else was served.) Only ever
+                            // later: a throw after the Space landed keeps the due time the landing set.
+                            var failed = _inService ?? first;
+                            failed.DueAtMs = Math.Max(failed.DueAtMs, _deps.ClockMs() + FocusRetryBackoffMs);
+                            try
+                            {
+                                _deps.SweepLog(chosen is null
+                                    ? $"keep-alive watchdog: a service failed ({ex.Message}); still watching"
+                                    : $"keep-alive: a service failed ({ex.Message}); retry in {FocusRetryBackoffMs / 1000}s");
+                            }
+                            catch { /* a log line must never end the loop */ }
                         }
                         finally
                         {
@@ -698,7 +762,11 @@ internal sealed class AssignmentRunner
                         case CadenceDecision.SleepUntil sleep:
                             // The whole point: nothing to do, so do NOTHING. No focus steal.
                             // Never sleep past the moment the open miss group is due to be written.
-                            var sleepMs = sleep.WakeAtMs - now;
+                            // And never longer than MaxSleepMs in one go: the wake time is the earliest due
+                            // among the accounts known NOW, and an account that joins, is switched back on, or
+                            // has its limit shortened mid-sleep can be due long before it. A wake only re-runs
+                            // the decide step above, which emits nothing and takes no focus when nothing is due.
+                            var sleepMs = Math.Min(sleep.WakeAtMs - now, MaxSleepMs);
                             if (_reporter.UntilFlush is { } until)
                                 sleepMs = Math.Min(sleepMs, Math.Max(1_000, (long)until.TotalMilliseconds));
                             try { await _deps.Sleep(sleepMs, ct).ConfigureAwait(false); }
@@ -756,8 +824,10 @@ internal sealed class AssignmentRunner
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (Exception ex)
                 {
-                    // Like the watchdog: a service that throws is a miss, not the end of keep-alive. Logged, the
-                    // 30 s back-off a miss takes, then Decide again. Only cancellation ends the loop.
+                    // A keep-alive service that throws never reaches here: TakeTurnAsync backs off the account
+                    // it was on, on that account's own due time. What does reach here is an Active pass (or the
+                    // gate) throwing. An Active account has no due time to move, so the 30 s back-off a miss
+                    // takes is this sleep, then Decide again. Only cancellation ends the loop.
                     try { _deps.SweepLog($"keep-alive: a service failed ({ex.Message}); retry in {FocusRetryBackoffMs / 1000}s"); }
                     catch { /* a log line must never end the loop */ }
                     try { await _deps.Sleep(FocusRetryBackoffMs, ct).ConfigureAwait(false); }
@@ -1069,6 +1139,7 @@ internal sealed class AssignmentRunner
     /// </summary>
     private async Task ServiceKeepAliveAsync(ScheduledAlt alt, int cycle, int index, int total, CancellationToken ct)
     {
+        _inService = alt;
         var asn = alt.Assignment;
         using var serving = Serving(asn.Alt.RobloxUserId);
         EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
@@ -1167,7 +1238,6 @@ internal sealed class AssignmentRunner
     private async Task ServiceKeepAliveSweepAsync(
         IReadOnlyList<ScheduledAlt> batch,
         Func<ScheduledAlt, int> advancePass,
-        IReadOnlyDictionary<ScheduledAlt, int> indexOf,
         int total,
         CancellationToken ct)
     {
@@ -1199,10 +1269,11 @@ internal sealed class AssignmentRunner
             {
                 if (ct.IsCancellationRequested) return;   // Abort hotkey: stop between alts
 
+                _inService = alt;
                 var asn = alt.Assignment;
                 using var serving = Serving(asn.Alt.RobloxUserId);   // ends with this alt's iteration
                 var cycle = advancePass(alt);
-                var index = indexOf[alt];
+                var index = IndexOf(alt);
                 var name = asn.Alt.DisplayName;
                 reached++;
                 EmitProgress(new AssignmentProgress(cycle, index, total, asn, AssignmentPhase.Focusing));
@@ -1418,7 +1489,20 @@ internal sealed class AssignmentRunner
             {
                 try
                 {
-                    var playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                    PlaybackResult playResult;
+                    try
+                    {
+                        playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        // A macro that throws is a macro that did not play: the branch a refusal takes, with
+                        // the message as the reason, so the streak counts, the user is told, the 30 s back-off
+                        // applies and the next Active gets its turn. It used to escape to the loop's catch,
+                        // which wrote a "keep-alive" line to the file log only and retried the same account
+                        // every 31 s. Only a real cancellation stays silent (the catch below).
+                        playResult = PlaybackResult.Refused($"The macro hit an error and stopped ({ex.Message}).");
+                    }
                     // Preflight refusals (e.g. client-space resize failed) and
                     // mid-playback aborts (e.g. foreground shifted) return before the
                     // player's Started/Ended events fire — without this, they vanish

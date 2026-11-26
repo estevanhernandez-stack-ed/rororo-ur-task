@@ -1,4 +1,5 @@
 using System.Text;
+using Labs626.UrTask.PluginHost;
 using Labs626.UrTask.UI;
 
 namespace Labs626.UrTask.Macros;
@@ -64,6 +65,48 @@ internal static class KeepAliveLimits
         }
         return new KeepAliveLimit(
             TimeSpan.FromMinutes(limit), TimeSpan.FromMinutes(limit - DeadlineMarginMinutes), false);
+    }
+
+    /// <summary>True when the announce says which game the account is in. RoRoRo fills that in from
+    /// presence, which arrives after the launch event: the first announce of a fresh launch carries none.</summary>
+    public static bool HasGame(AccountRegistry.AccountInfo alt)
+        => alt.PlaceId != 0 || !string.IsNullOrWhiteSpace(alt.PlaceName);
+
+    /// <summary>True while any running account still has no game name: the cue to ask RoRoRo for its
+    /// accounts again, because nothing re-sends an account when presence fills its game in.</summary>
+    public static bool AnyGameMissing(IEnumerable<AccountRegistry.AccountInfo> running)
+        => running.Any(a => string.IsNullOrWhiteSpace(a.PlaceName));
+
+    /// <summary>
+    /// The limit an account carries after it is announced again. An announce with a game is computed
+    /// fresh, so a game that fills in late (or changes) moves the limit. An announce with no game is not
+    /// news: the limit already held stays, so a blank never undoes what an earlier announce learned.
+    /// </summary>
+    public static KeepAliveLimit OnAnnounce(
+        AccountRegistry.AccountInfo alt, KeepAliveLimit? held, Func<AccountRegistry.AccountInfo, KeepAliveLimit> compute)
+        => held is not null && !HasGame(alt) ? held : compute(alt);
+
+    /// <summary>
+    /// Tracks an announced account in the ledger on the limit <see cref="OnAnnounce"/> gives it. Re-tracking
+    /// keeps the account's input history and changes only its identity and limit. Returns the activity
+    /// line to show when the limit of an already-tracked account changed, else null.
+    /// </summary>
+    public static string? TrackAnnounced(
+        KeepAliveLedger ledger, AccountRegistry.AccountInfo alt, Func<AccountRegistry.AccountInfo, KeepAliveLimit> compute)
+    {
+        var held = ledger.Get(alt.RobloxUserId)?.Limit;
+        var limit = OnAnnounce(alt, held, compute);
+        ledger.Track(alt, limit);
+        return held is not null && held != limit ? LimitChangedLine(alt, limit) : null;
+    }
+
+    /// <summary>What the activity log says when an account's limit changes because its game became known.</summary>
+    public static string LimitChangedLine(AccountRegistry.AccountInfo alt, KeepAliveLimit limit)
+    {
+        var minutes = (int)limit.Limit.TotalMinutes;
+        return string.IsNullOrWhiteSpace(alt.PlaceName)
+            ? $"{alt.DisplayName} changed game: keep-alive now uses the {minutes}-minute limit for that game."
+            : $"{alt.DisplayName} is in {alt.PlaceName.Trim()}: keep-alive now uses its {minutes}-minute limit.";
     }
 
     /// <summary>
