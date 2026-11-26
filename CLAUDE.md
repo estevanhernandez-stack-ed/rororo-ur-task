@@ -55,15 +55,34 @@ edit that let the rot happen.
 source is right there. That is on purpose: it is the exact path an external plugin author takes, so
 we find out about a broken package before they do. Do not "simplify" it to a project reference.
 
-### The built-in theme palettes are mirrored in plugin code
+### A green badge here goes stale without anyone touching this repo
 
-Ur Task reads the host's active theme from RoRoRo's settings on disk and re-paints live. **Custom
-theme files are read live; the three built-in palettes are copied into plugin source.** If RoRoRo
-changes a built-in palette, this plugin needs a matching update or it will render last year's
-colours and look broken through no fault of its own.
+`host-integration` proves the plugin against the host's `main`, but it only runs when something
+triggers it: a push, a PR, the daily schedule, or a manual run. **The host ships far more often
+than this plugin does.** In November 2026 it went from v1.19 to v1.40 while this repo had no
+commits, and the integration test had stopped compiling for most of that month.
 
-The host is building a theme feed (`IThemePaletteSource`) that would replace the mirroring. Until
-that lands and this plugin consumes it, the duplication stands and is a real maintenance debt.
+Starting work after a quiet stretch? Run the workflow first (`gh workflow run test.yml`), then
+believe the result. The schedule helps, but GitHub switches scheduled workflows off after 60 days
+of repository inactivity, so it fails in exactly the case it exists for.
+
+### A root `NuGet.config` is locally excluded, and a stale one breaks restore
+
+`.git/info/exclude` hides `NuGet.config`, so a local feed override never shows in `git status`.
+One left behind from testing an unpublished contract pointed at a temp folder that no longer
+existed, and every restore failed with `NU1301`. If restore complains about a local source, look
+for that file. It also quietly defeats the point of the next section, so delete it when done.
+
+### The theme comes from the host over the contract
+
+Ur Task asks the host for its resolved palette (`GetTheme`) and follows changes
+(`SubscribeThemeChanged`). It does not read RoRoRo's settings or theme files, and it carries no
+copy of the built-in palettes. That mirror existed once, went stale the first time the host added
+a theme, and was deleted.
+
+The one hardcoded palette left is `HostThemeReader.Brand`. It is the fallback for a window that
+has to paint before any host answers, including the standalone case. It is not a mirror and does
+not need to track anything. Do not grow it back into one.
 
 ---
 

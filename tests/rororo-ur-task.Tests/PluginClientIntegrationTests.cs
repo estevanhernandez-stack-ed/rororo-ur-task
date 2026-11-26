@@ -206,8 +206,10 @@ public class PluginClientIntegrationTests
         // Brought into conformance with the host's IPluginLaunchInvoker, which
         // grew launch-to-target + current-server queries in RoRoRo v1.7.0.0.
         // Mirrors ROROROblox.PluginTestHarness's reference stub.
+        // Host PR #247 added a fourth target, one named server instance. The stub refuses every
+        // launch the same way, so the new argument is accepted and ignored.
         public Task<(bool ok, string? failureReason, int processId, string? reasonCode)> RequestLaunchTargetAsync(
-            string accountId, string? shareUrl, long? followUserId)
+            string accountId, string? shareUrl, long? followUserId, PluginGameInstance? gameInstance = null)
             => Task.FromResult<(bool, string?, int, string?)>((false, "test stub", 0, null));
 
         public Task<CurrentServerInfo?> GetCurrentServerAsync()

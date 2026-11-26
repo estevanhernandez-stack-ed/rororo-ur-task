@@ -2,7 +2,20 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## 0.13.0 — unreleased
+## Unreleased
+
+### Changed
+
+- Built against plugin contract 0.14.0 (was 0.8.0). Nothing new is called yet, so Ur Task still
+  runs on RoRoRo 1.19 and later.
+
+### Fixed
+
+- The host integration test compiles again. RoRoRo added a launch target (one named server) and
+  the test stand-in had not followed.
+- The test workflow now also runs every day, so a host change is caught without a commit here.
+
+## 0.13.0 — 2026-10-25
 
 Keep-alive you can trust: it works from how long each account has really been idle, tells you
 when it misses and why, and stops fighting your macros.
@@ -57,7 +70,7 @@ when it misses and why, and stops fighting your macros.
 - **A keep-alive service that fails no longer stops the loop.** It is logged and retried in
   30 seconds, the same as a miss.
 
-## 0.12.1 — unreleased
+## 0.12.1 — 2026-10-25
 
 ### Added
 
