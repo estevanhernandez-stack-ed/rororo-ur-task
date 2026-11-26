@@ -1,0 +1,359 @@
+# Review findings, v0.13.0
+
+**Baseline:** `main` at `c8b1412` · **Reviewed:** 2026-11-25 · **Status:** band A is built as 0.13.1 (PR #49) and waits on a live smoke. Band B is open. See "Band A, as built" below for what landed and what changed along the way.
+
+Plan: `docs/superpowers/plans/2026-11-25-review-and-remediation-0.13.1.md`.
+
+## The short version
+
+Seven read-only lanes returned 124 findings. Merging the ones two or three lanes found independently leaves **103, of which 18 are S1**, plus eight groups of copy problems.
+
+The engine's core held. Held keys are released on every in-process exit, every step input passes a live foreground check, the pause-and-resume handoff is correct in every interleaving, a break is only granted after a playback has fully exited, import cannot write outside the macro folder or overwrite a macro, and no step can start a process or touch a file.
+
+What broke is the edges around that core:
+
+- **The kill key has holes.** Esc does not end a bridge repeat (L3-03). A repeat on a dead window spins a core and cannot be stopped by Esc at all (L2-01). Holding a chord flips it back off (L3-01). Quitting leaves keys held down (L2-02).
+- **Keep-alive can stop serving without saying so.** An account joining during loop start wedges the loop for every account (L1-02). A sleeping loop ignores an account switched back on (L1-04). Per-game limits silently fall back to Unknown (L1-07). After any stop, the rows keep counting down (L3-10).
+- **One bad file takes the app down.** Full-width digits in a name (L5-01), a copied file with a duplicate id (L5-04), a recipe with no steps (L5-08). The crash handler logs and exits by design, so each of these is a hard stop.
+- **The UI overwrites what an agent wrote** (L5-05), and saves are not atomic under a comment that says they are (L5-02).
+- **The release pipeline trusts nothing and checks nothing.** Two stable releases shipped with the host check red, and a third from a commit with no test run at all (L7-01, corrected below).
+- **The records are wrong in ways that matter.** The README names the wrong minimum host and promises a consent opt-out that does not exist (L7-03, L7-04). The keystone says a missing "exiting cleanly" line means a hang; 36 sessions on this machine have zero such lines (L4-13).
+
+## Recommended cut
+
+103 findings do not fit one patch. Three bands.
+
+**Band A, ship as 0.13.1.** Every S1, plus the S2s that protect an account or cost one line. About 35 items, each small.
+
+| Area | Findings |
+| --- | --- |
+| The kill key and hotkeys | L3-03, L2-01, L3-01 (with L6-11), L3-04, L2-02, L3-10 |
+| Keep-alive | L1-02, L1-04, L1-07, L1-06, and L1-01 if its live check confirms |
+| Files | L5-01, L5-05, L5-02, L5-04, L5-03 (the caps) |
+| Host boundary and bridge | L4-01, L4-06, L4-03, L4-08 |
+| Recording | L3-02 |
+| Where input lands | L2-06, and L2-03 after its live check |
+| Release pipeline | L7-05 first, then L7-01, L7-02 |
+| Records that are wrong | L7-03, L7-04, the keystone's exit-line claim (L4-13), the README's Esc line, the STACK hint that hides windows |
+| UI one-liners | L3-12, L6-06, L6-08 |
+
+**Band B, a 0.13.2 right behind it.** The remaining S2 and S3 rows marked 0.13.1 below: diagnostics, the rest of the bridge hardening, test seams, docs, UI polish.
+
+**Band C, not a patch.** The capability change (L4-15) and the reason-code split (L4-22) go to 0.14.0. The own-input marker (L3-05) is already in wave B's plan. A minimum-reader field goes to wave C with schema v5. The vocabulary pass is its own release note.
+
+## Five things to look at in the running app first
+
+Each takes under a minute and each decides whether a fix is needed or which one.
+
+1. **L1-01.** Two accounts, leave A in front and not due, let a turbo sweep serve B, then read `keepalive_status` for A. A last-input time at the sweep means the host credited A.
+2. **L2-03.** Confirm the root window under a point inside Roblox's client area is the process main window. The fix depends on it.
+3. **L6-05 against L3-06.** Run a two-account sequence. If the window does not auto-compact, L6-05 is right and L3-06's premise is wrong.
+4. **L3-01.** Hold Ctrl+Shift+P for a full second and read the log.
+5. **L1-07.** `keepalive_status` on a PS99 account launched after Ur Task connected. A 12-minute deadline confirms it. One reading at 20:05 on 2026-11-25 already fits.
+
+## Rulings, 2026-11-25
+
+Este approved **band A as 0.13.1** and ruled on the eight behaviour calls. Where a ruling differs from a row's proposed disposition below, the ruling wins.
+
+| # | Finding | Ruling | Lands in |
+| --- | --- | --- | --- |
+| 1 | L3-05 / L1-03, keep-alive's Spaces recorded into macros | **Keep-alive and recording do not run at the same time.** Pressing record pauses keep-alive and stopping the recording brings it back, the way break-glass does. If a paused account nears its idle limit mid-recording, the activity list names it and the time. This was Este's own option, not one of the three offered. It also removes the turbo case where a sweep eats the user's keys mid-recording. The own-input marker stays in wave B. | 0.13.1 |
+| 2 | L3-13, the trimmed trailing wait | **Restore it.** A recording ends when the stop chord is pressed. The chord's stray Ctrl is still trimmed. As built: recordings with a mouse click carry the wait as a final wait step. Keyboard-only recordings cannot: the event list has no way to say "nothing happens until this time" without sending a real key or becoming a mouse macro. **Follow-up ruling: that field goes into 0.14.0.** | 0.13.1 for point macros, 0.14.0 for keyboard-only |
+| 3 | L3-08, clicks outside the game window | **Drop presses that start outside** the bound window's client area. Releases are always kept, so a drag that ends outside still records correctly. | 0.13.2 |
+| 4 | L2-08, held keys through a long wait | **Yes, in the second patch.** Check the foreground during a wait while anything is held. It gets its own tests and a live hold-and-alt-tab check. | 0.13.2 |
+| 5 | L5-10, what an imported macro can reach | **Checks now, summary later.** As built: 0.13.1 refuses macros that use Windows-key, app-launch, browser or sleep keys, at import and at playback, never at load. The click-point check did not ship: a mouse recording stopped with the on-screen STOP button ends with a click on Ur Task's own window, outside the game window, and those macros play today. The check is safe only once the recorder drops outside presses (ruling 3), so the two ship together. | Keys in 0.13.1, points in 0.13.2, summary unscheduled |
+| 6 | L1-16, keep-alive undoes STACK | **Re-minimize.** A window that was minimized when keep-alive reached it is minimized again after its Space. | 0.13.2 |
+| 7 | L7-14, the bridge switch | **Docs now, checkbox next.** 0.13.1 rewords README and FEATURES to say it is a file setting. 0.13.2 adds the checkbox. | 0.13.1 and 0.13.2 |
+| 8 | The copy vocabulary | **Its own pass in 0.14.0.** The patches fix only strings that are wrong or say nothing. Renames happen once, with a changelog entry. | 0.14.0 |
+
+| 9 | L7-01, the release gate | **Releases are gated on host-integration.** `release.yml` runs the suite against the real host before it builds. It tests the host's `main`: when it is red for a host-side reason, the fix is the test stand-in, not removing the step. | 0.13.1 |
+
+Standing ruling from earlier the same day: bare Esc is the easy kill key and stays. No fix may remove or narrow it.
+
+## Band A, as built
+
+Built 2026-11-25 on `release/0.13.1` by seven workers in separate worktrees, each test-first, each diff read before merge. With the real host: 1,245 of 1,245. Nothing has been seen working in the running app; the smoke checklist at `docs/smoke/2026-11-25-0.13.1-smoke.md` is the gate.
+
+**Landed:** L3-01, L3-03, L3-04, L3-10, L3-12, L3-02, L2-01, L2-02, L2-03, L2-06, L1-02, L1-04, L1-06, L1-07, L4-01, L4-03, L4-04, L4-06, L4-08, L4-11, L4-13 (keystone), L5-01, L5-02, L5-03, L5-04, L5-05, L6-06, L6-08, L6-11, L7-01, L7-02, L7-03, L7-04, L7-05, L7-11, rulings 1 and 9, and the key half of ruling 5.
+
+**Held out:** L1-01. Medium confidence, and a fix for an unconfirmed keep-alive bug is its own risk. Section 5 of the smoke decides it.
+
+**Found while building, and fixed:**
+
+- The "stopped" row label was placed ahead of "held", so a break-glass row could never say "held" again. Caught reading the diff; its suite was green.
+- Ruling 1 opened a hole against break-glass: released mid-recording, its keep-alive restore was refused and nothing brought keep-alive back. The recording now takes the restore and pays it at stop.
+- The pause warning covered keep-alive accounts only. A recording stops the whole loop, so Active accounts are covered too.
+- The back-off added for L2-01 released bare Esc for up to 30 s between failed passes. Esc is now held for the whole of a bridge playback.
+- Two branches merged with no textual conflict and broke the build: one added a constructor argument, the other added a test using the old shape.
+
+**Learned about the code:**
+
+- `File.Move` with overwrite fails while anything has the destination open, even a reader that shares delete. The old delete-then-move did not. Saves retry briefly.
+- `PostThreadMessage` loses a message sent to a thread with no message queue. The real `RegisterHotKey` call had been creating the queue as a side effect.
+- `AccountRegistry.OnLaunched` re-announced an account on every call, not only when it changed.
+- Break-glass does not "stop everything". It holds off Ctrl+Shift+P, Ctrl+Shift+L and bridge requests. It does not block a macro started from the window or stop a recording.
+
+**Left for 0.13.2, noted during the build:** a keep-alive account whose service keeps throwing has no miss count or warning; Delete and Archive act only on a file named after its id; recipe save and delete handlers have no try/catch; four hotkey paths still read the recipe runner's own running flag; a "paused for recording" row label; bridge drop lines are not rate-limited; the README row for `system.watch-global-input` omits the turbo input guard.
+
+## What this review did not do
+
+- Nothing was reproduced live. The lanes were read-only and a live Ur Task was running on the machine. Verdicts say what was read and what was not.
+- `/vibe-sec:audit` and `/vibe-test:audit` were not run; they write state files, and the lanes reviewed directly.
+- `build/build-plugin.ps1` and code signing were not read.
+- The clients of the bridge (Ur MCP, Ur OCR) were read only to judge this side.
+
+Lane sections below are in the order the lanes reported: 3, 5, 2, 4, 6, 1, 7.
+
+## How to read a row
+
+- **Sev.** S1 can drop an account, lose or corrupt a macro, send input to the wrong window, break a key system-wide, or cross a security or privacy boundary. S2 is wrong behaviour with a workaround, or a diagnostic that misleads. S3 is debt or polish with a real consequence.
+- **Verdict.** CONFIRMED means the lead read the cited code and agrees with the mechanism. PLAUSIBLE means the lane's reading is credible and was not re-read line by line. None of these were reproduced live: the lanes were read-only and a live Ur Task was running on the machine.
+- **Disposition (proposed).** `0.13.1`, `0.14.0` (only when wave B rewrites the code, or the fix needs something a patch may not carry), `owner` (a behaviour call for Este), or `won't`.
+
+---
+
+## Lane 3: recording and hotkeys
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L3-01 | S1 | CONFIRMED | Held chords auto-repeat. No `RegisterHotKey` call passes `MOD_NOREPEAT`, and record, play and break-glass are toggles, so holding `Ctrl+Shift+P` past the typematic delay starts keep-alive, stops it, starts it again. Final state is parity. | `src/Hotkeys/HotkeyService.cs:163-188`, `src/PluginRuntime.cs:783-812` | OR `0x4000` into every registration, Esc included. | 0.13.1 |
+| L3-03 | S1 | CONFIRMED | The kill key does not kill a bridge repeat. The Abort case cancels the runner, sequence, player and recipe, but not the bridge playback's own token, so a `run_macro` with repeat logs "Aborted (Esc…)" and starts its next pass about 500 ms later. Break-glass already handles this; Esc and Ctrl+Shift+F12 do not. Raised from S2 because bare Esc is the designated kill key. | `src/PluginRuntime.cs:868-872`, `src/Ipc/MacroRunInvoker.cs:342-381` | In the Abort case, also call `_bridgeInvoker?.StopMacro(...)`, as break-glass does at `:881`. | 0.13.1 |
+| L3-02 | S1 | CONFIRMED | Per-window keyboard recording captures every keystroke on the machine. The foreground check runs once at record start; the hook callback has no window test after that. Alt-tab and type a password mid-recording and it is saved into the macro file, exported with it, and replayed into the game. The log holds no key codes. | `src/Macros/MacroRecorder.cs:210-249`, `src/PluginRuntime.cs:943-977` | In per-window mode, drop key-downs while the foreground pid is not the bound account. Stop the recording when the bound account exits. | 0.13.1 |
+| L3-10 | S2 | PLAUSIBLE | After keep-alive stops, the rows and the tray still look alive. `NextDueText` reads only the ledger, so rows keep counting down to "next: 0m". The tray tooltip follows the macro player, so a keep-alive-only loop reads "idle" both while running and after it stops. This is the unanswered half of the 2026-10-05 incident: a stop nobody saw for 9.5 hours. | `src/UI/AssignmentRow.cs:77-91`, `src/UI/TrayService.cs:37-46` | Pass "loop running" into the row view and show "stopped". Add a "keep-alive on" tray state. | 0.13.1 |
+| L3-04 | S2 | CONFIRMED | One chord held by another app kills the whole startup. Any single registration failure throws and unregisters the rest, and `_hotkeys.Start()` is the first line of `StartAsync`'s try, so macro load and the host connection are skipped too. The window shows "Not connected", zero macros, no hotkeys, and the log drops the inner error naming the chord. | `src/Hotkeys/HotkeyService.cs:165-188`, `src/PluginRuntime.cs:672-714` | Register each chord on its own, log each failure with its name and error, carry on. Give `Start()` its own try. | 0.13.1 |
+| L3-12 | S2 | PLAUSIBLE | The routine RUN/STOP button never shows STOP. `RecipeRunningChanged` fires before `RecipeRunner.RunAsync` has claimed its token, so the view model reads `IsRecipeRunning` as false and nothing raises it again until the end. `Ctrl+Shift+L` still stops it. | `src/PluginRuntime.cs:344`, `:519-523`, `src/Macros/RecipeRunner.cs:41` | `IsRecipeRunning => _activeRecipeRunner is not null`. | 0.13.1 |
+| L3-11 | S2 | PLAUSIBLE | The RECORD button cannot start a per-window recording and cannot stop any recording. Clicking it makes Ur Task the foreground window, so the per-window start always refuses and points the user at multi-window mode. The button is disabled for the whole recording. | `src/UI/RecorderWindow.xaml:218-222`, `src/UI/RecorderViewModel.cs:42`, `:431` | Drop `IsRecording` from the enable condition. Reword the refusal to "click the game window, then press Ctrl+Shift+R". | 0.13.1 |
+| L3-06 | S2 | CONFIRMED | A non-cancel exception out of the sequence leaves bare Esc registered with nothing running. `_sequenceActive` goes true on the first Focusing and false only on Done or Aborted; a bridge `RunMacro` with `interAltDelayMs: -5` throws from `Task.Delay` after Focusing and emits neither. Esc is then dead in every app until the next sequence finishes or the app restarts. | `src/Macros/SequencePlayer.cs:52`, `:94-103`, `:176`, `src/PluginRuntime.cs:194-204` | Emit Aborted on every non-normal exit after the single-flight claim. Clamp the delay at zero. | 0.13.1 |
+| L3-09 | S2 | PLAUSIBLE | `RefreshAbortKey` decides on one thread and registers on another. A stop and restart within about a millisecond can leave Esc disarmed for a whole keep-alive-only run, or armed with nothing running. Narrow window. | `src/PluginRuntime.cs:933-939`, `src/Hotkeys/HotkeyService.cs:195-209` | Have the pump thread evaluate a `shouldArm` delegate when it processes a refresh. | 0.13.1 if the fix stays small |
+| L3-05 | S2 | PLAUSIBLE | The recorder records Ur Task's own injected input. Neither hook callback checks the injected flag and the app's `SendInput` calls carry no marker, so a keep-alive Space that fires mid-recording is saved into the macro. | `src/Macros/MacroRecorder.cs:210-280`, `src/Macros/AssignmentRunner.cs:1494-1519` | Stamp `dwExtraInfo` on the app's own input and drop events that carry it. | 0.14.0. Wave B's plan already builds the own-input stamp. |
+| L3-08 | S2 | PLAUSIBLE | Mouse recording keeps clicks made outside the anchored window, and replay sends them outside the target. A code comment marks negative offsets as intended ("faithful replay"). | `src/Macros/MacroRecorder.cs:267-276`, `src/Macros/MacroPlayer.cs:169-179` | Drop button and wheel events outside the anchor's client rect. | owner |
+| L3-13 | S2 | PLAUSIBLE | The 0.12.1 recording trim also removes the wait at the end of a keyboard recording. "Press E, wait 30 s, stop" used to loop every 30 s because the stop chord's Ctrl carried the end time. Now it loops about every 2 s. A test accepts a 10.8 s tail vanishing. Raised from S3: it changes how every loop macro recorded since 0.12.1 behaves. | `src/Macros/MacroRecorder.cs:332-341`, `tests/rororo-ur-task.Tests/RecordingHotkeyTrimTests.cs:14-28` | Keep the end time. How depends on whether the current schema can carry it. | owner, then 0.13.1 if no schema change is needed |
+| L3-07 | S3 | PLAUSIBLE | Recorder callbacks null-check `_events` and `_clock`, then re-read the fields, while `Stop()` nulls them from another thread. Microsecond window; outcome of a managed exception inside a low-level hook callback is not known. | `src/Macros/MacroRecorder.cs:212`, `:240-241`, `:253-275` | Copy both fields to locals at the top of each callback. | 0.13.1 |
+| L3-14 | S3 | PLAUSIBLE | Another Ur Task chord pressed mid-recording leaves a Ctrl+Shift tap in the middle of the macro. The filter drops the chord's letter only; the trim handles only head and tail. | `src/Macros/MacroRecorder.cs:223-228`, `:321-343` | When a chord key is filtered, also remove the Ctrl and Shift presses around it. | 0.13.1 if cheap |
+| L3-15 | S3 | CONFIRMED | Handler exceptions on the hotkey thread vanish. The pump swallows them without a log line, and `_assignments` is a plain `Dictionary` read there while other threads write it. | `src/Hotkeys/HotkeyService.cs:232` | `DiagLog.Write` in that catch. | 0.13.1 |
+| L3-16 | S3 | CONFIRMED | `HotkeyServiceTests` registers real machine-wide hotkeys, so two tests fail wherever a live Ur Task is running. | `tests/rororo-ur-task.Tests/HotkeyServiceTests.cs:8-26`, `:61-73` | Put registration behind a seam, or skip when a probe registration fails. | 0.13.1 |
+
+### Bare Esc: the facts
+
+The ruling stands: bare Esc is the easy kill key and it stays. These are the facts around it.
+
+- **Esc is registered for the entire keep-alive run, not only during sweeps.** `_hotkeys.EnableAbortKey()` is called before the loop starts, with the comment "Esc aborts for the whole runner session, incl. keep-alive gaps" (`src/PluginRuntime.cs:845`). It is released only when the runner, sequence, player and recipe are all idle. A registered hotkey swallows the key for every app, so while keep-alive is on, Esc does nothing anywhere else on the machine, the Roblox menu included.
+- **The docs say otherwise.** `README.md:69` and the doc comment at `src/Hotkeys/HotkeyService.cs:9-12` both say Esc is claimed "only while a macro is playing". True for a single playback, not for a keep-alive loop.
+- **A stop is quiet.** One line in the log and the activity feed, the button label reverts, the status pill changes. No toast, no sound, no tray change, no re-arm, and the rows keep counting down (L3-10). The activity feed holds 100 lines in memory.
+- **Esc is not armed** while idle, while recording, or between passes of a bridge repeat.
+- **It can stick on or fail to arm:** L3-06, L3-09, and a silent registration failure at `HotkeyService.cs:198` while the log promises "Esc … to stop".
+
+### Corrections to the plan from this lane
+
+- Compact mode (`Ctrl+Shift+M`) is a window-level key binding, not a global hotkey.
+- The global set is five chords plus on-demand Esc: `Ctrl+Shift+R`, `P`, `L`, `F12`, `F11`.
+
+### Carried to other lanes
+
+- `DisposeAsync` (`src/PluginRuntime.cs:723-737`) does not abort the runner, sequence or player. Quitting from the tray mid-playback may exit before held keys are released. Not analysed here; lane 2 or 4 should cover it.
+
+---
+
+## Lane 5: files the app reads and writes
+
+Held up under review: path traversal on import (ids are regenerated and paths require a GUID), no overwrite on import, refusal of a newer schema, per-file isolation of a corrupt macro, clamped delays, AutoHotkey string escaping, and the live foreground gate before every event. No step can start a process, open a URL or touch a file.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L5-01 | S1 | CONFIRMED, both .NET behaviours reproduced on .NET 10 | A macro name with non-ASCII digits crashes the app and then blocks every startup from connecting. The step pattern uses `\d`, which matches full-width and Arabic-Indic digits; `int.Parse` accepts only ASCII and throws. `MacroName.Parse` runs for every macro on every refresh with no catch, the dispatcher handler logs without setting `Handled`, and on the next start the same throw lands inside `StartAsync`'s try before the host connection. A stranger's bundle does it. So does a Japanese IME user typing a rename. | `src/Macros/MacroName.cs:64-65`, `:80`, `src/App.xaml.cs:119-120`, `src/PluginRuntime.cs:691-695` | `[0-9]{1,6}` plus `int.TryParse`. Guard the refresh so one bad name cannot take it down. | 0.13.1 |
+| L5-05 | S1 | CONFIRMED | Renaming or toggling All games from a stale list overwrites a newer version another tool wrote. The UI holds the `Macro` objects from its last refresh, which only happens at startup and after in-app changes, and `RenameMacro` saves `macro with { Name = … }` over the whole file. An agent that rewrites a macro each run loses its version to an hours-old snapshot. | `src/UI/RecorderViewModel.cs:218-223`, `:908-923` | Reload the macro from disk by id inside Rename and Toggle, mutate the fresh copy. Refresh the list on window activation, as recipes already do. | 0.13.1 |
+| L5-02 | S1 | CONFIRMED | Macro and recipe saves are delete-then-move, under a comment that says "renames atomically". If the move fails after the delete, the only copy left is `<id>.json.tmp`, which nothing loads. Rename, Delete, the All-games toggle and the import loop do not catch, so a sharing violation from a concurrent read also crashes the app. | `src/Macros/MacroStore.cs:100-109`, `src/Macros/RecipeStore.cs:55-63` | `File.Move(tmp, target, overwrite: true)`, as two other stores here already do. Catch and report in the four UI callers. | 0.13.1 |
+| L5-04 | S1 | PLAUSIBLE | The store loads any `*.json` but saves, deletes and archives by `<id>.json`, and never validates the id at load. A copied file (`… (1).json`) gives two macros with one id: delete removes one or neither, `RunRecipe` throws on `ToDictionary` and crashes, `run_macro` plays whichever enumerates first. A dropped file with a non-GUID id lists normally and crashes the app on Rename or Delete. | `src/Macros/MacroStore.cs:74-79`, `:148-155`, `src/PluginRuntime.cs:501` | Reject a non-GUID id at load with a named failure. Carry the source path on the loaded macro. Make both `ToDictionary` calls tolerate duplicates. | 0.13.1 |
+| L5-03 | S1 | CONFIRMED that no limit exists; sizes and timings are estimates | Import has no limit on file size, macro count, or events per macro, runs on the UI thread, and shows nothing about what is about to land. Every later library refresh and every bridge `RunMacro` re-reads and re-parses every file. A 7 MB bundle of 100,000 empty macros freezes the window, then slows everything until the files are deleted by hand. | `src/UI/RecorderViewModel.cs:1013-1047`, `src/Macros/MacroBundle.cs:36-96`, `src/Macros/MacroStore.cs:69-94` | Check file length before reading, cap entries per import and events per macro. | 0.13.1 for the caps. An "Import N macros?" confirmation is a UI addition: owner. |
+| L5-07 | S2 | CONFIRMED | Preferences are written with a bare `WriteAllText` and every error swallowed, under a comment that says "atomic write". A corrupt file loads as defaults and the next toggle overwrites it. `AcceptPluginRunRequests` defaults to true, so a truncated file re-opens the bridge. That setting has no UI, and a running instance rewrites the whole file from its startup snapshot, reverting a hand edit. Lowered from S1: small blast radius apart from the bridge toggle. | `src/UI/UserPreferences.cs:85-107` | Tmp plus atomic move. Keep a `.bad` copy on a load failure and log it. Re-read before applying a single-field change. | 0.13.1 |
+| L5-09 | S2 | PLAUSIBLE | Exported bundles carry the Roblox user id and display name of the account the macro was recorded on. A macro posted in Discord ties that alt to the poster. | `src/Macros/MacroBundle.cs:24-29`, `src/Macros/Macro.cs:19-20` | Null both fields in `Serialize`. They are already nullable, so the format does not change. | 0.13.1 |
+| L5-10 | S2 | PLAUSIBLE | What an imported macro can reach: everything a person can do in the Roblox client (chat, trades, mailbox sends), single shell chords the shell consumes even with Roblox in front (Win+R, Win+D, Alt+F4, app-launch keys), one click anywhere on the desktop through an unchecked point, and a paste of the user's own clipboard into the game. Import discloses none of it. A "farm" macro that mails pets to a stranger is ordinary input into the correct window. | `src/Macros/MacroPlayer.cs:496-536`, `src/Macros/Steps/StepRunner.cs:287-292`, `:926-964` | Refuse or warn on Win, launch and sleep key codes at load. Bounds-check every placed point. Show an import summary with every paste text. | owner. The checks are patch-sized; the summary is a feature. |
+| L5-11 | S2 | PLAUSIBLE, script read and not run | The AutoHotkey export drops the foreground gate. A macro that Ur Task aborts the moment focus leaves Roblox runs to completion as a script, so Win+R, a pasted command and Enter become command execution on whoever runs the `.ahk`. Escaping itself is correct. | `src/Macros/AutoHotkeyExporter.cs:45-66`, `:252-261` | Emit a `WinActive("ahk_exe RobloxPlayerBeta.exe")` guard. Flag Win-key steps on export. | 0.13.1 |
+| L5-06 | S2 | PLAUSIBLE | The schema guard misses three things. Fields added inside schema 4 (`reach` in 0.12.0, `paste` in 0.12.1) are stripped or rejected by older builds with no "update Ur Task" advice. A file with no `schemaVersion` is read as v1, so a v4-shaped file loads empty, "completes" instantly, and a rename then writes the empty version to disk. Every export is stamped schema 4 even when it needs less. | `src/Macros/MacroV1Migrator.cs:30`, `:41-59` | Refuse a file that has `steps` or `coordSpace` but no `schemaVersion`. | 0.13.1 for the refusal. A minimum-reader field is a schema change: wave C, which already moves to schema v5. |
+| L5-08 | S2 | PLAUSIBLE | Recipe files are not validated at load. One recipe with no `steps` makes the Recipes window refuse to open, with only a log line, and makes Delete or Archive on any macro crash the app. | `src/Macros/RecipeStore.cs:38-53`, `src/Macros/Recipe.cs:35-40`, `src/Macros/MacroLibrary.cs:91-92` | Validate steps, id and schema in `LoadAll` and report failures. | 0.13.1 |
+| L5-12 | S2 | PLAUSIBLE | The AutoHotkey v1 export is UTF-8 with no BOM, which v1 reads in the system ANSI code page. Non-ASCII paste text is pasted wrong. | `src/UI/RecorderViewModel.cs:1003` | Write with a BOM. | 0.13.1 |
+| L5-13 | S3 | PLAUSIBLE | The step validator misses nulls it promises to catch. A raw step with no `events` throws `NullReferenceException` where the comment promises "a sentence, never an exception". In the assignment loop it retries every 30 s indefinitely. | `src/Macros/Steps/MacroStep.cs:161`, `:172-234` | Null-check in `Validate`. | 0.13.1 |
+| L5-14 | S3 | PLAUSIBLE | Macro names and labels go into `ur-task.log` with no CR/LF stripping, so an imported name can forge whole log lines, "exiting cleanly" included. | `src/Diagnostics/DiagLog.cs:38-40` | Replace control characters in `DiagLog.Write`. | 0.13.1 |
+| L5-15 | S3 | PLAUSIBLE | Import never reads `bundleVersion`. A future bundle format is imported as far as this build can read it and reported as success. | `src/Macros/MacroBundle.cs:54-57` | Refuse a newer `bundleVersion` with the "newer version" sentence. | 0.13.1 |
+| L5-16 | S3 | PLAUSIBLE | Load failures after startup are silent. The UI refresh discards `.Failures`, so a macro corrupted mid-session just disappears from the list, and a half-written `adjustments.json` plays a click at its unadjusted position with no trace. | `src/UI/RecorderViewModel.cs:220`, `src/Macros/Steps/PointAdjustmentStore.cs:88-92` | Surface load failures in the activity log on every refresh. | 0.13.1 if cheap |
+
+### Outside this repo
+
+- Macro names returned through `ListMacros` reach an LLM agent as attacker-controlled text. That is a prompt-injection surface in Ur MCP, not here.
+- Whether Ur MCP and Ur OCR write macro and adjustment files atomically was not checked.
+
+---
+
+## Lane 2: the playback engine
+
+Held up under review: held keys and buttons are released on every in-process exit path, every step-path input goes through the foreground guard, pause and resume at a step boundary is correct including a cancel while parked, the old SequencePlayer check-then-act gap is closed with an atomic claim, timing is monotonic, and a windowed recording is never maximized.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L2-01 | S1 | CONFIRMED | A bridge repeat spins hot when its target's window is gone. `FocusOutsideBreaksAsync` returns on a gone window before its delay, the whole pass completes synchronously, and the repeat loop treats a refused pass as "loop on" with no pacing. Targets are resolved once, so a crashed, kicked or relaunched account never comes back. One core pegs, the log rolls its 1 MB in seconds and takes the session's evidence with it, and Esc cannot land in the gap. Only StopMacro or break-glass ends it. | `src/Macros/SequencePlayer.cs:170-176`, `src/Ipc/MacroRunInvoker.cs:320-381` | Back off between passes that completed nothing. End the repeat as failed when every target's window is gone. | 0.13.1 |
+| L2-02 | S1 | CONFIRMED (also L4-12, and flagged by lane 3) | Quitting Ur Task mid-playback leaves held input down. `DisposeAsync` cancels the bridge and the recipe but never aborts the runner, sequence or player, so the `finally` blocks that release keys never run. `OnHostLost` does it right. Tray, Quit during a hold and the alt keeps walking; a held Shift garbles the user's own typing. | `src/PluginRuntime.cs:723-737` against `:748-759` | Abort all three in `DisposeAsync` and wait up to a second for the releases. | 0.13.1 |
+| L2-03 | S1 | CONFIRMED on the code; needs one live check before the fix ships | Mouse input is guarded by foreground only, so a topmost window over the point takes the click. Mouse events go to whatever is under the pointer. Ur Task's own compact window is topmost and forced on for multi-alt sequences, and recordings replay on alts at other screen positions. A click can land on Ur Task's own Stop, Record, STACK or CLEAR. Colour checks read the covering window's pixels the same way. `ParkPointer` already has the right test. | `src/Macros/Steps/RealStepIo.cs:24-31`, `:45-54`, `src/Macros/MacroPlayer.cs:159-181` | Apply the `ParkPointer` window-under-point test to mouse down, wheel and capture. Live check first: that the root window under a Roblox client point is the process main window. | 0.13.1 |
+| L2-06 | S2 | CONFIRMED | Step macros with no positions are still forced through the client-size check. Key, wait and paste macros must declare a size to load, get refused at 125% scale, and the window is resized and moved before the refusal. The legacy path already has the right guard. This is the paste-step friction from October, located. | `src/Macros/MacroPlayer.cs:367-379` against `:116-124` | Skip the size refusal and the resize when no step needs a position. About 12 lines; three tests need a positional step. | 0.13.1 |
+| L2-05 | S2 | CONFIRMED on the flags; effect not run | Mouse button and wheel events ignore their own coordinates. `SendInput` only uses dx/dy when the move flag is set, and it is not. Steps that move first are fine. A raw step from the converter starts at its first button press, so that press lands wherever the previous step left the pointer. | `src/Macros/MacroPlayer.cs:572-602`, `src/Macros/Steps/StepRunner.cs:1068-1091` | Move to the placed point before the first press of a raw step. Add the move flag on the legacy path. | 0.13.1 |
+| L2-07 | S2 | PLAUSIBLE | `RecipeRunner` reads a lost single-flight claim as a normal outcome. Starting a routine while a bridge playback runs reports "All alts failed to position". Starting a loop-only routine over a running keep-alive can log "Recipe finished" with nothing running and no keep-alive. | `src/Macros/RecipeRunner.cs:73-85`, `:120-121` | Treat an empty result as "busy" with its own wording. Wait for the old loop to clear before starting. | 0.13.1 |
+| L2-08 | S2 | PLAUSIBLE | Held keys stay down through a long delay after the target loses the foreground. The foreground is checked at step boundaries, not during a wait, so a 30 s Shift hold keeps Shift down system-wide after the user alt-tabs away. | `src/Macros/Steps/StepRunner.cs:153-158`, `:184-186` | While anything is held, wait in slices and check the foreground each slice. | owner. Small change in the heart of the engine. |
+| L2-10 | S3 | PLAUSIBLE | `EnsureClientSize` demands an exact match on entry and accepts slop on exit, so a window that settles 1 px off is resized and re-pinned to the top on every pass. | `src/Macros/MacroPlayer.cs:305-311`, `:336-341` | Use the same slop test on entry. | 0.13.1 |
+| L2-11 | S3 | PLAUSIBLE | Paste step: an abort inside the 250 ms settle restores the old clipboard early, so the game can paste the old contents. Rich clipboard content comes back as plain text with no log line. | `src/Macros/Steps/StepRunner.cs:926-957` | Once V is down, finish the settle before restoring. Log when formats beyond text were present. | 0.13.1 |
+| L2-13 | S3 | PLAUSIBLE | `MacroPlayer`'s single-flight is check-then-act. Two starts on one account within a few milliseconds queue the second behind the first; a test says the intent is "refused, not queued". | `src/Macros/MacroPlayer.cs:59-93` | One atomic busy flag around the whole call. | 0.13.1 if it stays small |
+
+Merged into other rows: L2-04 is L3-03 (Esc does not end a bridge repeat). L2-09 is L5-02 (delete-then-move saves). L2-12 is L3-06, L4-08 and L5-13 (unvalidated delay and null raw events).
+
+---
+
+## Lane 4: IPC and the host boundary
+
+Held up under review: the bridge pipe is current-user only, a caller can run a macro by id and nothing else (no macro body, no path, no keyboard input), framing rejects oversize and negative lengths before allocating, JSON is parsed into sealed records, reason codes are defined in one place, the single-instance mutex is taken before any global resource, and the log holds no keystrokes, paste text, cookies or share links.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L4-01 | S1 | CONFIRMED | A denied capability on either account stream makes the plugin exit and blame the host. Both stream consumers treat every exception except cancellation as "host died". The host's consent sheet grants capabilities one by one, so unticking `account-exited` gives "Host RoRoRo connection lost … exiting plugin" on every start, with the host fine. The caught exception is never logged. A subscriber bug inside the loop exits the plugin the same way. | `src/PluginHost/PluginClient.cs:190-235` | Catch permission-denied and unimplemented, log, and fall back to polling the running-accounts call. Log the status before any host-lost. | 0.13.1 |
+| L4-13 | S2 | CONFIRMED with the live log: 36 session starts since 2026-10-30, zero "exiting cleanly" lines | On a normal RoRoRo exit the plugin is hard-killed, so "exiting cleanly" is never written. The host kills the plugin's process tree before it stops its pipe. The keystone says a missing exit line is evidence of a hang; in practice every ordinary shutdown lacks it. A kill mid-hold also leaves input down. | `src/App.xaml.cs:143-148`, host `App.xaml.cs` plugin stop path | Correct the keystone now. The real fix is a graceful step in the host before the kill. | 0.13.1 for the keystone. Host issue for the rest. |
+| L4-03 | S2 | CONFIRMED | One client that connects and stalls blocks the whole bridge, StopMacro included. One pipe instance, one connection at a time, no per-connection deadline. A script that opens the pipe to see if Ur Task is alive and keeps the handle makes every other caller time out, and a repeat can no longer be stopped remotely. | `src/Ipc/MacroRunnerServer.cs:41-71`, `src/Ipc/FrameCodec.cs:29-55` | A per-connection token with a deadline of about 2 s on read and on write. | 0.13.1 |
+| L4-04 | S2 | CONFIRMED | The accept loop can die for the rest of the session and say nothing. Only `IOException` is caught around pipe creation, the cancellation catch is unfiltered, and every error is reported through `Debug.WriteLine`, which is compiled out of Release. None of it reaches the log. | `src/Ipc/MacroRunnerServer.cs:44-71` | Catch everything around creation, log once, retry with backoff. Replace `Debug.WriteLine` with the log. | 0.13.1 |
+| L4-06 | S2 | CONFIRMED | StopMacro for a playback id that is not running still aborts whatever is running, and answers `stopped: 0`. The abort call is unconditional after the id lookup. An agent stopping a finished run kills the user's own sequence or another caller's. | `src/Ipc/MacroRunInvoker.cs:265-293` | Abort only when something was stopped or no id was given. | 0.13.1 |
+| L4-14 | S2 | CONFIRMED on the code | The host connection does not check who is on the other end. The client pipe has no current-user option and the name is machine-global. Another local account that creates the name first can feed the plugin a list of pids, and that list decides where input goes. Needs a second principal and a won race. | `src/PluginHost/PluginClient.cs:73-74` | Add `PipeOptions.CurrentUserOnly`. Test once against the Store build. | 0.13.1 |
+| L4-05 | S2 | PLAUSIBLE | Unexpected exceptions and oversize replies close the connection with no reason code and no log. A renamed macros folder, or a `ListMacros` reply past 64 KB (roughly 700 macros), gives the agent "closed the connection without answering". | `src/Ipc/MacroRunnerServer.cs:86-97` | A catch-all that replies with the existing error code and logs. | 0.13.1 |
+| L4-07 | S2 | PLAUSIBLE | Break-glass can be beaten by a RunMacro already in flight. The request checks the flag, then loads the library, then registers. A press in that gap logs "Break-glass ON" and then the macro plays a full pass. | `src/Ipc/MacroRunInvoker.cs:126-154`, `:243-252` | Re-check the flag after registering. | 0.13.1 |
+| L4-08 | S2 | CONFIRMED for the delay (also L3-06, L2-12) | RunMacro accepts values that hang the bridge. `interAltDelayMs: -1` is an infinite wait: the first alt is focused forever, every later start is refused busy, and Esc stays registered for every app. A blank `macroId` can match an id-less file and then throw inside a `finally`, leaving the bridge busy until restart. | `src/Ipc/MacroRunInvoker.cs:133`, `:152`, `src/Macros/SequencePlayer.cs:52`, `:176` | Refuse a delay outside 0 to 60000 and a blank id. Clamp the file-borne delay. Emit Aborted on any non-normal sequence exit. | 0.13.1 |
+| L4-10 | S2 | PLAUSIBLE | The running-accounts snapshot is taken before the streams subscribe, and nothing prunes the registry. An exit in that gap is never delivered, the pid stays tracked for the session, and when Windows reuses it keep-alive focuses and types into another program. Small window, at connect only. | `src/PluginHost/PluginClient.cs:111-144`, `src/PluginHost/AccountRegistry.cs:35-49` | Subscribe first, then snapshot, and reconcile by removing pids absent from the snapshot. | 0.13.1 |
+| L4-11 | S2 | PLAUSIBLE, low confidence | A stream that ends without an error leaves the plugin running on a frozen registry and never signals host-lost. | `src/PluginHost/PluginClient.cs:196-206` | Signal host-lost, or resubscribe once, when the loop ends without a cancel. | 0.13.1, with L4-01 |
+| L4-15 | S3 | CONFIRMED | The manifest asks for two host powers the code never uses (`host.ui.row-badge`, `host.ui.tray-menu`) and omits two the host has names for and the code does (reading the screen, taking focus from other windows). | `manifest.json:9-19` | Drop two, add two. | 0.14.0. A capability change re-prompts consent, so it cannot ride a patch. |
+| L4-16 | S3 | PLAUSIBLE (also L5-14) | Log lines can be forged through the bridge caller id, macro names and the foreground window title. The log also records the title of whatever window was in front at each abort and miss, and account names beside user ids, in a file users are asked to share. | `src/Hotkeys/AbortLog.cs:22`, `src/Macros/PlaybackEndLog.cs:36-43`, `src/PluginHost/Win32Focus.cs:38-45` | One helper that strips control characters and caps length. Consider logging the process name only. | 0.13.1 |
+| L4-17 | S3 | PLAUSIBLE | The log goes dark while a roll cannot complete. The roll and the append share one try, so a reader holding either file drops every line until it lets go. | `src/Diagnostics/DiagLog.cs:29-57` | Roll in its own try, append regardless. | 0.13.1 |
+| L4-18 | S3 | PLAUSIBLE | If the first claim write fails, no heartbeat is started for that run, so Ur Task and Ur AFK both service the same accounts. | `src/PluginHost/ClaimFile.cs:51-61` | Create the timer first; the first tick repairs it. | 0.13.1 |
+| L4-19 | S3 | PLAUSIBLE, low confidence | The system foreground-lock timeout is saved and restored with nothing serializing it across plugins or a kill. A lost race leaves it at zero until logoff. | `src/PluginHost/Win32Focus.cs:104-122` | Never save a zero; restore the Windows default instead. | 0.13.1 |
+| L4-20 | S3 | PLAUSIBLE | RESET can move and resize a stranger's window. The saved rects are keyed by pid and not pruned when an account exits. | `src/PluginHost/WindowArrangeService.cs:66-94` | Drop the entry when the account is removed. | 0.13.1 |
+| L4-21 | S3 | PLAUSIBLE | Host calls have no deadlines and the connection is one-shot. A hung host leaves "Connecting…" as the last line forever; one failed handshake means no retry for the session. | `src/PluginHost/PluginClient.cs:63-145` | Deadlines on the unary calls. Assign the client only after a good handshake. | 0.13.1 |
+| L4-22 | S3 | PLAUSIBLE | Reason codes leave an agent guessing in three places. RunMacro drops targets that are not running and still answers ok. `refused` covers both permanent caller errors and a transient lost race. No refusal is written to the log. | `src/Ipc/MacroRunInvoker.cs:126-154`, `src/Ipc/Reasons.cs` | Name dropped targets in the existing note field. Log each refusal. | 0.13.1 for those two. Splitting `refused` is a contract change: 0.14.0. |
+
+Merged into other rows: L4-02 is L5-04 (duplicate ids crash a routine run). L4-09 is L3-04 (a hotkey conflict stops startup). L4-12 is L2-02 (quit leaves input held).
+
+### The v0.2 security review is out of date
+
+`docs/v0.2-security-review.md` covered the release workflow, a package scan and a secrets grep. It never reviewed the running program, and its verdict of "no new attack surface" predates the action bridge, screen capture, foreground forcing, bundle import, the paste step and the diagnostics log. `test.yml` has no `permissions:` block. The release publishes a hash beside the zip, which detects corruption and not tampering. Whether the exe is signed was not checked.
+
+### Also outside this repo
+
+- Ur MCP's bridge client and host client both omit the current-user option.
+- A graceful plugin shutdown step before the kill belongs to the host (L4-13).
+
+---
+
+## Lane 6: the UI
+
+Held up under review: no theme brush is bound statically or captured in code-behind, frozen brushes are replaced and not mutated, dialogs and the tray menu follow a live theme change, every runtime event but one is marshalled to the UI thread, there is no `async void`, destructive dialogs default to cancel on Enter, and library counts rebuild correctly.
+
+Nothing in this lane was rendered. L6-05, L6-06, L6-08 and L6-09 are each a ten-second look in the running app, and that look should happen before anyone fixes them.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L6-05 | S2 | CONFIRMED on the mechanism; effect needs a live look | Sequence progress events throw in the window's handler and are swallowed. `SequenceProgressed` is the one runtime event raised without `RaiseUI`, and the sequence runs on a pool thread. The view model's first property change reaches a window handler that reads `DataContext` off-thread, which throws; `EmitProgress` swallows it. That skips the rest of the runtime handler: no "Sequence playback refused" line, no toast, no auto-compact, and `_sequenceActive` is never set, so Esc is released between alts. The live log has 3,034 playback starts and no refusal line, which fits but does not prove it. **This contradicts the premise of L3-06** (Esc stuck on after a sequence exception), which needs `_sequenceActive` to go true. One of the two is wrong; a two-alt sequence in the running app settles it. | `src/PluginRuntime.cs:181-183`, `src/UI/RecorderWindow.xaml.cs:50-56`, `src/Macros/SequencePlayer.cs:190-193` | `RaiseUI` around the event. Fix the compact restore in the same change, or every bridge playback will pop the strip open. | 0.13.1 |
+| L6-06 | S2 | CONFIRMED on the code | PLAY ASSIGNMENTS stays disabled until the loop is first started by hotkey. `CanExecute` needs a row, the button binds before any account exists, and the account handlers re-query only STACK, GRID and RESET. The command class has no automatic re-query. The live log shows zero button starts in a month. | `src/UI/RecorderViewModel.cs:151-168`, `:332-347`, `src/UI/RelayCommand.cs:18` | Re-query the play commands when an account is added or removed. | 0.13.1 |
+| L6-08 | S2 | CONFIRMED on the code | "Export as AutoHotkey" cannot open, and "Allow in all games" shows no tick. The app-wide menu item template has no popup, no items host and no check mark, and the submenu was added after it. The AutoHotkey export is unreachable from the UI. | `src/App.xaml:234-275`, `src/UI/RecorderWindow.xaml:683-691` | Add a popup and a check mark to the template, or flatten to two items. | 0.13.1 |
+| L6-10 | S2 | PLAUSIBLE | A deleted or renamed macro stays paired and keeps playing. Pairings hold the `Macro` object, not its id, and nothing re-points them on a library change. Delete "Farm v1" and both rows still read "Farm v1 · ASSIGNED" and PLAY runs it. | `src/UI/RecorderViewModel.cs:925-930`, `:545-564`, `src/UI/AssignmentRow.cs:36` | Re-resolve pairings by id on every library change; clear the missing ones. | 0.13.1 |
+| L6-11 | S2 | PLAUSIBLE | Double-clicking PLAY ASSIGNMENTS starts the loop and stops it again. The second click reaches the toggle after the runner has claimed. Same family as L3-01. | `src/UI/RecorderViewModel.cs:151-168`, `src/PluginRuntime.cs:808-812` | Ignore a second invocation for about half a second. | 0.13.1 |
+| L6-12 | S2 | PLAUSIBLE | Routine RUN in the main window silently refuses while keep-alive is running. The Recipes window's RUN takes over the loop by design; this one returns with no message and no log line. | `src/UI/RecorderViewModel.cs:98-124` | Drop the `!IsRunnerActive` clause, or disable the button with a reason. | 0.13.1 |
+| L6-09 | S2 | PLAUSIBLE | The "Keep-alive off" label renders in system black on the dark row. It is the only checkbox with content, there is no checkbox style, and the default style's foreground beats the inherited one. | `src/UI/RecorderWindow.xaml:1070-1075` | Set the foreground to the muted text brush. | 0.13.1 |
+| L6-13 | S2 | PLAUSIBLE | Assignment rows keep the account info from first sight. A re-announce with the game filled in is ignored, so the game-mismatch warning never appears for alts launched after connect, and toggling keep-alive off re-tracks with an unknown game's limit. | `src/UI/RecorderViewModel.cs:1096-1098`, `src/UI/AssignmentRow.cs:18` | Make the row's account settable and update it on re-add. | 0.13.1 |
+| L6-15 | S2 | PLAUSIBLE | Recipe work is lost three ways without a prompt: the row ✕ deletes with no confirm, the editor ✕ closes with no dirty check, and closing the Recipes list closes the editor it owns. | `src/UI/RecipesWindow.xaml.cs:134-139`, `src/UI/RecipeEditorWindow.xaml.cs:230` | Reuse the delete confirm. Prompt on a dirty close. Own the editor from the main window. | 0.13.1 |
+| L6-16 | S2 | PLAUSIBLE, low confidence | STACK, GRID and RESET make synchronous window calls on the UI thread, so one hung Roblox client freezes Ur Task's window. | `src/UI/RecorderViewModel.cs:135-137`, `src/PluginHost/WindowMetrics.cs:32-39` | Use the async variants. | 0.13.1 if cheap |
+| L6-17 | S3 | PLAUSIBLE | Smaller defects. Macro cards show "0 events" for step macros (43 of the 54 in the live library). The status pill prints "alt 0/3". The compact toggle resets the size to 860x600 and can expand off-screen. The Recipes window opens 640 tall, above the screen on a small or scaled display. A new Recipes window opens on every click. Marking, pairing and collapsing have no keyboard path. | `src/UI/RecorderWindow.xaml:700-703`, `src/UI/RecorderViewModel.cs:743`, `src/UI/RecorderWindow.xaml.cs:58-76` | Each is small. | 0.13.1 for the step count and the pill. The rest: owner. |
+
+Merged into other rows: L6-01 is L3-12 (the routine button never shows STOP; two lanes found it independently, so it moves to CONFIRMED). L6-02 is L5-05 (stale rename overwrites). L6-03 is L5-01 (non-ASCII digits). L6-04 is L5-02 and L5-04 (unguarded file IO crashes). L6-07 is L3-11 (RECORD button). L6-14 is L3-10 (stopped rows show "next: Nm").
+
+### Copy
+
+The voice rules are sentence case, second person, plain words, no emoji, and no internal terms in anything a user reads. The lane read every visible string. Grouped, most consequential first.
+
+| Problem | Where | Proposed | Disposition |
+| --- | --- | --- | --- |
+| **Wrong, and following it hides your windows.** "Mouse events recorded — stack all alt windows at the same screen position…" and "use STACK or re-record". STACK now minimizes, and recordings are window-relative. | `src/UI/RecorderWindow.xaml:412`, `src/PluginRuntime.cs:257` | "Mouse clicks are recorded relative to the game window. Play back with the window the same size." | 0.13.1 |
+| The button says STACK and minimizes. CLEAR sits in the window-arranging group and wipes every pairing with no confirm. | `src/UI/RecorderWindow.xaml:268-294` | MINIMIZE ALL. Move CLEAR to the assignments header as "Clear pairings", with a confirm. | owner |
+| "Export all macros" exports only what the search leaves visible. | `src/UI/RecorderWindow.xaml:380-382` | "Export the macros shown to a file you can share." | 0.13.1 |
+| "nothing was in front", the known item. Composed at runtime from two files, so a search for the phrase finds nothing. | `src/PluginHost/Win32Focus.cs:41`, `src/Macros/KeepAlive/MissReporter.cs:33-34` | "no window had focus (lock screen or a Windows prompt)" | 0.13.1 |
+| Refusals and errors with no next step, or with enum names and ids in them: "recording in PerWindow mode", "Record refused — foreground window isn't a RoRoRo-managed Roblox process", "All alts failed to position (AllAltsFailed)", "Startup failed: …", "Foreground window is user 123 (Bob); target is user 456." | `src/UI/RecorderViewModel.cs:742`, `src/PluginRuntime.cs:946`, `:517`, `:710`, `src/Macros/MacroPlayer.cs:100` | Plain sentences that name the account and say what to do. | 0.13.1 for these five |
+| One thing, several names. Multi-window, all windows, AllWindows. Recipe, loadout, routine. Mark, select, pair, assign. ABORT, STOP. ACTIVE means both "picked" and a role. | throughout `src/UI/RecorderWindow.xaml` | Pick one of each: all windows, recipe, pair, STOP. | owner. A vocabulary pass is a release note, not a patch. |
+| Internal terms in user text: sweep, cadence, round-robin, FOCUS, break-glass, bridge, named pipe, pid. Break-glass survives a restart and the window shows no banner while it is on. | `src/UI/RecorderWindow.xaml:956-1090`, `src/Hotkeys/Breakglass.cs:61-71` | "Hands-off mode is on. Press Ctrl+Shift+F11 to turn it off." and a visible state. | owner |
+| An emoji and three untooltipped glyphs in the title bar. Plurals ("1 macros"). 8 and 9 px text on chips. | `src/UI/RecorderWindow.xaml:79-115` | Text or geometric glyphs with tooltips. | 0.13.1 for plurals and tooltips |
+
+---
+
+## Lane 1: keep-alive and foreground arbitration
+
+Held up under review: a break is granted only after the playback has fully exited, never on a cancel request; every interleaving of the preempt, park and cancel race ends in a clean state; the foreground is given back on every path where it was taken; the sweep guard's hooks live and die on their own thread and the 15 s cap is enforced; the ledger is single-lock and monotonic and loop start resets nobody; a denied host capability on the activity calls degrades with one log line.
+
+The two behaviours 0.13.0 never verified live:
+
+- **The host activity clock moving a due time works.** The path was traced end to end, and the live log agrees: on 2026-11-25 the Spaces sit 12:03 apart except for two gaps of 29 and 38 minutes with no stop, start or playback line between them. Only a ledger merge does that. Nothing is logged when a due time moves this way.
+- **A miss line naming the holder exists only on the non-turbo path, and late.** See L1-08. Neither log on this machine has a single miss line, so this is from code alone.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L1-02 | S1 | CONFIRMED on the ordering | An account that joins while the loop is starting is dropped, or wedges the whole loop. The schedule is published, then the loop awaits the host activity read (up to 2 s), then `indexOf.Clear()` wipes the index and refills only the initial accounts. A join in that gap is appended and then un-indexed; `indexOf[alt]` throws, the generic catch sleeps 30 s without touching the due time, and the same account is picked forever. No account is served again while the UI says running. Reachable when keep-alive is armed while accounts are still launching, or when break-glass off restarts the loop. | `src/Macros/AssignmentRunner.cs:403`, `:417`, `:501-504`, `:745-753` | Fill the index before publishing the schedule. Read indexes tolerantly. Back off the account that failed, not the loop. | 0.13.1 |
+| L1-01 | S1 | PLAUSIBLE, medium confidence; one live check settles it | The host clock credits input that the 0.13 spec says must not count. The spec says only key input stamps the idle clock. The host's clock is any system input, mouse and Ur Task's own injected input included, credited to whichever account was in front at its last 100 ms sample. Scenario: a turbo sweep's first Space goes out 40 to 60 ms after the foreground flip, so the host often credits the account that was in front before the sweep. That account's due time jumps a full deadline, and its real idle can pass the game's limit. A wrong credit is a whole stamp, not the 85 s skew the spec budgeted for. | `src/Macros/KeepAlive/KeepAliveLedger.cs:83-96`, `src/PluginHost/HostActivity.cs:102-113` | Keep a "last own injection" timestamp. Drop any host stamp within about a second after it, and any for an account a playback is targeting. | 0.13.1 if the live check confirms |
+| L1-04 | S2 | PLAUSIBLE | The sleeping loop does not wake for an account that joins or is switched back on. It sleeps until the earliest due time among accounts it knew, up to 12 minutes. Turn keep-alive back on for an account 8 minutes idle and the row says "next: 0m" while nothing happens. Same for an auto-rejoined account. | `src/Macros/AssignmentRunner.cs:686-694`, `:253-258` | Cap the sleep at 5 to 10 s; a wake only decides, it takes nothing. | 0.13.1 |
+| L1-07 | S2 | PLAUSIBLE, and the live status fits | Per-game limits fall back to Unknown for any account launched after Ur Task connects. The limit is computed once from the launch event's game name, which the host fills from presence after the launch. Standard cold start: every account gets limit 18 and deadline 12 where PS99 is 15 and 9. The Space still lands in time, but critical, preempt and the "expect a reset" line are computed against 18. **Live at 20:05 on 2026-11-25:** `estehernandez` idle 7 min, due 20:09, a 12-minute deadline. PS99's is 9. If that account is in PS99, this is happening now. | `src/PluginRuntime.cs:117`, `:719`, `src/Macros/AssignmentRunner.cs:297`, `:402` | While an account's game name is empty, refresh running accounts on the 30 s poll. Recompute the limit when the game changes. | 0.13.1 |
+| L1-05 | S2 | PLAUSIBLE | An account that cannot be served cuts healthy playbacks every 30 s, forever. Every miss retries in a flat 30 s, and once past its limit the preempt runway collapses to 5 s. One zombie Roblox client cancels any bridge macro with a step over 5 s, repeatedly. | `src/Macros/AssignmentRunner.cs:1017`, `:904-940` | Never preempt for an account already past its limit or three misses deep. Grow the back-off. | 0.13.1 |
+| L1-06 | S2 | PLAUSIBLE | Parked follow-up (d), confirmed. An Active macro that throws is re-focused every 31 s, logged as "keep-alive: a service failed", and the cursor never advances, so the other Active accounts never play again. | `src/Macros/AssignmentRunner.cs:1407-1469`, `:745-753` | Catch around the play call and send it down the refused branch. | 0.13.1 |
+| L1-08 | S2 | PLAUSIBLE | In turbo, and in every paused-playback break, a miss never names the holder. Sweep misses are recorded quiet and the sweep's own line names nobody. Seven alts swept, one misses because Discord took focus, and the log does not say so. Includes parked follow-up (c): an empty foreground reads "nothing was in front", which happens mid-switch, exactly when a sweep reads it. | `src/Macros/AssignmentRunner.cs:1202-1235`, `src/Macros/KeepAlive/MissReporter.cs:28-38` | Append the cause to the three sweep skip lines. Put the miss time in the delayed line. | 0.13.1 |
+| L1-09 | S2 | PLAUSIBLE, medium confidence | The sweep guard swallows the release of a key held since before the sweep. A held key auto-repeats as plain key-downs; the first repeat is dropped and remembered, so its real key-up is dropped too. Hold Shift into a sweep, let go mid-sweep, and Shift stays down for every app until tapped again. | `src/Hotkeys/SweepInputGuard.cs:30-42`, `:55` | Snapshot keys already down at the start; drop their repeats but let their release pass. | 0.13.1 |
+| L1-10 | S2 | PLAUSIBLE | Parked follow-up (b), confirmed. Break-glass blames accounts keep-alive never served: every tracked account past its deadline gets a "held off" miss and an "expect a reset" line, including Active accounts, exited accounts, and accounts overdue only because keep-alive was never on. The ledger's `Untrack` has no caller. | `src/Macros/KeepAlive/BreakglassHold.cs:38-63`, `src/PluginRuntime.cs:874-890` | Give the hold the set of accounts the stopped loop was serving. Clear the miss when it ends. | 0.13.1 |
+| L1-13 | S3 | PLAUSIBLE | `lastInputSource` reads "host" almost always, because the host's echo of each Space arrives a few ms after the ledger's own stamp. An agent cannot tell keep-alive, macro and by-hand input apart. | `src/Macros/KeepAlive/KeepAliveLedger.cs:92-94` | Ignore a host stamp within about 5 s of the current one. | 0.13.1, with L1-01 |
+| L1-14 | S3 | PLAUSIBLE | A hand-edited override above 14 minutes puts the limit past Roblox's own 20-minute kick. | `src/Macros/KeepAlive/KeepAliveLimits.cs:48-56` | Cap the limit at the platform floor. | 0.13.1 |
+| L1-15 | S3 | PLAUSIBLE | Two stale behaviours since the gate landed. The "may get kicked" warning still fires though the watchdog now pauses the macro. A preempted Active pass is counted as a failed macro, and three of them raise "macro keeps failing to complete". | `src/Macros/AssignmentRunner.cs:467-490`, `:1426-1461` | Branch on the preempted code: no streak, no back-off. Reword the warning. | 0.13.1 |
+| L1-16 | S3 | PLAUSIBLE | Keep-alive undoes STACK. Focusing a minimized window restores it and nothing minimizes it again. | `src/PluginHost/Win32Focus.cs:80` | Remember the minimized state and put it back after the Space. | owner |
+
+Merged into other rows: L1-03 is L3-05 (the recorder records keep-alive's injected Spaces, and in turbo the guard swallows the user's real keys). Lane 1 rates it S1 because it corrupts a macro; see the owner questions. L1-11 is L3-10 (stopped rows show "next: Nm"). L1-12 is L5-07 (preferences have several readers and one whole-file writer).
+
+Seen but not established: whether a hung Roblox client can block the synchronous focus call and hang the runner while it holds the turn. The host sends no exit for a superseded pid, so the registry can hold two entries for one user.
+
+---
+
+## Lane 7: tests, CI, release and records
+
+The unit suite is honest where it has seams. The step runner, the cadence scheduler, the gate, the bridge and the stores are well tested, corrupt and future-schema files included. The exposure is at the edges.
+
+| ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
+| --- | --- | --- | --- | --- | --- | --- |
+| L7-01 | S1 | CORRECTED during the build | Releases are not gated on tests. The lane said three stable releases shipped from a red commit. Checked against GitHub: on v0.12.0 and v0.7.0 the unit tests were green and `host-integration` was the red job; the v0.9.0 tag commit has no test run at all. So a gate on the unit suite alone would have stopped neither. The v0.12.0 red was the log-test flake (L7-05). `main` has no branch protection. | `.github/workflows/release.yml:3-31` | Run both suites in `release.yml` before the build, the host one included. | 0.13.1, done |
+| L7-02 | S1 | PLAUSIBLE | Nothing checks the pairs that break a release: the tag against the manifest version, and the manifest's `entrypoint` against the built exe name. The host fails the install when the entrypoint is missing. Every past release is consistent, so this is a latent gap. | `tests/rororo-ur-task.Tests/VersionConsistencyTests.cs:21-52`, `manifest.json:24` | One more assertion in the version test. One step in `release.yml` that fails unless the tag matches the manifest. | 0.13.1 |
+| L7-03 | S1 | CONFIRMED | The README says RoRoRo 1.4.3 or later is enough. The manifest has required 1.19.0 since v0.7.0. | `README.md:35`, `manifest.json:23` | Fix the line. Add a test that reads the README for the manifest's value. | 0.13.1 |
+| L7-04 | S1 | CONFIRMED on the text | The README and FEATURES promise an opt-out the code cannot honour: "you can opt-out of any of them, but the plugin refuses to record / play without the corresponding consent." Nothing in `src/` reads what was granted and the handshake does not carry it. A user who declines mouse synthesis gets it anyway. Line 39 of the same file contradicts line 31. | `README.md:31`, `:39`, `docs/FEATURES.md:89` | Delete the clause in both. Say the three are disclosure and required. | 0.13.1 |
+| L7-05 | S2 | CONFIRMED, with proof on disk | The log-test flake (K11) has exactly two leakers. `AssignmentRunnerTests` builds from the real dependency set and overrides five members, still inheriting the real log sink; a leaked temp folder on this machine holds one line naming an account that exists only in that test file. `PluginClientIntegrationTests` writes a theme line on connect; both CI reds were "Expected: 400 Actual: 401" in that job. The same constructor also reads the developer's real preferences file and sleeps a real second. | `src/Macros/AssignmentRunner.cs:183-206`, `tests/rororo-ur-task.Tests/AssignmentRunnerTests.cs:250` | Stop inheriting from the real set in that constructor. Put the integration test in the log collection. | 0.13.1 |
+| L7-06 | S2 | PLAUSIBLE | The 0.13.0 host calls are unproven at every level. The integration test never calls the activity read or the mark-active command. The unit test uses a fake that throws where the real class returns null, so it proves a branch production cannot reach. The smoke doc lists the granted path as not yet run. | `tests/rororo-ur-task.Tests/PluginClientIntegrationTests.cs:39-43`, `src/PluginHost/HostActivity.cs:50-84` | Extend the integration test with both calls, and one case with the capability withheld. | 0.13.1 |
+| L7-07 | S2 | PLAUSIBLE | The integration job tests the host-built contract on both ends, not the NuGet package. With the flag off, the test output carries the contract assembly built from the host checkout. The keystone's claim that the package reference finds a broken package first holds for restore and compile, not for the wire. The test also uses a hand-written two-capability manifest and a fixed 500 ms delay before a single publish. | `tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj:38-45` | Load the shipped manifest's capabilities. Publish until seen. Correct the keystone's wording. | 0.13.1 |
+| L7-09 | S2 | PLAUSIBLE | The dominant playback path has no test that reaches an input. Keyboard-only recordings play through an event loop that calls the static send directly, with no seam. Untested there: the foreground shifting mid-playback, held keys released on cancel and on preempt. The step path, by contrast, is well covered. | `src/Macros/MacroPlayer.cs:135-200` | An injected send function defaulting to the real one, then four tests. | 0.13.1 |
+| L7-11 | S2 | CONFIRMED | Hotkey docs are behind the code. README is missing Ctrl+Shift+L and Ctrl+Shift+F11; FEATURES is missing Ctrl+Shift+F11. Break-glass is a global grab whose state survives a restart and it has no UI surface at all. | `README.md:63-69`, `docs/FEATURES.md:68-75` | Add the rows. A visible indicator is a product call. | 0.13.1 for the rows |
+| L7-12 | S2 | PLAUSIBLE | Shipped features are documented nowhere a user would look. README has nothing on recipes, break-glass, turbo, archive, search, paste, point steps or the per-account off switch. FEATURES stops at v0.6. Both still describe keep-alive as a periodic round-robin Space. The CHANGELOG for 0.12.0 to 0.13.0 was checked against code and is accurate. | `README.md`, `docs/FEATURES.md` | One FEATURES pass from the CHANGELOG headings. Replace the README lead and hotkey table. | 0.13.1 |
+| L7-14 | S2 | PLAUSIBLE | "Accept run requests from other plugins" is documented as a preference and there is no way to set it short of hand-editing a JSON file and restarting. | `README.md:17`, `src/UI/UserPreferences.cs:22` | Add the checkbox, or reword the docs. | owner |
+| L7-15 | S2 | PLAUSIBLE | Published release assets are mutable. v0.9.1's three assets were overwritten five days after release when the workflow ran again after a history rewrite. The SDK version floats and the zip embeds timestamps. | `.github/workflows/release.yml:26`, `:41` | Refuse to overwrite an existing release. Pin the SDK. | 0.13.1 |
+| L7-16 | S2 | PLAUSIBLE | CI never builds what ships. The self-contained publish first runs after the tag is public. | `.github/workflows/test.yml` | A third job that runs the build script and checks the zip. | 0.13.1 |
+| L7-17 | S2 | PLAUSIBLE | The pre-commit guards work, locally only. Both scripts carry a CI mode no workflow uses. The secret scan covers Roblox cookies and key bundles, not bearer tokens or API keys. | `.claude/hooks/` | A CI step that runs both in scan-all mode. | 0.13.1 |
+| L7-18 | S3 | CONFIRMED (also L3-16) | Three hotkey tests assert nothing and need a machine where the chords are free. No test covers the hotkey-to-action mapping. | `tests/rororo-ur-task.Tests/HotkeyServiceTests.cs` | An injectable register and unregister pair. | 0.13.1 |
+| L7-21 | S3 | PLAUSIBLE | Workflow hardening. Actions are pinned by major tag; the third-party release action runs with write scope. No dependabot, which is how the contract sat six versions behind. | `.github/workflows/` | Dependabot for NuGet and actions. | 0.13.1 |
+| L7-23 | S3 | PLAUSIBLE | Hygiene. `createdump.exe` ships inside the zip. Tests leave temp folders behind. The 0.13.0 smoke checklist has all 21 boxes unticked with results in prose below. | `build/build-plugin.ps1` | Each is small. | 0.13.1 if cheap |
+| L7-24 | S3 | PLAUSIBLE, medium confidence | The theme consumer may log "stopped following the host" on a clean shutdown, at an arbitrary later moment. | `src/PluginHost/PluginClient.cs:259-269` | Treat a cancelled status as a normal stop, as the other two consumers do. | 0.13.1 |
+
+Merged into other rows: L7-08 is L4-13 (no "exiting cleanly" line in 36 sessions). L7-10 is L3-04 and L2-02 (the runtime is never constructed in a test; its two riskiest untested paths are the startup abort and the quit). L7-13 is L4-15 (unused and undeclared capabilities). L7-20 is L4-03 (a silent bridge client). L7-22 is L5-02 and L5-07 (comments that say "atomic").
+
+### The 19 empty catch blocks
+
+Sixteen are deliberate. Three hide a real failure, and each wants one log line, not a behaviour change:
+
+- `src/Hotkeys/Breakglass.cs:85`: a failed delete of the flag file. Memory says off, disk says on, the next start comes up in break-glass, and nothing says why.
+- `src/Hotkeys/SweepInputGuard.cs:194`: an abort handler that throws during a turbo sweep. The abort silently does nothing, while the user's own keys are being dropped.
+- `src/PluginHost/ClaimFile.cs:96`: a failed heartbeat write. The claim goes stale and Ur AFK starts servicing the same accounts, with no trace.
+
+The four in `OnHostLost` (`src/PluginRuntime.cs:752-759`) guard the aborts that stop input when the host dies. They would be better with a log line too.
+
+### Open issues against what shipped
+
+- **#29, per-account run cadence with game-aware keep-alive: fully delivered.** Most of it shipped in 0.7.0 and the rest in 0.13.0. Close it, citing both.
+- **#27, AutoHotkey importer:** open and valid. Its phase 2 targets Ur OCR triggers; point steps with colour checks are now the native target.
+- **#28, macro visualizer and key map:** open and valid. It assumes an event list; macros with clicks are step lists now.
+- **#34, install by hand:** open and valid. One of its three parts, the release files, is already in place.
