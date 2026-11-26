@@ -25,6 +25,24 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # A release used to be one step: build the zip from whatever the tag pointed
+      # at. Nothing here ran a test, and nothing made the tag wait for test.yml, so
+      # v0.7.0 and v0.12.0 were published from commits whose test workflow was red.
+      # A tag push now runs the standalone suite first, and a red suite stops the
+      # release before anything is built or published.
+      #
+      # Known limit: this is the standalone suite only, the same command as the
+      # `unit-tests` job in test.yml. `host-integration` needs the host repo
+      # checked out next door and is not repeated here, so a red there still does
+      # not stop a release. Look at it before you tag.
+      - name: Test (standalone units)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -p:StandaloneTestsOnly=true
+          -c Release
+          --nologo
+
       - name: Build plugin artifacts
         shell: pwsh
         working-directory: rororo-ur-task
