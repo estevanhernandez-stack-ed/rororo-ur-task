@@ -918,7 +918,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public void ToggleAllGames(Macro macro)
     {
         if (macro is null) return;
-        _runtime.Store.Save(macro with { AllGames = !macro.AllGames });
+        // The file can be busy (the bridge reading it, a virus scanner on it). That is a line
+        // in the activity log, not the end of the app. Same for Rename and Delete below.
+        try
+        {
+            _runtime.Store.Save(macro with { AllGames = !macro.AllGames });
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't change All games for '{macro.Name ?? "(unnamed)"}', so it was not saved. Try again in a moment. ({ex.Message})");
+        }
+        // Raised either way: after a failed save the list goes back to what is on disk.
         _runtime.RaiseMacrosChanged();
     }
 
@@ -927,15 +937,29 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public void RenameMacro(Macro macro, string newName)
     {
         if (macro is null || string.IsNullOrWhiteSpace(newName)) return;
-        var renamed = macro with { Name = newName };
-        _runtime.Store.Save(renamed);
+        try
+        {
+            var renamed = macro with { Name = newName };
+            _runtime.Store.Save(renamed);
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't rename '{macro.Name ?? "(unnamed)"}' to '{newName}', so it was not saved. Try again in a moment. ({ex.Message})");
+        }
         _runtime.RaiseMacrosChanged();
     }
 
     public void DeleteMacro(Macro macro)
     {
         if (macro is null) return;
-        _runtime.Store.Delete(macro.Id);
+        try
+        {
+            _runtime.Store.Delete(macro.Id);
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't delete '{macro.Name ?? "(unnamed)"}', so it is still in your library. Try again in a moment. ({ex.Message})");
+        }
         _runtime.RaiseMacrosChanged();
     }
 
@@ -1047,8 +1071,17 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
             foreach (var macro in result.Macros)
             {
-                _runtime.Store.Save(MacroBundle.PrepareForImport(macro, takenNames));
-                imported++;
+                // One macro that can't be written must not end the import (or the app): say
+                // which one, don't count it, carry on with the rest.
+                try
+                {
+                    _runtime.Store.Save(MacroBundle.PrepareForImport(macro, takenNames));
+                    imported++;
+                }
+                catch (Exception ex)
+                {
+                    LogStatus($"Couldn't save '{macro.Name ?? "(unnamed)"}' from {Path.GetFileName(path)}, so it was not imported. ({ex.Message})");
+                }
             }
         }
 

@@ -7,8 +7,9 @@ namespace Labs626.UrTask.Macros;
 /// <summary>
 /// Disk-backed macro library at
 /// <c>%LOCALAPPDATA%\626Labs\RoRoRoUrTask\macros\&lt;id&gt;.json</c>. One file per
-/// macro keeps load / save / delete operations atomic and the directory diffable
-/// for power-user inspection. Invalid files surface as load failures rather than
+/// macro keeps load / save / delete operations independent of each other and the
+/// directory diffable for power-user inspection. A save replaces its file in one
+/// rename (see <see cref="Save"/>). Invalid files surface as load failures rather than
 /// throwing — the UI surfaces them so the user can act, the engine never crashes
 /// on a malformed file.
 /// </summary>
@@ -94,8 +95,11 @@ public sealed class MacroStore
     }
 
     /// <summary>
-    /// Save a macro. Writes to a .tmp sibling then renames atomically so a
-    /// crash mid-write can't leave a half-written file the next load picks up.
+    /// Save a macro. Writes to a .tmp sibling, then replaces the real file with it in one
+    /// rename, so a crash mid-write can't leave a half-written file the next load picks up and
+    /// a failed save leaves the previous file exactly as it was. It used to delete the old file
+    /// first and then move: when that move failed, the only copy left was a .tmp nothing loads.
+    /// Throws when the file can't be replaced (something else has it open); callers report it.
     /// </summary>
     public void Save(Macro macro)
     {
@@ -103,9 +107,17 @@ public sealed class MacroStore
         var target = PathFor(macro.Id);
         var tmp = target + ".tmp";
         var json = JsonSerializer.Serialize(macro, JsonOptions);
-        File.WriteAllText(tmp, json);
-        if (File.Exists(target)) File.Delete(target);
-        File.Move(tmp, target);
+        try
+        {
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, target, overwrite: true);
+        }
+        catch
+        {
+            // Best effort: the save failed, so don't leave its half behind in the folder.
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
     }
 
     public void Delete(string macroId)

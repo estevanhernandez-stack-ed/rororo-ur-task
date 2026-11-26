@@ -7,8 +7,9 @@ namespace Labs626.UrTask.Macros;
 /// <summary>
 /// Disk-backed recipe library at
 /// <c>%LOCALAPPDATA%\626Labs\RoRoRoUrTask\recipes\&lt;id&gt;.json</c>. One file per
-/// recipe; atomic tmp-then-rename write. Mirrors <see cref="MacroStore"/>. Recipes
-/// reference macros by id — resolved against MacroStore at run time.
+/// recipe; a save writes a .tmp and replaces the file with it in one rename. Mirrors
+/// <see cref="MacroStore"/>. Recipes reference macros by id — resolved against
+/// MacroStore at run time.
 /// </summary>
 public sealed class RecipeStore
 {
@@ -57,9 +58,19 @@ public sealed class RecipeStore
         if (recipe is null) throw new ArgumentNullException(nameof(recipe));
         var target = PathFor(recipe.Id);
         var tmp = target + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(recipe, JsonOptions));
-        if (File.Exists(target)) File.Delete(target);
-        File.Move(tmp, target);
+        var json = JsonSerializer.Serialize(recipe, JsonOptions);
+        // Same shape as MacroStore.Save: one rename replaces the file, so a failed save leaves
+        // the previous recipe as it was instead of leaving only a .tmp nothing loads.
+        try
+        {
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, target, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
     }
 
     public void Delete(string recipeId)
