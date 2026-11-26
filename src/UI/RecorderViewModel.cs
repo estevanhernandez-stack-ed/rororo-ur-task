@@ -148,9 +148,14 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // active, this calls abort (same as Esc); otherwise starts the loop.
         // Prevents the rc11 trap where hitting PLAY again started a NEW round
         // instead of stopping the current one.
+        // IsRunnerActive only flips once the runner's Started event is dispatched back here, so the second
+        // click of a double-click still sees "not running", reaches the runtime already holding its claim,
+        // and is read as "stop". Drop a repeat inside the window.
+        var toggleDebounce = new ClickDebounce(TimeSpan.FromMilliseconds(500));
         TogglePlayStopCommand = new RelayCommand(
             () =>
             {
+                if (!toggleDebounce.TryEnter()) return;
                 if (IsRunnerActive)
                 {
                     _runtime.TriggerAbort("Play/Stop button");
