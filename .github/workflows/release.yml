@@ -51,6 +51,22 @@ jobs:
           }
           Write-Host "Tag '$tag' matches manifest.json version '$version'."
 
+          # A full release, not a release candidate, must have a dated changelog entry.
+          # 0.12.1 and 0.13.0 both shipped with theirs still reading "unreleased", and
+          # stayed that way for a month.
+          if ($tag -ceq $expected) {
+            $entry = Select-String -Path CHANGELOG.md -Pattern "^## $([regex]::Escape($version))(\s|$)" | Select-Object -First 1
+            if (-not $entry) {
+              Write-Host "::error::CHANGELOG.md has no '## $version' entry. Write it before tagging."
+              exit 1
+            }
+            if ($entry.Line -match 'unreleased') {
+              Write-Host "::error::CHANGELOG.md still says '$($entry.Line)'. Put the release date on it before tagging."
+              exit 1
+            }
+            Write-Host "CHANGELOG.md entry: $($entry.Line)"
+          }
+
       # A release used to be one step: build the zip from whatever the tag pointed
       # at. Nothing here ran a test, and nothing made the tag wait for test.yml, so
       # v0.7.0 and v0.12.0 were published from commits whose test workflow was red.
