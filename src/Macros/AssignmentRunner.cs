@@ -307,9 +307,25 @@ internal sealed class AssignmentRunner
         var existing = cur.FirstOrDefault(x => x.Assignment.Alt.RobloxUserId == alt.RobloxUserId);
         if (existing is not null)
         {
-            // The same account relaunched: new window identity only. Role, macro, interval and limit stay.
+            // The same account announced again (relaunched, or presence filled its game in): new window
+            // identity. Role and macro stay. The limit follows the game: RoRoRo learns the game after the
+            // launch event, so the first announce has none and the account starts on the unknown-game limit.
+            // Keeping that for good would time "critical", the preempt and the reset warning against 18
+            // minutes in a game that resets at 15. An announce with no game keeps the limit already held.
             existing.Assignment = existing.Assignment with { Alt = alt };
-            Track(alt, existing.Limit ?? LimitFor(alt, ClampedIntervalMs(alt)));   // Active too: GetStatus and macro credits
+            var userId = alt.RobloxUserId;
+            var announced = KeepAliveLimits.OnAnnounce(
+                alt, existing.Limit ?? _ledger.Get(userId)?.Limit, a => LimitFor(a, ClampedIntervalMs(a)));
+            Track(alt, announced);   // Active too: GetStatus and macro credits. Re-tracking keeps the input history.
+            if (existing.IsKeepAlive && announced != existing.Limit)
+            {
+                existing.Limit = announced;
+                existing.IntervalMs = ClampedIntervalMs(alt);
+                // The due time follows the new deadline. Only ever earlier here: a later one is picked up
+                // by the loop's own refresh from the ledger, and an account with no input yet is due anyway.
+                if (_ledger.Get(userId) is { LastInputMs: not null })
+                    existing.DueAtMs = Math.Min(existing.DueAtMs, _ledger.DueAtMs(userId));
+            }
             return;
         }
         var intervalMs = ClampedIntervalMs(alt);

@@ -88,11 +88,18 @@ internal sealed class HostActivityPoller(IHostActivity host, Macros.KeepAliveLed
 {
     private readonly HostCallFailures _failures = new(log);
 
-    public async Task RunAsync(TimeSpan every, CancellationToken ct)
+    /// <param name="afterEachPoll">Runs after every poll of this loop (not after a lone
+    /// <see cref="PollOnceAsync"/>). Whatever it throws is swallowed: it never ends the poll.</param>
+    public async Task RunAsync(TimeSpan every, CancellationToken ct, Func<CancellationToken, Task>? afterEachPoll = null)
     {
         while (!ct.IsCancellationRequested)
         {
             await PollOnceAsync(ct).ConfigureAwait(false);
+            if (afterEachPoll is not null)
+            {
+                try { await afterEachPoll(ct).ConfigureAwait(false); }
+                catch { /* a rider on the poll must never stop the activity clock being read */ }
+            }
             try { await Task.Delay(every, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }

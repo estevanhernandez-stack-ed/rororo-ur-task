@@ -106,7 +106,11 @@ internal sealed class AssignmentRow : INotifyPropertyChanged
         {
             if (_keepAlive is null || KeepAliveOff == value) return;
             // Tracked first: the flag lives on the ledger entry, and the loop may not have started yet.
-            _keepAlive.Ledger.Track(Alt, _keepAlive.LimitFor(Alt));
+            // Only when it is not tracked already: this row keeps the account info it was created with
+            // (launch time, before presence named the game), and re-tracking from that would put a limit
+            // learned since back to the unknown-game one.
+            if (_keepAlive.Ledger.Get(Alt.RobloxUserId) is null)
+                _keepAlive.Ledger.Track(Alt, _keepAlive.LimitFor(Alt));
             _keepAlive.Ledger.SetOff(Alt.RobloxUserId, value);
             OnPropertyChanged();
             OnPropertyChanged(nameof(NextDueText));
