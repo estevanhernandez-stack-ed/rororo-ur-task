@@ -1061,21 +1061,12 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         foreach (var path in filePaths)
         {
-            MacroBundle.ParseResult result;
-            try
-            {
-                result = MacroBundle.Parse(File.ReadAllText(path));
-            }
-            catch (Exception ex)
-            {
-                LogStatus($"Import failed for {Path.GetFileName(path)}: {ex.Message}");
-                continue;
-            }
+            // Size limits, parsing and the wording of every refusal live in MacroBundle, where
+            // they are tested; this only shows the lines and saves what came through.
+            var file = MacroBundle.ReadForImport(path);
+            foreach (var line in file.Log) LogStatus(line);
 
-            foreach (var failure in result.Failures)
-                LogStatus($"Skipped {failure.Label} in {Path.GetFileName(path)}: {failure.Reason}");
-
-            foreach (var macro in result.Macros)
+            foreach (var macro in file.Macros)
             {
                 // One macro that can't be written must not end the import (or the app): say
                 // which one, don't count it, carry on with the rest.
