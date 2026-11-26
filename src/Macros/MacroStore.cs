@@ -67,9 +67,15 @@ public sealed class MacroStore
     // Top level only (EnumerateFiles' default). LoadAll must never see the archive
     // subfolder: that is what keeps archived macros out of the library, the action
     // bridge's ListMacros and the MCP's list_macros.
+    //
+    // Every *.json is read whatever it is called, but save, delete, archive and restore all act
+    // on <id>.json (PathFor). So the id is checked here, where a problem is one line in the log:
+    // a macro whose id PathFor would refuse never reaches the list (rename or delete on it used
+    // to throw), and two files with one id load as one macro (the rest of the app looks macros up
+    // by id and assumes there is one).
     private static LoadResult LoadFrom(string directory)
     {
-        var loaded = new List<Macro>();
+        var read = new List<(string Path, Macro Macro, Guid Id)>();
         var failures = new List<LoadFailure>();
 
         foreach (var path in System.IO.Directory.EnumerateFiles(directory, "*.json"))
@@ -83,7 +89,17 @@ public sealed class MacroStore
                     failures.Add(new LoadFailure(path, "Migration returned null."));
                     continue;
                 }
-                loaded.Add(macro);
+                if (string.IsNullOrWhiteSpace(macro.Id))
+                {
+                    failures.Add(new LoadFailure(path, NoIdReason));
+                    continue;
+                }
+                if (!Guid.TryParse(macro.Id, out var id))
+                {
+                    failures.Add(new LoadFailure(path, BadIdReason(macro.Id)));
+                    continue;
+                }
+                read.Add((path, macro, id));
             }
             catch (Exception ex)
             {
@@ -91,8 +107,43 @@ public sealed class MacroStore
             }
         }
 
+        // One id, several files (a backup copy left in the folder, a file written by another
+        // tool). Keep the file named after the id, because that is the one a save or delete
+        // touches; with none, the first by file name, so the pick is the same on every load.
+        var skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sameId in read.GroupBy(r => r.Id).Where(g => g.Count() > 1))
+        {
+            var ordered = sameId
+                .OrderBy(r => IsNamedAfterItsId(r.Path, r.Macro.Id) ? 0 : 1)
+                .ThenBy(r => Path.GetFileName(r.Path), StringComparer.Ordinal)
+                .ToList();
+            var kept = Path.GetFileName(ordered[0].Path);
+            foreach (var other in ordered.Skip(1))
+            {
+                skipped.Add(other.Path);
+                failures.Add(new LoadFailure(other.Path, DuplicateIdReason(kept)));
+            }
+        }
+
+        var loaded = read.Where(r => !skipped.Contains(r.Path)).Select(r => r.Macro).ToList();
         return new LoadResult(loaded, failures);
     }
+
+    private static bool IsNamedAfterItsId(string path, string id)
+        => string.Equals(Path.GetFileNameWithoutExtension(path), id, StringComparison.OrdinalIgnoreCase);
+
+    // Load-failure reasons. They are read after "load failed: <file name> — " in the activity
+    // log, and an agent gets the same sentence back when it asks to run that file.
+    internal const string NoIdReason =
+        "This macro file has no id, so Ur Task can't use it. Use IMPORT to bring it in with a new id, then remove this file from the macros folder.";
+
+    internal static string BadIdReason(string id)
+        => $"Its id '{(id.Length > 40 ? id[..40] + "..." : id)}' is not a GUID, so Ur Task can't use it. "
+         + "Use IMPORT to bring it in with a new id, then remove this file from the macros folder.";
+
+    internal static string DuplicateIdReason(string keptFileName)
+        => $"It has the same id as {keptFileName}, so Ur Task uses {keptFileName} and skips this file. "
+         + "If this is a backup copy, move it out of the macros folder. To keep both, use IMPORT on this file first.";
 
     /// <summary>
     /// Save a macro. Writes to a .tmp sibling, then replaces the real file with it in one
@@ -164,6 +215,23 @@ public sealed class MacroStore
         if (!Guid.TryParse(macroId, out _))
             throw new ArgumentException("Macro id must be a Guid.", nameof(macroId));
         return Path.Combine(_directory, $"{macroId}.json");
+    }
+
+    /// <summary>
+    /// A lookup by id that cannot throw: the first macro with an id wins and a macro with no id
+    /// is left out. <see cref="LoadAll"/> no longer returns either, but a ToDictionary over a
+    /// macro list ran on the UI thread and took the app down on a duplicate, so the lookups do
+    /// not depend on that.
+    /// </summary>
+    public static Dictionary<string, Macro> IndexById(IEnumerable<Macro> macros, IEqualityComparer<string>? comparer = null)
+    {
+        var index = new Dictionary<string, Macro>(comparer ?? StringComparer.OrdinalIgnoreCase);
+        foreach (var macro in macros)
+        {
+            if (macro is null || string.IsNullOrEmpty(macro.Id)) continue;
+            index.TryAdd(macro.Id, macro);
+        }
+        return index;
     }
 
     public sealed record LoadResult(IReadOnlyList<Macro> Macros, IReadOnlyList<LoadFailure> Failures);

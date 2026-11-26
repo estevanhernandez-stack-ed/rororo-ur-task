@@ -498,7 +498,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // position step plus once for a Loop terminal, and re-reading + re-deserializing
         // every macro file on each call turns an N-step recipe into N+1 full library
         // reloads. Snapshot into a dictionary instead.
-        var macros = LoadMacrosLoggingFailuresOnce().ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        var macros = MacroStore.IndexById(LoadMacrosLoggingFailuresOnce());
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),

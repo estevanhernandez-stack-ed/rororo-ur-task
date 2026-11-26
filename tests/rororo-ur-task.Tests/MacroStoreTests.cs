@@ -92,4 +92,182 @@ public class MacroStoreTests : IDisposable
         Assert.Equal("first", Assert.Single(store.LoadAll().Macros).Name);
         Assert.False(File.Exists(PathOf(macro) + ".tmp"));
     }
+
+    // ---------- L5-04: the id decides the file, so the store checks it at load ----------
+
+    private static string FileJson(string? idJson, string name) => $$"""
+    {
+      "schemaVersion": 4,
+      {{(idJson is null ? "" : $"\"id\": {idJson},")}}
+      "name": "{{name}}",
+      "recordMode": "PerWindow",
+      "recordedAgainstUserId": null,
+      "recordedAgainstDisplayName": null,
+      "interAltDelayMs": null,
+      "recordedAtUnixMs": 1,
+      "coordSpace": "screen",
+      "events": []
+    }
+    """;
+
+    private void Write(string fileName, string? idJson, string name)
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, fileName), FileJson(idJson, name));
+    }
+
+    private static string Quoted(string id) => $"\"{id}\"";
+
+    [Theory]
+    [InlineData("\"not-a-guid\"")]
+    [InlineData("\"\"")]
+    [InlineData("\"../escape\"")]
+    public void Load_IdThatIsNotAGuid_IsALoadFailure_NotAMacro(string idJson)
+    {
+        Write("handmade.json", idJson, "handmade");
+
+        var loaded = new MacroStore(_dir).LoadAll();
+
+        Assert.Empty(loaded.Macros);
+        var failure = Assert.Single(loaded.Failures);
+        Assert.EndsWith("handmade.json", failure.Path);
+        Assert.Contains("id", failure.Reason);
+    }
+
+    [Theory]
+    [InlineData(null)]     // no id property at all
+    [InlineData("null")]   // "id": null
+    public void Load_MissingId_IsALoadFailure_NotAMacro(string? idJson)
+    {
+        Write("handmade.json", idJson, "handmade");
+
+        var loaded = new MacroStore(_dir).LoadAll();
+
+        Assert.Empty(loaded.Macros);
+        var failure = Assert.Single(loaded.Failures);
+        Assert.EndsWith("handmade.json", failure.Path);
+        Assert.Contains("no id", failure.Reason);
+    }
+
+    [Fact]
+    public void Load_BadId_DoesNotStopTheRestLoading()
+    {
+        var good = M("good");
+        var store = new MacroStore(_dir);
+        store.Save(good);
+        Write("handmade.json", Quoted("not-a-guid"), "handmade");
+
+        var loaded = store.LoadAll();
+
+        Assert.Equal("good", Assert.Single(loaded.Macros).Name);
+        Assert.Single(loaded.Failures);
+    }
+
+    /// <summary>Everything the library lists can be renamed and deleted: an id the store would
+    /// refuse to build a path from never reaches the list in the first place.</summary>
+    [Fact]
+    public void EveryLoadedMacro_CanBeSavedAndDeleted()
+    {
+        var store = new MacroStore(_dir);
+        store.Save(M("good"));
+        Write("handmade.json", Quoted("not-a-guid"), "handmade");
+        Write("noid.json", null, "noid");
+
+        foreach (var m in store.LoadAll().Macros)
+        {
+            store.Save(m with { Name = "renamed" });
+            store.Delete(m.Id);
+        }
+
+        Assert.Empty(store.LoadAll().Macros);
+    }
+
+    [Fact]
+    public void Load_DuplicateId_PrefersTheFileNamedAfterTheId()
+    {
+        const string id = "ffffffff-0000-4000-8000-000000000001";
+        // The copy sorts first by name, so only the "named after the id" rule can pick the other.
+        Write("aaa backup.json", Quoted(id), "the copy");
+        Write($"{id}.json", Quoted(id), "the real one");
+
+        var loaded = new MacroStore(_dir).LoadAll();
+
+        Assert.Equal("the real one", Assert.Single(loaded.Macros).Name);
+        var failure = Assert.Single(loaded.Failures);
+        Assert.EndsWith("aaa backup.json", failure.Path);
+        Assert.Contains($"{id}.json", failure.Reason);
+    }
+
+    [Fact]
+    public void Load_DuplicateId_WithNoFileNamedAfterTheId_TakesTheFirstByFileName()
+    {
+        const string id = "ffffffff-0000-4000-8000-000000000002";
+        Write("b.json", Quoted(id), "from b");
+        Write("a.json", Quoted(id), "from a");
+        Write("c.json", Quoted(id), "from c");
+
+        var loaded = new MacroStore(_dir).LoadAll();
+
+        Assert.Equal("from a", Assert.Single(loaded.Macros).Name);
+        Assert.Equal(new[] { "b.json", "c.json" },
+            loaded.Failures.Select(f => Path.GetFileName(f.Path)).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.All(loaded.Failures, f => Assert.Contains("a.json", f.Reason));
+    }
+
+    [Fact]
+    public void Load_SameIdInDifferentCase_IsADuplicate()
+    {
+        const string id = "abcdef00-0000-4000-8000-000000000003";
+        Write($"{id}.json", Quoted(id), "lower");
+        Write("upper.json", Quoted(id.ToUpperInvariant()), "upper");
+
+        var loaded = new MacroStore(_dir).LoadAll();
+
+        Assert.Equal("lower", Assert.Single(loaded.Macros).Name);
+        Assert.Single(loaded.Failures);
+    }
+
+    [Fact]
+    public void Load_Archived_AppliesTheSameIdRules()
+    {
+        var archive = Path.Combine(_dir, "archive");
+        Directory.CreateDirectory(archive);
+        File.WriteAllText(Path.Combine(archive, "handmade.json"), FileJson(Quoted("not-a-guid"), "handmade"));
+
+        var loaded = new MacroStore(_dir).LoadArchived();
+
+        Assert.Empty(loaded.Macros);
+        Assert.Single(loaded.Failures);
+    }
+
+    /// <summary>The load-failure sentences tell the user to IMPORT the file. That advice has to
+    /// be true: import mints a fresh id, so a file with no id or a bad one comes in whole.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("\"not-a-guid\"")]
+    public void FileWithABadId_CanBeImported_AndThenLoads(string? idJson)
+    {
+        var parsed = MacroBundle.Parse(FileJson(idJson, "handmade"));
+        Assert.Empty(parsed.Failures);
+        var store = new MacroStore(_dir);
+
+        store.Save(MacroBundle.PrepareForImport(Assert.Single(parsed.Macros), new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+
+        var loaded = store.LoadAll();
+        Assert.Empty(loaded.Failures);
+        Assert.Equal("handmade", Assert.Single(loaded.Macros).Name);
+    }
+
+    [Fact]
+    public void IndexById_FirstWins_AndSkipsMissingIds()
+    {
+        var first = M("first", "ffffffff-0000-4000-8000-000000000004");
+        var second = M("second", "FFFFFFFF-0000-4000-8000-000000000004");
+        var noId = M("no id") with { Id = null! };
+
+        var index = MacroStore.IndexById(new[] { noId, first, second });
+
+        Assert.Equal("first", Assert.Single(index).Value.Name);
+        Assert.True(index.ContainsKey("FFFFFFFF-0000-4000-8000-000000000004"));
+    }
 }

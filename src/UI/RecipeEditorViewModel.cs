@@ -14,7 +14,8 @@ internal sealed class RecipeEditorViewModel : INotifyPropertyChanged
 
     public RecipeEditorViewModel(IReadOnlyList<Macro> library)
     {
-        _byId = library.ToDictionary(m => m.Id);
+        // Ordinal, as before; IndexById so a duplicate or missing id can't stop the editor opening.
+        _byId = MacroStore.IndexById(library, StringComparer.Ordinal);
         Library = new ObservableCollection<Macro>(library);
     }
 
