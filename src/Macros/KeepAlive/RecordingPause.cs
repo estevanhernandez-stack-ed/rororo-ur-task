@@ -43,6 +43,19 @@ internal sealed class RecordingPause
         }
     }
 
+    /// <summary>Someone else owes keep-alive a restart right now (break-glass, released mid-recording).
+    /// The loop cannot start while a recording runs, so the recording takes the debt and pays it at
+    /// stop. Returns false outside a recording: nothing is taken, and the caller starts the loop itself.</summary>
+    public bool TakeRestore()
+    {
+        lock (_gate)
+        {
+            if (!_recording) return false;
+            _restore = true;
+            return true;
+        }
+    }
+
     /// <summary>The recording ended, however it ended. Returns true when the loop must be started again:
     /// it was running when the recording began, nobody started one since, and break-glass is not on.
     /// Handed out once, so two stops racing each other restart it once.</summary>

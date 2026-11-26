@@ -781,6 +781,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _bridgeCts.Dispose(); } catch { }
         try { _activityCts.Cancel(); } catch { }
         try { _holdTimer?.Dispose(); } catch { }
+        // The recording's warning timer too: it reads the ledger and logs, and neither should outlive this.
+        try { StopRecordingHold(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
         // Stop every playback and give it a moment to unwind before the process goes. The
@@ -968,7 +970,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 {
                     Log(Hotkeys.Breakglass.OffLine(restoreKeepAlive));
                     StopHold();
-                    if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
+                    // Mid-recording the loop may not start, and the Play guard would refuse this restore
+                    // with nothing left to bring keep-alive back. The recording takes it and restarts
+                    // the loop when it stops.
+                    if (restoreKeepAlive && _recordingPause.TakeRestore())
+                        Log("Keep-alive comes back when you stop recording.");
+                    else if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
                 }
                 break;
             }

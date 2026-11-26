@@ -16,6 +16,40 @@ public class RecordingPauseTests
         Assert.False(pause.IsPaused);
     }
 
+    // Break-glass released mid-recording wants keep-alive back, but the loop cannot start while a
+    // recording runs. Refusing the restore and stopping there left keep-alive off with nothing to
+    // bring it back, so the recording takes the restore and hands the loop back at stop.
+    [Fact]
+    public void A_break_glass_restore_that_lands_mid_recording_is_kept_for_the_stop()
+    {
+        var pause = new RecordingPause();
+        Assert.False(pause.Begin(loopRunning: false));   // break-glass already had the loop stopped
+
+        Assert.True(pause.TakeRestore());
+        Assert.True(pause.IsPaused);
+        Assert.True(pause.End(breakglassOn: false));
+    }
+
+    [Fact]
+    public void A_restore_offered_outside_a_recording_is_not_taken_so_the_caller_starts_the_loop_itself()
+    {
+        var pause = new RecordingPause();
+
+        Assert.False(pause.TakeRestore());
+        Assert.False(pause.IsPaused);
+        Assert.False(pause.End(breakglassOn: false));
+    }
+
+    [Fact]
+    public void A_restore_taken_mid_recording_still_yields_to_break_glass_coming_back_on()
+    {
+        var pause = new RecordingPause();
+        pause.Begin(loopRunning: false);
+        pause.TakeRestore();
+
+        Assert.False(pause.End(breakglassOn: true));
+    }
+
     [Fact]
     public void A_loop_that_was_off_is_neither_paused_nor_started_at_stop()
     {
