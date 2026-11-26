@@ -258,6 +258,115 @@ public class MacroStoreTests : IDisposable
         Assert.Equal("handmade", Assert.Single(loaded.Macros).Name);
     }
 
+    // ---------- L5-05: a one-field change is applied to what is on disk now ----------
+
+    private static readonly MacroEvent SpaceDown = new(0, MacroEventKind.KeyDown, 0x20, 0, 0, 0, 0);
+    private static readonly MacroEvent SpaceUp = new(80, MacroEventKind.KeyUp, 0x20, 0, 0, 0, 0);
+
+    /// <summary>
+    /// The library holds the copy it loaded at its last refresh. An agent rewrites the same
+    /// file with new moves, then the user renames the macro in Ur Task. Saving the library's
+    /// copy with a new name (what Rename and All games did) writes the old moves back.
+    /// </summary>
+    [Fact]
+    public void SavingTheListsCopy_WritesStaleContentBack_WhichIsWhyUpdateExists()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("old name");
+        store.Save(listed);
+        store.Save(listed with { Events = new[] { SpaceDown, SpaceUp } }); // the other tool's rewrite
+
+        store.Save(listed with { Name = "new name" });
+
+        Assert.Empty(Assert.Single(store.LoadAll().Macros).Events); // the rewrite is gone
+    }
+
+    [Fact]
+    public void Update_AppliesTheChangeToTheFileAsItIsNow_NotToAnOlderCopy()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("old name");
+        store.Save(listed);
+        store.Save(listed with { Events = new[] { SpaceDown, SpaceUp }, RecordedGameName = "Pet Simulator 99" });
+
+        Assert.True(store.Update(listed.Id, fresh => fresh with { Name = "new name" }));
+
+        var onDisk = Assert.Single(store.LoadAll().Macros);
+        Assert.Equal("new name", onDisk.Name);
+        Assert.Equal(2, onDisk.Events.Count);
+        Assert.Equal("Pet Simulator 99", onDisk.RecordedGameName);
+        Assert.Equal(new[] { $"{listed.Id}.json" }, Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray());
+    }
+
+    [Fact]
+    public void Update_WhenTheFileIsGone_ReturnsFalse_AndDoesNotBringItBack()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("deleted elsewhere");
+        store.Save(listed);
+        File.Delete(PathOf(listed));
+
+        Assert.False(store.Update(listed.Id, fresh => fresh with { Name = "new name" }));
+
+        Assert.Empty(Directory.GetFiles(_dir));
+    }
+
+    /// <summary>A macro in a file that is not named after its id (written by another tool) is
+    /// changed in that file. Writing <c>&lt;id&gt;.json</c> beside it would leave two files with
+    /// one id, and the other tool's next rewrite would go to the one Ur Task no longer reads.</summary>
+    [Fact]
+    public void Update_AMacroInAFileNotNamedAfterItsId_ChangesThatFile()
+    {
+        const string id = "ffffffff-0000-4000-8000-000000000005";
+        Write("agent-made.json", Quoted(id), "old name");
+        var store = new MacroStore(_dir);
+
+        Assert.True(store.Update(id, fresh => fresh with { AllGames = true }));
+
+        var loaded = store.LoadAll();
+        Assert.Empty(loaded.Failures);
+        Assert.True(Assert.Single(loaded.Macros).AllGames);
+        Assert.Equal(new[] { "agent-made.json" }, Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray());
+    }
+
+    [Fact]
+    public void Update_WhenTheFileCannotBeRead_Throws_AndLeavesItAlone()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("half written");
+        store.Save(listed);
+        File.WriteAllText(PathOf(listed), "{ \"schemaVersion\": 4, \"id\": "); // caught mid-rewrite
+
+        Assert.ThrowsAny<Exception>(() => store.Update(listed.Id, fresh => fresh with { Name = "new name" }));
+
+        Assert.Equal("{ \"schemaVersion\": 4, \"id\": ", File.ReadAllText(PathOf(listed)));
+    }
+
+    [Fact]
+    public void Update_MayNotChangeTheId()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("keeps its id");
+        store.Save(listed);
+
+        Assert.Throws<ArgumentException>(() => store.Update(listed.Id, fresh => fresh with { Id = Guid.NewGuid().ToString() }));
+
+        Assert.Equal(listed.Id, Assert.Single(store.LoadAll().Macros).Id);
+    }
+
+    [Fact]
+    public void Load_ReadsOneMacroFreshFromDisk_AndNullWhenItIsGone()
+    {
+        var store = new MacroStore(_dir);
+        var listed = M("old name");
+        store.Save(listed);
+        store.Save(listed with { Name = "rewritten" });
+
+        Assert.Equal("rewritten", store.Load(listed.Id)?.Name);
+        Assert.Null(store.Load(Guid.NewGuid().ToString()));
+        Assert.Null(store.Load("not-a-guid"));
+    }
+
     [Fact]
     public void IndexById_FirstWins_AndSkipsMissingIds()
     {

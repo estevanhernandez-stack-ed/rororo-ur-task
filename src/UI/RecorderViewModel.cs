@@ -922,7 +922,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         // in the activity log, not the end of the app. Same for Rename and Delete below.
         try
         {
-            _runtime.Store.Save(macro with { AllGames = !macro.AllGames });
+            // Update, not Save(macro with ...): `macro` is the copy from the last list refresh,
+            // and another tool may have rewritten the file since. Only this one field changes.
+            var allGames = !macro.AllGames;
+            if (!_runtime.Store.Update(macro.Id, fresh => fresh with { AllGames = allGames }))
+                LogStatus($"Couldn't change All games for '{macro.Name ?? "(unnamed)"}': its file is gone from your macros folder. Your list is now up to date.");
         }
         catch (Exception ex)
         {
@@ -939,8 +943,10 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         if (macro is null || string.IsNullOrWhiteSpace(newName)) return;
         try
         {
-            var renamed = macro with { Name = newName };
-            _runtime.Store.Save(renamed);
+            // Same as All games above: rename what is on disk now, not the list's older copy,
+            // and never bring back a macro that has been removed from the folder.
+            if (!_runtime.Store.Update(macro.Id, fresh => fresh with { Name = newName }))
+                LogStatus($"Couldn't rename '{macro.Name ?? "(unnamed)"}': its file is gone from your macros folder. Your list is now up to date.");
         }
         catch (Exception ex)
         {

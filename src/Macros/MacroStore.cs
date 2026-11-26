@@ -75,6 +75,14 @@ public sealed class MacroStore
     // by id and assumes there is one).
     private static LoadResult LoadFrom(string directory)
     {
+        var (files, failures) = ReadFolder(directory);
+        return new LoadResult(files.Select(f => f.Macro).ToList(), failures);
+    }
+
+    /// <summary>What <see cref="LoadFrom"/> loads, with the file each macro came from, so a
+    /// change to one macro can go back to the file it was read from.</summary>
+    private static (List<(string Path, Macro Macro, Guid Id)> Files, List<LoadFailure> Failures) ReadFolder(string directory)
+    {
         var read = new List<(string Path, Macro Macro, Guid Id)>();
         var failures = new List<LoadFailure>();
 
@@ -125,8 +133,7 @@ public sealed class MacroStore
             }
         }
 
-        var loaded = read.Where(r => !skipped.Contains(r.Path)).Select(r => r.Macro).ToList();
-        return new LoadResult(loaded, failures);
+        return (read.Where(r => !skipped.Contains(r.Path)).ToList(), failures);
     }
 
     private static bool IsNamedAfterItsId(string path, string id)
@@ -155,7 +162,52 @@ public sealed class MacroStore
     public void Save(Macro macro)
     {
         if (macro is null) throw new ArgumentNullException(nameof(macro));
-        var target = PathFor(macro.Id);
+        WriteReplacing(PathFor(macro.Id), macro);
+    }
+
+    /// <summary>
+    /// Read one macro fresh from disk. Null when no file in the macros folder holds that id any
+    /// more. Throws when its file is there but can't be read.
+    /// </summary>
+    public Macro? Load(string macroId) => Find(macroId)?.Macro;
+
+    /// <summary>
+    /// Change one macro on disk: read its file as it is now, apply <paramref name="change"/>,
+    /// and write the result back to that same file. The library's in-memory copy is as old as
+    /// its last refresh, and another tool may have rewritten the file since (an agent rewrites a
+    /// macro's steps every run); saving that copy with one field changed put the old content
+    /// back. Returns false, and writes nothing, when the macro is gone from disk. Throws when the
+    /// file can't be read or replaced, and leaves it as it was.
+    /// </summary>
+    public bool Update(string macroId, Func<Macro, Macro> change)
+    {
+        if (change is null) throw new ArgumentNullException(nameof(change));
+        if (Find(macroId) is not { } found) return false;
+        var changed = change(found.Macro) ?? throw new ArgumentException("The change returned no macro.", nameof(change));
+        if (!string.Equals(changed.Id, found.Macro.Id, StringComparison.Ordinal))
+            throw new ArgumentException("A change may not give the macro a different id.", nameof(change));
+        WriteReplacing(found.Path, changed);
+        return true;
+    }
+
+    // <id>.json first: that is where Ur Task's own saves go, and reading one file is cheap. A
+    // macro another tool wrote can sit under any file name, so fall back to the folder.
+    private (string Path, Macro Macro)? Find(string macroId)
+    {
+        if (!Guid.TryParse(macroId, out var id)) return null;
+        var canonical = PathFor(macroId);
+        if (File.Exists(canonical))
+        {
+            var macro = MacroV1Migrator.LoadAndMigrate(File.ReadAllText(canonical));
+            if (Guid.TryParse(macro.Id, out var found) && found == id) return (canonical, macro);
+        }
+        foreach (var file in ReadFolder(_directory).Files)
+            if (file.Id == id) return (file.Path, file.Macro);
+        return null;
+    }
+
+    private static void WriteReplacing(string target, Macro macro)
+    {
         var tmp = target + ".tmp";
         var json = JsonSerializer.Serialize(macro, JsonOptions);
         try
