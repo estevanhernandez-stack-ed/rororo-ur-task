@@ -31,7 +31,9 @@ public class MacroRunnerServerAcceptLoopTests
 
     private const string ListMacrosJson = """{"contractVersion":"1.0","method":"ListMacros","callerPluginId":"626labs.ur-mcp"}""";
 
-    private static readonly TimeSpan ShortIo = TimeSpan.FromMilliseconds(300);
+    // Short enough that a stalled peer costs a test about a second, long enough that a real
+    // client's request still lands inside it when seven suites share the machine.
+    private static readonly TimeSpan ShortIo = TimeSpan.FromSeconds(1);
 
     private static string NewPipeName() => "626labs-ur-task-test-" + Guid.NewGuid().ToString("N");
 
