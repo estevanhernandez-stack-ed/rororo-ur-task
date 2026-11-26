@@ -272,6 +272,62 @@ public class MacroRunInvokerTests
         Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 0, 2000));
     }
 
+    [Fact]
+    public async Task StopMacro_for_a_playback_that_is_not_running_leaves_whatever_is_running_alone()
+    {
+        // L4-06: a caller stopping a playback that had already finished got stopped: 0 and still
+        // aborted the sequence in flight, which was the user's own or another caller's.
+        int aborts = 0;
+        var lines = new List<string>();
+        var m = NewMacro("m1", "Farm");
+        var invoker = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { Alt(1) },
+            resolveForegroundUserId: () => 1L,
+            isBusy: () => false,
+            playWithResult: async (mm, t, d, ct) => { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); return null; },
+            abort: () => { Interlocked.Increment(ref aborts); return true; },
+            log: l => { lock (lines) lines.Add(l); });
+        var run = await invoker.RunAsync(
+            new RunMacroRequest("1.0", "RunMacro", "m1", new[] { "1" }, null, "x", Repeat: true), CancellationToken.None);
+        Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 1, 2000));
+
+        var stale = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", "a-playback-that-already-finished", null, "626labs.ur-ocr"));
+
+        Assert.True(stale.Ok);
+        Assert.Equal(0, stale.Stopped);
+        Assert.Equal(0, aborts);
+        Assert.Equal(1, invoker.ActivePlaybackCount);
+        // The line says what was ignored: something IS playing, just not that id.
+        lock (lines) Assert.Equal(new[] { "Stop ignored: playback a-playback-that-already-finished is not running (StopMacro from 626labs.ur-ocr)." }, lines);
+
+        // The right id still stops it, and aborts the pass in flight.
+        var stop = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-ocr"));
+        Assert.Equal(1, stop.Stopped);
+        Assert.Equal(1, aborts);
+        Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 0, 2000));
+    }
+
+    [Fact]
+    public void StopMacro_with_no_playback_id_is_stop_all_and_still_aborts_a_sequence_the_bridge_did_not_start()
+    {
+        // Stop-all is the documented "stop everything" (break-glass uses it): it aborts whatever
+        // sequence is in flight even when no bridge playback is registered.
+        int aborts = 0;
+        var invoker = new MacroRunInvoker(
+            loadMacros: Array.Empty<Macro>,
+            snapshot: Array.Empty<AccountRegistry.AccountInfo>,
+            resolveForegroundUserId: () => null,
+            isBusy: () => true,
+            playWithResult: (m, t, d, ct) => Task.FromResult<SequenceResult?>(null),
+            abort: () => { aborts++; return true; });
+
+        var stop = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", null, null, "x"));
+
+        Assert.Equal(0, stop.Stopped);
+        Assert.Equal(1, aborts);
+    }
+
     [Theory]
     [InlineData(true, "Aborted (StopMacro from 626labs.ur-ocr).")]
     [InlineData(false, "Abort ignored — nothing playing (StopMacro from 626labs.ur-ocr).")]

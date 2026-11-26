@@ -319,6 +319,15 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             stopped = CancelAllPlaybacks();
         }
 
+        // A named playback that is not running (it already finished, or the id is wrong) stops
+        // nothing. Aborting here anyway killed whatever was in flight: the user's own sequence,
+        // or another caller's playback.
+        if (stopped == 0 && !string.IsNullOrEmpty(request.PlaybackId))
+        {
+            _log($"Stop ignored: playback {request.PlaybackId} is not running ({Hotkeys.AbortLog.StopMacro(request.CallerPluginId)}).");
+            return StopMacroResponse.Done(0);
+        }
+
         // Abort the in-flight SequencePlayer pass so cancellation takes effect immediately,
         // not just at the next loop boundary. Single-flight today, so this stops the active
         // pass; Abort() is idempotent-safe and returns false when nothing is running.
