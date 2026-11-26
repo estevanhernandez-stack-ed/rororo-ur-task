@@ -419,6 +419,73 @@ public class MacroRunInvokerTests
         Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
     }
 
+    // A repeat whose play fake behaves like SequencePlayer cancelled mid-play: the pass holds until
+    // the sequence is aborted or the playback token is cancelled, then its single target comes back
+    // Aborted with nothing Skipped (MacroPlayer was already playing).
+    private static MacroRunInvoker RepeatAbortedMidPlay(Macro m, AccountRegistry.AccountInfo alt,
+        Action passStarted, out Func<bool> abortSequence)
+    {
+        TaskCompletionSource? midPlay = null;
+        abortSequence = () => Volatile.Read(ref midPlay)?.TrySetResult() ?? false;
+        return new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: async (_, _, _, ct) =>
+            {
+                var pass = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Volatile.Write(ref midPlay, pass);
+                passStarted();
+                using (ct.Register(() => pass.TrySetResult())) await pass.Task.ConfigureAwait(false);
+                return new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Aborted, "Cancelled.") }, 0, 0, 1, TimeSpan.Zero);
+            });
+    }
+
+    [Fact]
+    public async Task A_user_abort_ends_a_repeat_whose_pass_was_aborted_mid_play()
+    {
+        // L3-03: Esc and Ctrl+Shift+F12 aborted the sequence but not the bridge playback's own
+        // token, so the aborted pass read as one more failed pass and the next one started.
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var inv = RepeatAbortedMidPlay(m, alt, () => Interlocked.Increment(ref passes), out var abortSequence);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 1);
+
+        // What the stop key does (PluginRuntime's Abort case): stop the bridge playbacks, then
+        // abort the sequence. The sequence abort alone leaves the repeat looping.
+        Assert.Equal(1, inv.StopAllForUserAbort());
+        abortSequence();
+
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+        Assert.Equal(1, Volatile.Read(ref passes));
+    }
+
+    [Fact]
+    public async Task A_pass_aborted_without_a_user_abort_does_not_end_a_repeat()
+    {
+        // The other half of the distinction: a pass that merely came back Aborted (nothing went
+        // through StopMacro or the stop keys, so the playback token is live) loops on, as in 0.8.
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var inv = RepeatAbortedMidPlay(m, alt, () => Interlocked.Increment(ref passes), out var abortSequence);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 1);
+        abortSequence();
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 2);
+        Assert.Equal("running", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+
+        Assert.Equal(1, inv.StopAllForUserAbort());
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal(0, inv.StopAllForUserAbort()); // nothing left to stop
+    }
+
     [Fact]
     public async Task A_lost_single_flight_claim_reads_failed_refused_not_a_clean_finish()
     {

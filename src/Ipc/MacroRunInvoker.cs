@@ -276,11 +276,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         }
         else
         {
-            foreach (var kvp in _playbacks)
-            {
-                try { kvp.Value.Cancel(); } catch (ObjectDisposedException) { }
-                stopped++;
-            }
+            stopped = CancelAllPlaybacks();
         }
 
         // Abort the in-flight SequencePlayer pass so cancellation takes effect immediately,
@@ -290,6 +286,25 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         _log(Hotkeys.AbortLog.Line(stopped > 0 || aborted, Hotkeys.AbortLog.StopMacro(request.CallerPluginId)));
 
         return StopMacroResponse.Done(stopped);
+    }
+
+    /// <summary>
+    /// The user's stop keys (Esc, Ctrl+Shift+F12). Cancels every bridge playback's own token, so a
+    /// repeat ends where it stands: aborting the sequence alone leaves the aborted pass reading as
+    /// one more failed pass, and the next one starts. Logs nothing, because the caller's abort line
+    /// already names the key. Returns how many playbacks it stopped.
+    /// </summary>
+    internal int StopAllForUserAbort() => CancelAllPlaybacks();
+
+    private int CancelAllPlaybacks()
+    {
+        int stopped = 0;
+        foreach (var kvp in _playbacks)
+        {
+            try { kvp.Value.Cancel(); } catch (ObjectDisposedException) { }
+            stopped++;
+        }
+        return stopped;
     }
 
     public GetPlaybackResponse GetPlayback(GetPlaybackRequest request)

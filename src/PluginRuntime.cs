@@ -866,7 +866,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Abort:
-                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
+                // Bridge playbacks first, as break-glass does: a repeat loops on after an aborted
+                // pass unless its own token is cancelled. No StopMacro here, which would write a
+                // second abort line naming a bridge caller; the line below names the key.
+                bool aborted = ((_bridgeInvoker?.StopAllForUserAbort() ?? 0) > 0)
+                    | _runner.Abort() | _sequence.Abort() | _player.Abort()
                     | (_activeRecipeRunner?.Abort() ?? false);
                 Log(Hotkeys.AbortLog.Line(aborted, source ?? "unknown source"));
                 break;
