@@ -54,18 +54,40 @@ jobs:
       # A release used to be one step: build the zip from whatever the tag pointed
       # at. Nothing here ran a test, and nothing made the tag wait for test.yml, so
       # v0.7.0 and v0.12.0 were published from commits whose test workflow was red.
-      # A tag push now runs the standalone suite first, and a red suite stops the
-      # release before anything is built or published.
+      # A tag push now runs both suites first, and a red one stops the release
+      # before anything is built or published.
       #
-      # Known limit: this is the standalone suite only, the same command as the
-      # `unit-tests` job in test.yml. `host-integration` needs the host repo
-      # checked out next door and is not repeated here, so a red there still does
-      # not stop a release. Look at it before you tag.
+      # Two steps, the same split as test.yml and for the same reason: a red in
+      # the first is the plugin's own logic, a red in the second is the plugin
+      # against the host, and the two should never be mistaken for each other.
       - name: Test (standalone units)
         working-directory: rororo-ur-task
         run: >-
           dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
           -p:StandaloneTestsOnly=true
+          -c Release
+          --nologo
+
+      # On v0.7.0 and v0.12.0 it was this check that was red while the unit tests
+      # were green, so gating on the unit tests alone would have stopped neither.
+      # It is the plugin's only test against the real host, and a release is the
+      # moment that matters most.
+      #
+      # It builds against the host's main branch, not its last release. If it is
+      # red because the host changed something the test stands in for, fix the
+      # stand-in first: that is a small test change, and finding out here is the
+      # point. If the host's main is broken for its own reasons, re-run once the
+      # host is green; do not remove this step to get a release out.
+      - name: Checkout host (sibling layout the test project expects)
+        uses: actions/checkout@v6
+        with:
+          repository: estevanhernandez-stack-ed/ROROROblox
+          path: ROROROblox
+
+      - name: Test (with the real host)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
           -c Release
           --nologo
 
