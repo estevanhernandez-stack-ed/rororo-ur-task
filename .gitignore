@@ -53,3 +53,10 @@ rororo-ur-task.sln
 
 # Raw PS99 devblog text kept for local reference: third-party writing, not published from this repo
 docs/reference/events/raw/
+
+# Tool-generated, per machine: the GitNexus index and its AGENTS.md stub, agent worktrees,
+# and the context file the 626Labs VS Code extension rewrites on every change.
+.gitnexus/
+AGENTS.md
+.claude/worktrees/
+.claude/626labs-context.md
