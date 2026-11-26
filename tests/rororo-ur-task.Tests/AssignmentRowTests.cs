@@ -163,6 +163,19 @@ public class AssignmentRowTests
         Assert.Equal("next: 4m", row.NextDueText);
     }
 
+    // Break-glass stops the loop and marks every account Held. "held" is the row's only sign that
+    // break-glass is why nothing is coming, so it has to win over the plain "stopped".
+    [Fact]
+    public void Next_due_text_says_held_while_break_glass_holds_a_stopped_loop()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        ledger.SetState(row.Alt.RobloxUserId, AccountKeepAliveState.Held);
+        clock.LoopRunning = false;
+
+        Assert.Equal("held", row.NextDueText);
+    }
+
     [Fact]
     public void Next_due_text_keeps_off_for_a_switched_off_row_even_when_the_loop_is_stopped()
     {
