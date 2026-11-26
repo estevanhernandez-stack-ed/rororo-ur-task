@@ -14,6 +14,11 @@ internal sealed class SequencePlayer
 {
     private const int DefaultInterAltDelayMs = 500;
 
+    /// <summary><see cref="AltOutcome.Code"/> for a target refused because its window is gone, so a
+    /// caller can tell it from a window that merely would not come forward. In memory only: it is
+    /// no bridge reason code and never goes on the wire.</summary>
+    internal const string WindowGoneCode = "window-gone";
+
     private readonly IMacroPlayer _player;
     private readonly IForegroundWatcher _foreground;
     private readonly Func<int, FocusAttempt> _focus;
@@ -104,7 +109,7 @@ internal sealed class SequencePlayer
                 if (!ok)
                 {
                     // The window is gone: nothing to verify, nothing to wait for.
-                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr));
+                    perAlt.Add(new AltOutcome(target, PlaybackOutcome.Refused, focusErr, Code: WindowGoneCode));
                     failed++;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, target, SequencePhase.Refused, completed, failed, skipped, focusErr));
                     continue;

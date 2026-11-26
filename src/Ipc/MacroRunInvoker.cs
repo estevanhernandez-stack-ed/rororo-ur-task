@@ -24,6 +24,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 {
     internal const string ForegroundSentinel = "foreground";
 
+    /// <summary>The wait before the next pass of a repeat whose last pass completed nothing. It
+    /// doubles from the start to the cap and starts over after a pass that completed something.</summary>
+    internal static readonly TimeSpan RepeatBackoffStart = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan RepeatBackoffCap = TimeSpan.FromSeconds(30);
+
     private readonly Func<MacroStore.LoadResult> _load;
     private readonly HashSet<string> _loggedFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
@@ -36,6 +41,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Action<string> _log;
     private readonly Func<IReadOnlyList<KeepAliveDeadline>> _deadlines;
     private readonly Func<DateTimeOffset> _now;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
@@ -72,8 +78,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Action<string>? log = null,
         Func<bool>? isBreakglass = null,
         Func<IReadOnlyList<KeepAliveDeadline>>? deadlines = null,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
+        // The wait between repeat passes. Tests hold it, so none sleeps real seconds.
+        _delay = delay ?? Task.Delay;
         _deadlines = deadlines ?? (() => Array.Empty<KeepAliveDeadline>());
         _now = now ?? (() => DateTimeOffset.Now);
         // Tests leave it out, so a test run never writes to the real ur-task.log.
@@ -98,9 +107,10 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool>? abort = null,
         PlaybackRegistry? registry = null,
         Action<string>? log = null,
-        Func<bool>? isBreakglass = null)
+        Func<bool>? isBreakglass = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
         : this(() => new MacroStore.LoadResult(loadMacros(), Array.Empty<MacroStore.LoadFailure>()),
-               snapshot, resolveForegroundUserId, isBusy, playWithResult, abort, registry, log, isBreakglass)
+               snapshot, resolveForegroundUserId, isBusy, playWithResult, abort, registry, log, isBreakglass, delay: delay)
     { }
 
     // Test ctor, unchanged signature: fakes that only need to run. Adapts into the one delegate.
@@ -330,6 +340,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var state = PlaybackState.Finished;
         string? reason = null, detail = null, actor = null, advice = null;
         int? stepIndex = null;
+        var backoff = RepeatBackoffStart;
         try
         {
             do
@@ -391,6 +402,30 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                     // aborted v3 pass loops on as it did in 0.8.
                     if (failure.StepIndex is not null) break;
                 }
+
+                if (!repeat || playbackCts.IsCancellationRequested) continue;
+                // Every target's window is gone. Targets were resolved once, at RunMacro time, so
+                // a crashed, kicked or relaunched account (a new pid) never comes back: end the
+                // repeat instead of retrying it forever.
+                if (last is { PerAlt.Count: > 0 } pass
+                    && pass.PerAlt.All(a => a.Outcome == PlaybackOutcome.Refused && a.Code == SequencePlayer.WindowGoneCode))
+                {
+                    state = PlaybackState.Failed;
+                    reason = Reasons.Refused;
+                    detail = WindowsGoneDetail(pass.PerAlt);
+                    break;
+                }
+                // A pass that completed nothing can end without ever yielding (a refused focus
+                // with no inter-alt delay), and then this loop pegged a core, rolled the log over
+                // in seconds and left no gap for a stop to land in. Wait before the next one,
+                // longer each time. `last == null` is the test ctor's run-only fakes: a clean pass.
+                if (last is null || last.PerAlt.Any(a => a.Outcome == PlaybackOutcome.Completed))
+                    backoff = RepeatBackoffStart;
+                else if (!_isBreakglass())
+                {
+                    await _delay(backoff, playbackCts.Token).ConfigureAwait(false);
+                    backoff = backoff + backoff < RepeatBackoffCap ? backoff + backoff : RepeatBackoffCap;
+                }
             }
             // Break-glass ends a repeat too: an aborted pass would otherwise loop on into the user's hands.
             while (repeat && !playbackCts.IsCancellationRequested && !_isBreakglass());
@@ -415,6 +450,15 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             _playbacks.TryRemove(playbackId, out _);
             playbackCts.Dispose();
         }
+    }
+
+    private static string WindowsGoneDetail(IReadOnlyList<AltOutcome> pass)
+    {
+        var names = pass.Select(a => a.Alt.DisplayName).ToList();
+        if (names.Count == 1)
+            return $"Stopped repeating: {names[0]}'s game window is gone. Run the macro again once the account is back in a game.";
+        var list = string.Join(", ", names.Take(names.Count - 1)) + " and " + names[^1];
+        return $"Stopped repeating: the game windows for {list} are gone. Run the macro again once the accounts are back in a game.";
     }
 
     private IReadOnlyList<AccountRegistry.AccountInfo> ResolveTargets(IReadOnlyList<string>? requested)

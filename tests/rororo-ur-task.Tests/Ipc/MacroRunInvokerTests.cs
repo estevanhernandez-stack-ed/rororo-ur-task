@@ -256,13 +256,19 @@ public class MacroRunInvokerTests
     }
 
     private static MacroRunInvoker BuildWithResult(Macro m, AccountRegistry.AccountInfo alt,
-        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult)
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
         => new MacroRunInvoker(
             loadMacros: () => new[] { m },
             snapshot: () => new[] { alt },
             resolveForegroundUserId: () => alt.RobloxUserId,
             isBusy: () => false,
-            playWithResult: playWithResult);
+            playWithResult: playWithResult,
+            delay: delay);
+
+    // The wait a repeat takes after a pass that completed nothing, skipped: these tests are about
+    // what ends a repeat, not how long it waits (MacroRunInvokerRepeatTests covers the waits).
+    private static Task NoWait(TimeSpan wait, CancellationToken ct) => Task.CompletedTask;
 
     private static async Task WaitUntilAsync(Func<bool> cond)
     {
@@ -410,7 +416,7 @@ public class MacroRunInvokerTests
             Interlocked.Increment(ref passes);
             await Task.Delay(5, ct);
             return refused;
-        });
+        }, delay: NoWait);
 
         var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
         await WaitUntilAsync(() => Volatile.Read(ref passes) >= 3);
@@ -439,7 +445,8 @@ public class MacroRunInvokerTests
                 passStarted();
                 using (ct.Register(() => pass.TrySetResult())) await pass.Task.ConfigureAwait(false);
                 return new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Aborted, "Cancelled.") }, 0, 0, 1, TimeSpan.Zero);
-            });
+            },
+            delay: NoWait);
     }
 
     [Fact]
