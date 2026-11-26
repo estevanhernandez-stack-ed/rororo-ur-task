@@ -14,7 +14,7 @@ RoRoRo Ur Task is a [RoRoRo plugin](https://github.com/estevanhernandez-stack-ed
 
 **Assignments (round-robin):** assign a macro to each running alt — or leave an alt unassigned and it gets a periodic Space jump (keep-alive) so it dodges AFK kicks. `Ctrl+Shift+P` (or the PLAY ASSIGNMENTS button) cycles through every running alt in a loop — focus, play its macro, move to the next — until you stop it.
 
-**Action bridge (v0.3+):** Ur Task listens on a local named pipe (`\\.\pipe\626labs-ur-task`, current-user only) for `RunMacro` requests from sibling plugins. This is what lets [RoRoRo Ur OCR](https://github.com/estevanhernandez-stack-ed/Ur-OCR) fire a specific macro when a color/text screen trigger matches — the perception→action loop, no AutoHotkey needed. Gated by the "Accept run requests from other plugins" preference (default on).
+**Action bridge (v0.3+):** Ur Task listens on a local named pipe (`\\.\pipe\626labs-ur-task`, current-user only) for `RunMacro` requests from sibling plugins. This is what lets [RoRoRo Ur OCR](https://github.com/estevanhernandez-stack-ed/Ur-OCR) fire a specific macro when a color/text screen trigger matches — the perception→action loop, no AutoHotkey needed. The bridge is on by default and there is no switch for it in the window. To turn it off: quit Ur Task (it rewrites its settings file while it runs), set `"AcceptPluginRunRequests": false` in `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\ui-prefs.json`, and start Ur Task again.
 
 ## Capabilities declared
 
@@ -25,14 +25,16 @@ RoRoRo Ur Task is a [RoRoRo plugin](https://github.com/estevanhernandez-stack-ed
 | `system.watch-global-input` | Recording captures keyboard + mouse globally. |
 | `host.events.account-launched` | Builds the pid → user-id map. |
 | `host.events.account-exited` | Auto-stop when a target alt's window closes. |
+| `host.queries.account-activity` | Keep-alive reads RoRoRo's activity clock for each account. If you decline it, keep-alive falls back to its own clock. |
+| `host.commands.mark-account-active` | Keep-alive tells RoRoRo when it has just served an account. If you decline it, keep-alive carries on with its own clock. |
 | `host.ui.row-badge` | Per-account "recording" / "playing" indicator (renders in v1.4.1+ when RoRoRo's host-side UI lands). |
 | `host.ui.tray-menu` | Informational status entry (same — v1.4.1+ rendering). |
 
-The three `system.*` capabilities are disclosure-only — they don't gate calls, they tell users honestly what the plugin does. RoRoRo surfaces them on the consent sheet at install time; you can opt-out of any of them, but the plugin refuses to record / play without the corresponding consent.
+The three `system.*` capabilities are disclosure. They tell you what the plugin does on your PC: it sends keys, it sends mouse input, and it watches your keyboard and mouse. RoRoRo shows them on the consent sheet at install time, but it cannot enforce them, and Ur Task does not check which ones you ticked. The plugin needs all three and behaves the same either way, so there is no opting out of one of them. If you do not want a plugin that does these things, cancel the install.
 
 ## Install
 
-You need RoRoRo installed first ([v1.4.3 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). Hosts 1.4.3+ refuse a too-new plugin with a clear "Update RoRoRo" message — but **hosts older than 1.4.3 (1.4.0–1.4.2) silently accept the install and then ask you to restart RoRoRo, and that restart is known to fail.** If installing ends with a "Restart RoRoRo" prompt, your RoRoRo is outdated: update it from the Microsoft Store, relaunch, and reinstall the plugin.
+You need RoRoRo installed first ([v1.19 or later](https://github.com/estevanhernandez-stack-ed/ROROROblox/releases)). If your RoRoRo is older than that but at least 1.4.3, it refuses the install and tells you to update RoRoRo. **Hosts older than 1.4.3 (1.4.0–1.4.2) do not check: they silently accept the install and then ask you to restart RoRoRo, and that restart is known to fail.** If installing ends with a "Restart RoRoRo" prompt, your RoRoRo is outdated: update it from the Microsoft Store, relaunch, and reinstall the plugin.
 
 1. Open RoRoRo → Plugins → Install.
 2. Paste this URL: `https://github.com/estevanhernandez-stack-ed/rororo-ur-task/releases/latest/download/` — this always resolves to the newest stable release (GitHub redirects `latest/download/`), so it never needs bumping per version.
@@ -64,15 +66,21 @@ Two buttons in the recorder window operate on all running alts:
 |---|---|---|
 | `Ctrl+Shift+R` | Start recording (or stop if already recording). | Global |
 | `Ctrl+Shift+P` | Play assignments — run the round-robin loop across all running alts. Press again to stop. | Global |
+| `Ctrl+Shift+L` | Run the selected routine on the checked alts. Press again to stop it. | Global |
 | `Ctrl+Shift+F12` | Abort current playback. | Global |
+| `Ctrl+Shift+F11` | Break-glass: you take the wheel. Stops every playback and keep-alive, and holds them off, including after a restart, until you press it again. | Global |
 | `Ctrl+Shift+M` | Toggle compact mode (always-on-top strip). | Window-level |
-| `Esc` | Abort current playback — but only while a macro is playing, so Esc stays yours the rest of the time. | Global (during playback only) |
+| `Esc` | Stop whatever is playing. Ur Task holds Esc only while something is playing, and that includes the whole time the assignment loop is on. | Global (while something is playing) |
 
-**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, bare `Esc` still aborts but is only claimed while a macro is playing, so it no longer intercepts Esc system-wide. As of **v0.12.0**, the abort chord is `Ctrl+Shift+F12` instead of `Ctrl+Shift+A`: if you type through Mouse Without Borders or Chrome Remote Desktop, Ctrl and Shift can get stuck down on the way, and your next "a" would stop the macro. Per-macro PLAY buttons in the recorder UI show the updated labels.
+**Esc and the assignment loop.** For a single macro or a routine, Esc is taken for as long as it plays and handed back when it ends. The assignment loop (`Ctrl+Shift+P`, keep-alive included) counts as playing for as long as it is on, even between keep-alive taps. So while the loop is on, pressing Esc in any app stops the loop instead of doing what Esc normally does there. That is on purpose: Esc is the easy stop key. Once the loop stops, Esc is yours again.
+
+**Break-glass.** Holding them off means this: while it is on, `Ctrl+Shift+P` and `Ctrl+Shift+L` do nothing and run requests from other plugins are refused. Press `Ctrl+Shift+F11` again to hand control back. Keep-alive starts again by itself if it was running when you pressed it and Ur Task has not restarted since.
+
+**Note:** v0.1 shipped with F8 (record) and F5 (play) — these have moved to `Ctrl+Shift+R` and `Ctrl+Shift+P` to avoid hijacking browser and IDE refresh keys. As of **v0.3.1**, bare `Esc` is claimed only while something is playing instead of for the whole time Ur Task runs. As of **v0.12.0**, the abort chord is `Ctrl+Shift+F12` instead of `Ctrl+Shift+A`: if you type through Mouse Without Borders or Chrome Remote Desktop, Ctrl and Shift can get stuck down on the way, and your next "a" would stop the macro. Per-macro PLAY buttons in the recorder UI show the updated labels.
 
 ## Troubleshooting
 
-- **The install told me to "Restart RoRoRo" (and restarting did nothing).** Your RoRoRo host is older than v1.4.3. Update RoRoRo from the Microsoft Store, relaunch it, and reinstall the plugin — on current hosts the plugin starts immediately after install, with no restart step.
+- **The install told me to "Restart RoRoRo" (and restarting did nothing).** Your RoRoRo host is older than v1.4.3, and Ur Task needs v1.19 or later. Update RoRoRo from the Microsoft Store, relaunch it, and reinstall the plugin — on current hosts the plugin starts immediately after install, with no restart step.
 - **Something crashed, hung, or silently stopped?** The plugin keeps a diagnostic log: right-click the Ur Task tray icon → **Open log folder** → drop `ur-task.log` into the Discord support thread. The log lives at `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\logs` (2 files × 1 MB max).
 
 ## License
