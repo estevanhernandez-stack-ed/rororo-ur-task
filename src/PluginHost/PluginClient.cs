@@ -1,6 +1,7 @@
 using System.IO;
 using System.IO.Pipes;
 using System.Net.Http;
+using System.Runtime.CompilerServices;
 using Grpc.Core;
 using Grpc.Net.Client;
 using ROROROblox.PluginContract;
@@ -187,51 +188,197 @@ internal sealed class PluginClient : IAsyncDisposable
         }
     }
 
-    private async Task ConsumeLaunchedAsync(CancellationToken ct)
+    private Task ConsumeLaunchedAsync(CancellationToken ct) => ConsumeStreamAsync(
+        LaunchedStream, () => ReadLaunchedAsync(ct),
+        evt => _accounts.OnLaunched(evt.ProcessId, evt.RobloxUserId,
+            evt.DisplayName, evt.AccountId, evt.PlaceId, evt.PlaceName),
+        () => PollRunningAccountsAsync(LaunchedStream, exitedSide: false, _accounts, FetchRunningAsync,
+            DegradedPollInterval, SignalHostLost, Diagnostics.DiagLog.Write, ct),
+        SignalHostLost, Diagnostics.DiagLog.Write, ct);
+
+    private Task ConsumeExitedAsync(CancellationToken ct) => ConsumeStreamAsync(
+        ExitedStream, () => ReadExitedAsync(ct),
+        evt => _accounts.OnExited(evt.ProcessId),
+        () => PollRunningAccountsAsync(ExitedStream, exitedSide: true, _accounts, FetchRunningAsync,
+            DegradedPollInterval, SignalHostLost, Diagnostics.DiagLog.Write, ct),
+        SignalHostLost, Diagnostics.DiagLog.Write, ct);
+
+    private async IAsyncEnumerable<AccountLaunchedEvent> ReadLaunchedAsync(
+        [EnumeratorCancellation] CancellationToken ct)
     {
+        using var call = _client!.SubscribeAccountLaunched(new SubscriptionRequest(),
+            cancellationToken: ct);
+        await foreach (var evt in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            yield return evt;
+    }
+
+    private async IAsyncEnumerable<AccountExitedEvent> ReadExitedAsync(
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        using var call = _client!.SubscribeAccountExited(new SubscriptionRequest(),
+            cancellationToken: ct);
+        await foreach (var evt in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            yield return evt;
+    }
+
+    internal const string LaunchedStream = "account-launched";
+    internal const string ExitedStream = "account-exited";
+
+    /// <summary>
+    /// Reads one account stream to its end and decides what the end means. Static, and fed by
+    /// delegates, so the decision can be tested without a host: the two consumers above differ
+    /// only in what they open and what they tell the registry.
+    /// </summary>
+    internal static async Task ConsumeStreamAsync<T>(string stream, Func<IAsyncEnumerable<T>> open,
+        Action<T> onEvent, Func<Task> degrade, Action hostLost, Action<string> log, CancellationToken ct)
+    {
+        Exception? error = null;
         try
         {
-            using var call = _client!.SubscribeAccountLaunched(new SubscriptionRequest(),
-                cancellationToken: ct);
-            await foreach (var evt in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            await foreach (var evt in open().ConfigureAwait(false))
             {
-                _accounts.OnLaunched(evt.ProcessId, evt.RobloxUserId,
-                    evt.DisplayName, evt.AccountId, evt.PlaceId, evt.PlaceName);
+                Notify(stream, () => onEvent(evt), log);
             }
         }
-        catch (OperationCanceledException) { /* expected on shutdown */ }
-        catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
+        catch (Exception ex) { error = ex; }
+
+        var verdict = Classify($"{stream} stream", error, ct.IsCancellationRequested);
+        // Always before SignalHostLost: the runtime's "connection lost" line says nothing about
+        // why, and until this was logged neither did anything else.
+        if (verdict.Log is not null) log(verdict.Log);
+        if (verdict.End == StreamEnd.HostLost) hostLost();
+        else if (verdict.End == StreamEnd.Degrade) await degrade().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What the end of an account stream (or of a poll standing in for one) means. Pure, so every
+    /// branch is unit-tested. <paramref name="what"/> names it in the log line.
+    /// <para>
+    /// A refused stream (the user unticked that capability on RoRoRo's consent sheet, or the host
+    /// is too old to have the method) is not a dead host: the handshake and the snapshot worked.
+    /// Exiting over it told the user RoRoRo had gone while it sat there running.
+    /// </para>
+    /// </summary>
+    internal static StreamVerdict Classify(string what, Exception? ex, bool ownTokenCancelled)
+    {
+        switch (ex)
         {
-            // host closed the stream; expected on shutdown.
-        }
-        catch (Exception)
-        {
-            // Any other exception (Unavailable, Internal, IO) signals the host
-            // died unexpectedly — pipe broken, RoRoRo killed, etc.
-            SignalHostLost();
+            case RpcException { StatusCode: StatusCode.PermissionDenied or StatusCode.Unimplemented or StatusCode.FailedPrecondition } refused:
+                return new(StreamEnd.Degrade,
+                    $"Accounts: the host refused the {what} ({refused.StatusCode}). RoRoRo is still there, so the plugin "
+                    + $"keeps running and asks for the running accounts every {DegradedPollInterval.TotalSeconds:0} s instead.");
+            case null:
+            case OperationCanceledException:
+            case RpcException { StatusCode: StatusCode.Cancelled }:
+                return new(StreamEnd.Normal, null);
+            case RpcException rpc:
+                return new(StreamEnd.HostLost,
+                    $"Accounts: the {what} failed (RpcException, status {rpc.StatusCode}: {rpc.Status.Detail}). Treating the host as lost.");
+            default:
+                return new(StreamEnd.HostLost,
+                    $"Accounts: the {what} failed ({ex.GetType().Name}: {ex.Message}). Treating the host as lost.");
         }
     }
 
-    private async Task ConsumeExitedAsync(CancellationToken ct)
+    /// <summary>Tells the registry about one event. The registry raises its events synchronously
+    /// into the runtime and the UI, so a subscriber bug would otherwise surface here, in the
+    /// stream reader, and be reported as a lost host.</summary>
+    private static void Notify(string stream, Action tell, Action<string> log)
     {
-        try
+        try { tell(); }
+        catch (Exception ex)
         {
-            using var call = _client!.SubscribeAccountExited(new SubscriptionRequest(),
-                cancellationToken: ct);
-            await foreach (var evt in call.ResponseStream.ReadAllAsync(ct).ConfigureAwait(false))
+            log($"Accounts: a listener threw on an {stream} update ({ex.GetType().Name}: {ex.Message}). Carrying on.");
+        }
+    }
+
+    internal static readonly TimeSpan DegradedPollInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>Pids the registry knew that the host's fresh snapshot no longer lists.</summary>
+    internal static IReadOnlyList<int> ExitedPids(IEnumerable<int> knownPids, IEnumerable<int> runningPids)
+    {
+        var running = runningPids.ToHashSet();
+        return knownPids.Where(pid => !running.Contains(pid)).ToArray();
+    }
+
+    /// <summary>Snapshot accounts the registry does not hold exactly as listed. Re-reporting every
+    /// account on every poll would raise AccountAdded, and write an "account launched" line, every
+    /// 30 s for accounts that have not changed.</summary>
+    internal static IReadOnlyList<AccountRegistry.AccountInfo> NewOrChanged(
+        IEnumerable<AccountRegistry.AccountInfo> known, IEnumerable<AccountRegistry.AccountInfo> running)
+    {
+        var held = known.ToHashSet();
+        return running.Where(a => !held.Contains(a)).ToArray();
+    }
+
+    /// <summary>
+    /// The degraded mode for one refused stream: ask the ungated GetRunningAccounts on an interval
+    /// and tell the registry what that stream would have. The launched side adds what is new; the
+    /// exited side removes what is gone. Each side does only its own half, so a stream that still
+    /// works is never second-guessed by a snapshot.
+    /// <para>
+    /// With both streams refused these polls are also the only thing that notices the host dying,
+    /// so a failed poll is reported the way a failed stream is.
+    /// </para>
+    /// </summary>
+    internal static async Task PollRunningAccountsAsync(string stream, bool exitedSide, AccountRegistry accounts,
+        Func<CancellationToken, Task<IReadOnlyList<AccountRegistry.AccountInfo>>> fetchRunning,
+        TimeSpan interval, Action hostLost, Action<string> log, CancellationToken ct)
+    {
+        bool refusalLogged = false;
+        while (!ct.IsCancellationRequested)
+        {
+            Exception? error = null;
+            try
             {
-                _accounts.OnExited(evt.ProcessId);
+                // Read before the request goes out. An account that launches while the answer is
+                // on its way is not in this list, so the exited side cannot take it for an exit.
+                var known = accounts.Snapshot();
+                var running = await fetchRunning(ct).ConfigureAwait(false);
+                if (exitedSide)
+                {
+                    foreach (var pid in ExitedPids(known.Select(a => a.Pid), running.Select(a => a.Pid)))
+                        Notify(stream, () => accounts.OnExited(pid), log);
+                }
+                else
+                {
+                    foreach (var a in NewOrChanged(known, running))
+                        Notify(stream, () => accounts.OnLaunched(a.Pid, a.RobloxUserId, a.DisplayName, a.AccountId, a.PlaceId, a.PlaceName), log);
+                }
             }
+            catch (Exception ex) { error = ex; }
+
+            if (error is not null)
+            {
+                var verdict = Classify($"running-accounts check (standing in for the {stream} stream)", error, ct.IsCancellationRequested);
+                if (verdict.End == StreamEnd.Normal) return;
+                if (verdict.End == StreamEnd.HostLost)
+                {
+                    log(verdict.Log!);
+                    hostLost();
+                    return;
+                }
+                // Refused as well. The call is ungated today, so this is a host that changed under
+                // us: say so once and keep asking, the host is alive and may answer later.
+                if (!refusalLogged)
+                {
+                    refusalLogged = true;
+                    log($"Accounts: the host refused the running-accounts check too ({(error as RpcException)?.StatusCode}). "
+                        + $"The account list cannot be kept current without the {stream} stream; still trying.");
+                }
+            }
+
+            try { await Task.Delay(interval, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
         }
-        catch (OperationCanceledException) { /* expected on shutdown */ }
-        catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
-        {
-            // host closed the stream; expected on shutdown.
-        }
-        catch (Exception)
-        {
-            SignalHostLost();
-        }
+    }
+
+    private async Task<IReadOnlyList<AccountRegistry.AccountInfo>> FetchRunningAsync(CancellationToken ct)
+    {
+        var running = await _client!.GetRunningAccountsAsync(new Empty(), cancellationToken: ct).ConfigureAwait(false);
+        return running.Accounts
+            .Select(a => new AccountRegistry.AccountInfo(a.ProcessId, a.RobloxUserId, a.DisplayName, a.AccountId, a.PlaceId, a.PlaceName))
+            .ToArray();
     }
 
     /// <summary>
@@ -290,3 +437,17 @@ internal sealed class PluginClient : IAsyncDisposable
         _channel?.Dispose();
     }
 }
+
+/// <summary>What the end of an account stream means for the plugin.</summary>
+internal enum StreamEnd
+{
+    /// <summary>The plugin's own shutdown. Nothing to do and nothing to say.</summary>
+    Normal,
+    /// <summary>The host refused the stream but is alive: poll the running accounts instead.</summary>
+    Degrade,
+    /// <summary>The host is gone: the plugin stops rather than send input to stale windows.</summary>
+    HostLost,
+}
+
+/// <param name="Log">The diagnostics line to write first; null when the end is silent.</param>
+internal readonly record struct StreamVerdict(StreamEnd End, string? Log);
