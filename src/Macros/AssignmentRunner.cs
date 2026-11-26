@@ -181,29 +181,36 @@ internal sealed class AssignmentRunner
         : this(player, foreground, CadenceDeps.Real) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, Func<int, (bool, string?)> focus)
-        : this(player, foreground, CadenceDeps.Real with
-        {
-            Focus = pid => focus(pid),
+        : this(player, foreground, new CadenceDeps(
+            Focus: pid => focus(pid),
             // This compat ctor exists for call sites/tests that only want to fake
-            // Focus. Left alone it silently inherits the REST of CadenceDeps.Real too
-            // — a real Win32Focus.CaptureForeground/RestoreForeground pair (which
-            // zeroes and restores the SYSTEM-WIDE SPI_SETFOREGROUNDLOCKTIMEOUT) and a
-            // real UserPreferences disk read — exactly the side effects the CadenceDeps
-            // seam exists to keep out of the unit suite. No-op them here; a test that
-            // needs to assert on capture/restore or interval math should use the
-            // CadenceDeps ctor directly instead.
-            CaptureForeground = () => IntPtr.Zero,
-            RestoreForeground = _ => { },
-            KeepAliveIntervalMs = _ => (long)KeepAliveLimits.For(null, null, new UI.UserPreferences()).Deadline.TotalMilliseconds,
-            // Left alone this also inherits the REAL SendKeepAlive (a genuine
-            // SendInput Space keystroke into the developer's desktop) — the same
-            // side-effect class this whole seam exists to keep out of the unit
-            // suite. No-op it here; nothing in AssignmentRunnerTests asserts on the
+            // Focus. It used to be `CadenceDeps.Real with { ... }`, which inherits
+            // every member the override list forgets: the real sweep log (a unit
+            // test's keep-alive lines landed in whatever directory another test
+            // class had pointed DiagLog at, and that class's line count came up one
+            // over), the real countdown toast, a real low-level input hook, and a
+            // read of the developer's own ui-prefs.json. Building it positionally
+            // turns that around: a member not named here takes CadenceDeps' no-op
+            // default, so a member added later is inert until someone opts in.
+            //
+            // The clock and the sleep stay real because they touch nothing outside
+            // the process and the tests that use this ctor are written against real
+            // time. A test that needs a fake clock, or needs to assert on
+            // capture/restore or interval math, should use the CadenceDeps ctor
+            // directly instead.
+            ClockMs: () => Environment.TickCount64,
+            Sleep: (ms, ct) => ms <= 0 ? Task.CompletedTask : Task.Delay((int)ms, ct),
+            // The real pair zeroes and restores the SYSTEM-WIDE
+            // SPI_SETFOREGROUNDLOCKTIMEOUT.
+            CaptureForeground: () => IntPtr.Zero,
+            RestoreForeground: _ => { },
+            // The real one is a genuine SendInput Space keystroke into the
+            // developer's desktop. Nothing in AssignmentRunnerTests asserts on the
             // keystroke itself (KeepAliveInputStructSize_MatchesCanonicalWin32InputSize
             // tests SendSpaceKeepAlive's cbSize directly, without going through a
             // runner instance at all).
-            SendKeepAlive = () => true,
-        }) { }
+            SendKeepAlive: () => true,
+            KeepAliveIntervalMs: _ => (long)KeepAliveLimits.For(null, null, new UI.UserPreferences()).Deadline.TotalMilliseconds)) { }
 
     internal AssignmentRunner(IMacroPlayer player, IForegroundWatcher foreground, CadenceDeps deps)
         : this(player, foreground, deps, PrivateLedger(deps)) { }

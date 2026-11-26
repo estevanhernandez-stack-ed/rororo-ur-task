@@ -25,6 +25,50 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The tag names the release, and manifest.json is what RoRoRo reads to decide
+      # what is installed and whether an update is newer. They are typed by hand in
+      # two places, so a tag pushed before the version bump publishes a release
+      # whose zip says it is the previous version. v0.7.0-rc1 did exactly that: its
+      # manifest said 0.6.0.
+      #
+      # A prerelease suffix on the tag is allowed, because this repo tags release
+      # candidates as vX.Y.Z-rcN while the manifest stays at X.Y.Z. Only tag runs
+      # are checked: a manual run from a branch has no tag to compare.
+      - name: Check the tag against manifest.json
+        shell: pwsh
+        working-directory: rororo-ur-task
+        run: |
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            Write-Host "::notice::Not a tag run ($env:GITHUB_REF). Skipped the tag and manifest version check."
+            exit 0
+          }
+          $version = (Get-Content manifest.json -Raw | ConvertFrom-Json).version
+          $tag = $env:GITHUB_REF_NAME
+          $expected = "v$version"
+          if ($tag -cne $expected -and -not $tag.StartsWith("$expected-", [StringComparison]::Ordinal)) {
+            Write-Host "::error::Tag '$tag' does not match manifest.json, which says version '$version'. Expected '$expected' or '$expected-<prerelease>'. Bump manifest.json and rororo-ur-task.csproj, or move the tag."
+            exit 1
+          }
+          Write-Host "Tag '$tag' matches manifest.json version '$version'."
+
+      # A release used to be one step: build the zip from whatever the tag pointed
+      # at. Nothing here ran a test, and nothing made the tag wait for test.yml, so
+      # v0.7.0 and v0.12.0 were published from commits whose test workflow was red.
+      # A tag push now runs the standalone suite first, and a red suite stops the
+      # release before anything is built or published.
+      #
+      # Known limit: this is the standalone suite only, the same command as the
+      # `unit-tests` job in test.yml. `host-integration` needs the host repo
+      # checked out next door and is not repeated here, so a red there still does
+      # not stop a release. Look at it before you tag.
+      - name: Test (standalone units)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -p:StandaloneTestsOnly=true
+          -c Release
+          --nologo
+
       - name: Build plugin artifacts
         shell: pwsh
         working-directory: rororo-ur-task
