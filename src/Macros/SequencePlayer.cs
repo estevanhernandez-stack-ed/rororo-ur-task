@@ -77,6 +77,10 @@ internal sealed class SequencePlayer
         var clock = Stopwatch.StartNew();
         var perAlt = new List<AltOutcome>(orderedTargets.Count);
         int completed = 0, failed = 0, skipped = 0;
+        // Set once the Done or Aborted event has gone out. The finally sends Aborted when it has
+        // not: an exception that is no cancellation used to leave with neither, and a listener
+        // tracking "a sequence is active" never cleared (the runtime's keeps bare Esc registered).
+        bool ended = false;
 
         try
         {
@@ -98,6 +102,7 @@ internal sealed class SequencePlayer
                         perAlt.Add(new AltOutcome(orderedTargets[j], PlaybackOutcome.Skipped, "Sequence aborted."));
                         skipped++;
                     }
+                    ended = true;
                     EmitProgress(new SequenceProgress(i, orderedTargets.Count, null, SequencePhase.Aborted, completed, failed, skipped));
                     return new SequenceResult(perAlt, completed, failed, skipped, clock.Elapsed);
                 }
@@ -167,11 +172,14 @@ internal sealed class SequencePlayer
                 }
             }
 
+            ended = true;
             EmitProgress(new SequenceProgress(orderedTargets.Count, orderedTargets.Count, null, SequencePhase.Done, completed, failed, skipped));
             return new SequenceResult(perAlt, completed, failed, skipped, clock.Elapsed);
         }
         finally
         {
+            if (!ended)
+                EmitProgress(new SequenceProgress(perAlt.Count, orderedTargets.Count, null, SequencePhase.Aborted, completed, failed, skipped));
             _activeCts?.Dispose();
             _activeCts = null;
         }
