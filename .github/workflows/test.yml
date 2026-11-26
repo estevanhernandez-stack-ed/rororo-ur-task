@@ -15,11 +15,26 @@ name: test
 # The plugin's ONLY check against the real host cannot live behind a flag that
 # CI never sets — a test the pipeline never compiles is a test that has quietly
 # stopped being true. Both repos are public, so this needs no secret.
+#
+# The `schedule` trigger was added 2026-11-25 after the same rot happened a second
+# time. `host-integration` only ran when THIS repo was pushed to, so one quiet month
+# here (no commits from 2026-10-26) let the host go from v1.19 to v1.40 with nothing
+# compiling the integration test. It was red the moment anyone looked.
+#
+# Known limit: GitHub turns scheduled workflows off in a public repo after 60 days
+# without repository activity, which is the quiet-repo case exactly. If this repo
+# sleeps longer than that, the schedule sleeps with it. The lasting fix is the host
+# triggering this workflow when its plugin surface changes; that lives in the host
+# repo. Until it exists, run this by hand (workflow_dispatch) before trusting a
+# green badge that is more than a few weeks old.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # 11:17 UTC daily. Off the top of the hour, when scheduled runs queue worst.
+    - cron: '17 11 * * *'
 
 jobs:
   unit-tests:
