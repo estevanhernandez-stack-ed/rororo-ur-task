@@ -4,6 +4,8 @@ namespace Labs626.UrTask.Macros.Steps;
 /// Collapses a recording into steps. The path between clicks is dropped; a click's delay is
 /// the time the mouse sat still before it (time spent moving is hand travel, replaced at
 /// playback by a fixed jump and wiggle). Drags, the wheel and keys keep their meaning.
+/// <para>A recording ends when it is stopped, not at its last input: given the end time, the gap
+/// after the last step becomes a final wait step, so "click, wait 30 s, stop" loops every 30 s.</para>
 /// </summary>
 public static class StepConverter
 {
@@ -13,7 +15,9 @@ public static class StepConverter
 
     private static readonly HashSet<int> Modifiers = new() { 0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
 
-    public static IReadOnlyList<MacroStep> Convert(IReadOnlyList<MacroEvent> events)
+    /// <param name="endMs">When the recording was stopped, on the events' clock; null when unknown
+    /// (an older recording being converted), which adds no final wait.</param>
+    public static IReadOnlyList<MacroStep> Convert(IReadOnlyList<MacroEvent> events, long? endMs = null)
     {
         var steps = new List<MacroStep>();
         var heldKeys = new HashSet<int>();
@@ -123,12 +127,19 @@ public static class StepConverter
             }
         }
 
-        if (raw is not null) steps.Add(Raw(rawDelay, raw, rawNote));
+        // Where the last step ends on the recording's clock: the final wait is measured from here.
+        long lastStepEndMs = anchorMs;
+        if (raw is not null)
+        {
+            steps.Add(Raw(rawDelay, raw, rawNote));
+            lastStepEndMs = events[^1].TimestampMs;
+        }
         else if (down is not null)
         {
             var rest = new List<MacroEvent>();
             for (int j = downIndex; j < events.Count; j++) rest.Add(events[j]);
             steps.Add(Raw(downDelay, rest, "A mouse button was pressed and never released."));
+            lastStepEndMs = events[^1].TimestampMs;
         }
 
         // The stop hotkey leaves modifier presses at the very end (the egg ends LCtrl down,
@@ -142,8 +153,18 @@ public static class StepConverter
         {
             if (steps[j] is KeyStep { Down: true } d
                 && !steps.Skip(j + 1).Any(s => s is KeyStep { Down: false } u && u.VirtualKeyCode == d.VirtualKeyCode))
+            {
+                // A step dropped off the very end takes its delay with it, so the step before it
+                // is now the last one and the final wait starts that much earlier.
+                if (j == steps.Count - 1) lastStepEndMs -= d.DelayMs;
                 steps.RemoveAt(j);
+            }
         }
+
+        // After the trim on purpose: the stop hotkey's own keys must not sit between the last real
+        // step and the wait. A recording with no steps does not become a lone wait.
+        if (endMs is { } end && steps.Count > 0 && end > lastStepEndMs)
+            steps.Add(new WaitStep((int)Math.Min(end - lastStepEndMs, int.MaxValue)));
 
         return steps;
     }

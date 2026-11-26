@@ -69,24 +69,25 @@ Portable macro recording and multi-account automation for RoRoRo-managed Roblox 
 |---|---|
 | `Ctrl+Shift+R` | Start / stop recording |
 | `Ctrl+Shift+P` | Play assignments (round-robin loop) — press again to stop |
-| `Ctrl+Shift+L` | Run the selected routine on the checked alts |
+| `Ctrl+Shift+L` | Run the selected routine on the checked alts. Press again to stop it |
 | `Ctrl+Shift+F12` | Abort current playback |
-| `Esc` | Abort — but only while a macro is playing, so `Esc` stays yours the rest of the time |
+| `Ctrl+Shift+F11` | Break-glass: you take the wheel. Stops every playback and keep-alive. Until you press it again, including after a restart, `Ctrl+Shift+P`, `Ctrl+Shift+L` and run requests from other plugins do nothing |
+| `Esc` | Stop whatever is playing. Ur Task holds `Esc` only while something is playing, and that includes the whole time the assignment loop (keep-alive) is on: until the loop stops, pressing `Esc` in any app stops the loop instead of doing what it normally does there. On purpose: `Esc` is the easy stop key |
 | `Ctrl+Shift+M` | Toggle compact mode |
 
 ## Integration & extensibility
 
 - **Export to AutoHotkey** — any macro exports to a standalone `.ahk` script, in **AutoHotkey v1 or v2** (you pick). Keyboard macros port faithfully (key down/up with your original timing); mouse macros port best-effort under window-client coords. The script runs on its own — no Ur Task, no account binding — with an honest header noting it plays on the active window only and can't do the per-account round-robin. Get your work out of the walled garden.
-- **Action bridge** — Ur Task exposes a local, current-user-only IPC endpoint so sibling plugins (like **RoRoRo Ur OCR**) can fire a specific macro when a screen trigger matches. That's the perception→action loop — OCR sees a condition, Ur Task plays the response — no AutoHotkey needed. Consent-gated (default on).
+- **Action bridge** — Ur Task exposes a local, current-user-only IPC endpoint so sibling plugins (like **RoRoRo Ur OCR**) can fire a specific macro when a screen trigger matches. That's the perception→action loop — OCR sees a condition, Ur Task plays the response — no AutoHotkey needed. On by default, with no switch for it in the window. To turn it off: quit Ur Task (it rewrites its settings file while it runs), set `"AcceptPluginRunRequests": false` in `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\ui-prefs.json`, and start Ur Task again.
 - **RoRoRo-native** — subscribes to account-launched / account-exited events; the alt list stays live as you launch and close accounts.
 - **Per-account row badges** — recording / playing indicators surface on RoRoRo's account rows (on hosts that render them).
 
 ## Reliability & safety
 
-- **Self-terminates when RoRoRo closes** — no zombie process left holding input or hotkeys.
+- **Never outlives RoRoRo.** RoRoRo ends the plugin when it exits, updates the plugin or restarts it. If RoRoRo disappears without doing that (a crash, or ended from Task Manager), Ur Task notices the lost connection, stops any playback and quits by itself. No zombie process left holding input or hotkeys.
 - **Single-flight run guards** — a running loop can't be double-started or collide with a routine run.
 - **Crash diagnostics** — a rolling diagnostic log + a startup watchdog; grab it from the tray (**Open log folder**) for support without a screen-share. Logs never contain cookies or passwords.
-- **Honest, opt-out capabilities** — the plugin discloses exactly what it does (synthesize keyboard input, synthesize mouse input, watch global input) on RoRoRo's install-time consent sheet; you can decline any of them.
+- **Honest capabilities.** The plugin discloses what it does (synthesize keyboard input, synthesize mouse input, watch global input) on RoRoRo's install-time consent sheet. Those three are disclosure, not switches: RoRoRo cannot enforce them, Ur Task needs all of them, and it does not check which ones you ticked. If you do not want a plugin that does these things, cancel the install.
 
 ---
 

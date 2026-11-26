@@ -5,8 +5,16 @@ using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.Tests;
 
-public class MacroBundleTests
+public class MacroBundleTests : IDisposable
 {
+    private readonly List<string> _tempDirs = new();
+
+    public void Dispose()
+    {
+        foreach (var dir in _tempDirs)
+            try { System.IO.Directory.Delete(dir, recursive: true); } catch { }
+    }
+
     private static Macro MakeMacro(string name, string? coordSpace = null) => new(
         SchemaVersion: Macro.CurrentSchemaVersion,
         Id: Guid.NewGuid().ToString(),
@@ -167,5 +175,168 @@ public class MacroBundleTests
 
         Assert.Null(prepared.Name);
         Assert.Empty(taken);
+    }
+
+    // ---------- L5-03: import has limits ----------
+    // A 7 MB bundle of 100,000 empty macros froze the window on import, then slowed every
+    // later library load. Each limit refuses with one plain sentence for the activity log.
+
+    private static string EntryJson(string name, string body = "\"events\": []") => $$"""
+        { "schemaVersion": 4, "id": "{{Guid.NewGuid()}}", "name": "{{name}}", "recordMode": "PerWindow",
+          "recordedAtUnixMs": 1, "coordSpace": "screen", {{body}} }
+        """;
+
+    private static string BundleJson(IEnumerable<string> entries)
+        => "{ \"bundleVersion\": 1, \"macros\": [" + string.Join(",", entries) + "] }";
+
+    private static string Repeat(string item, int count) => string.Join(",", Enumerable.Repeat(item, count));
+
+    private string TempFile(string name)
+    {
+        var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "urtask-tests", Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        return System.IO.Path.Combine(dir, name);
+    }
+
+    [Fact]
+    public void FileSizeProblem_NullUpToTheLimit_ThenOneSentence()
+    {
+        Assert.Null(MacroBundle.FileSizeProblem("share.json", 0));
+        Assert.Null(MacroBundle.FileSizeProblem("share.json", MacroBundle.MaxImportFileBytes));
+
+        Assert.Equal("share.json is too large to import (20.1 MB; the limit is 20 MB).",
+            MacroBundle.FileSizeProblem("share.json", MacroBundle.MaxImportFileBytes + 1));
+        Assert.Equal("share.json is too large to import (150 MB; the limit is 20 MB).",
+            MacroBundle.FileSizeProblem("share.json", 150L * 1024 * 1024));
+    }
+
+    [Fact]
+    public void ReadForImport_FileOverTheSizeLimit_IsRefusedBeforeItIsRead()
+    {
+        var path = TempFile("huge.json");
+        using (var fs = System.IO.File.Create(path)) fs.SetLength(MacroBundle.MaxImportFileBytes + 1);
+
+        var file = MacroBundle.ReadForImport(path);
+
+        Assert.Empty(file.Macros);
+        // Not "Not valid JSON": the file was never opened, only measured.
+        Assert.Equal("huge.json is too large to import (20.1 MB; the limit is 20 MB).", Assert.Single(file.Log));
+    }
+
+    [Fact]
+    public void Parse_BundleAtTheMacroLimit_Imports()
+    {
+        var result = MacroBundle.Parse(BundleJson(Enumerable.Range(0, MacroBundle.MaxMacrosPerBundle).Select(i => EntryJson($"m{i}"))));
+
+        Assert.Empty(result.Failures);
+        Assert.Equal(MacroBundle.MaxMacrosPerBundle, result.Macros.Count);
+    }
+
+    [Fact]
+    public void Parse_BundleOverTheMacroLimit_IsRefusedWhole()
+    {
+        var result = MacroBundle.Parse(BundleJson(Enumerable.Range(0, MacroBundle.MaxMacrosPerBundle + 1).Select(i => EntryJson($"m{i}"))));
+
+        Assert.Empty(result.Macros);
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal(MacroBundle.WholeFileLabel, failure.Label);
+        Assert.Equal("It holds 501 macros, which is too many to import at once (the limit is 500).", failure.Reason);
+    }
+
+    [Fact]
+    public void Parse_MacroWithTooManyEvents_FailsAlone_TheRestImport()
+    {
+        var tooMany = EntryJson("endless", $"\"events\": [{Repeat("{\"kind\":0}", MacroBundle.MaxEventsPerMacro + 1)}]");
+
+        var result = MacroBundle.Parse(BundleJson(new[] { EntryJson("fine"), tooMany, EntryJson("also fine") }));
+
+        Assert.Equal(new[] { "fine", "also fine" }, result.Macros.Select(m => m.Name).ToArray());
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal("endless", failure.Label);
+        Assert.Equal("It has 200,001 events, which is too many to import (the limit is 200,000).", failure.Reason);
+    }
+
+    [Fact]
+    public void Parse_MacroWithTooManySteps_FailsAlone_TheRestImport()
+    {
+        var tooMany = EntryJson("endless", $"\"events\": [], \"steps\": [{Repeat("{\"kind\":\"wait\",\"delayMs\":1}", MacroBundle.MaxStepsPerMacro + 1)}]");
+
+        var result = MacroBundle.Parse(BundleJson(new[] { tooMany, EntryJson("fine") }));
+
+        Assert.Equal("fine", Assert.Single(result.Macros).Name);
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal("endless", failure.Label);
+        Assert.Equal("It has 5,001 steps, which is too many to import (the limit is 5,000).", failure.Reason);
+    }
+
+    [Fact]
+    public void Parse_BareSingleMacroOverALimit_IsRefused()
+    {
+        var result = MacroBundle.Parse(EntryJson("endless", $"\"events\": [], \"steps\": [{Repeat("{\"kind\":\"wait\",\"delayMs\":1}", MacroBundle.MaxStepsPerMacro + 1)}]"));
+
+        Assert.Empty(result.Macros);
+        Assert.Contains("5,001 steps", Assert.Single(result.Failures).Reason);
+    }
+
+    [Fact]
+    public void SizeProblem_AtTheLimits_IsNull_AndRawStepEventsCountAsEvents()
+    {
+        var e = new MacroEvent(0, MacroEventKind.KeyDown, 65, 0, 0, 0, 0);
+        var atLimit = MakeMacro("x") with
+        {
+            Events = Enumerable.Repeat(e, MacroBundle.MaxEventsPerMacro).ToList(),
+            Steps = Enumerable.Repeat<Labs626.UrTask.Macros.Steps.MacroStep>(
+                new Labs626.UrTask.Macros.Steps.WaitStep(1), MacroBundle.MaxStepsPerMacro).ToList(),
+        };
+        Assert.Null(MacroBundle.SizeProblem(atLimit));
+
+        // A raw step replays an event list of its own; hiding the events there must not get past the limit.
+        var hidden = MakeMacro("x") with
+        {
+            Events = new List<MacroEvent>(),
+            Steps = new Labs626.UrTask.Macros.Steps.MacroStep[]
+            {
+                new Labs626.UrTask.Macros.Steps.RawStep(0, Enumerable.Repeat(e, MacroBundle.MaxEventsPerMacro).ToList(), "a"),
+                new Labs626.UrTask.Macros.Steps.RawStep(0, new[] { e }, "b"),
+            },
+        };
+        Assert.Equal("It has 200,001 events, which is too many to import (the limit is 200,000).", MacroBundle.SizeProblem(hidden));
+    }
+
+    [Fact]
+    public void ReadForImport_ReturnsTheMacrosAndOneLinePerProblem()
+    {
+        var path = TempFile("share.json");
+        var tooMany = EntryJson("endless", $"\"events\": [], \"steps\": [{Repeat("{\"kind\":\"wait\",\"delayMs\":1}", MacroBundle.MaxStepsPerMacro + 1)}]");
+        System.IO.File.WriteAllText(path, BundleJson(new[] { EntryJson("fine"), tooMany }));
+
+        var file = MacroBundle.ReadForImport(path);
+
+        Assert.Equal("fine", Assert.Single(file.Macros).Name);
+        Assert.Equal("Skipped endless in share.json: It has 5,001 steps, which is too many to import (the limit is 5,000).",
+            Assert.Single(file.Log));
+    }
+
+    [Fact]
+    public void ReadForImport_WholeFileProblems_NameTheFile()
+    {
+        var tooMany = TempFile("crowd.json");
+        System.IO.File.WriteAllText(tooMany, BundleJson(Enumerable.Range(0, MacroBundle.MaxMacrosPerBundle + 1).Select(i => EntryJson($"m{i}"))));
+        var notJson = TempFile("notes.json");
+        System.IO.File.WriteAllText(notJson, "this is not json");
+
+        Assert.Equal("Nothing was imported from crowd.json. It holds 501 macros, which is too many to import at once (the limit is 500).",
+            Assert.Single(MacroBundle.ReadForImport(tooMany).Log));
+        Assert.StartsWith("Nothing was imported from notes.json. Not valid JSON:", Assert.Single(MacroBundle.ReadForImport(notJson).Log));
+    }
+
+    [Fact]
+    public void ReadForImport_FileThatCannotBeRead_IsOneLine_NotAThrow()
+    {
+        var file = MacroBundle.ReadForImport(TempFile("missing.json"));
+
+        Assert.Empty(file.Macros);
+        Assert.StartsWith("Import failed for missing.json:", Assert.Single(file.Log));
     }
 }

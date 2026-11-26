@@ -58,11 +58,17 @@ public static partial class MacroName
         string route = routeText;
         int? stepN = null, stepOf = null;
         var step = StepPattern().Match(routeText);
-        if (step.Success)
+        // TryParse, not Parse: this runs for every macro on every library refresh, on the UI
+        // thread, so a name it cannot read has to come out as "no step counter", never a throw.
+        if (step.Success
+            && int.TryParse(step.Groups["n"].Value, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var n)
+            && int.TryParse(step.Groups["of"].Value, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var of))
         {
             route = step.Groups["route"].Value.Trim();
-            stepN = int.Parse(step.Groups["n"].Value, System.Globalization.CultureInfo.InvariantCulture);
-            stepOf = int.Parse(step.Groups["of"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            stepN = n;
+            stepOf = of;
         }
 
         return new MacroNameParts(where, where, route, stepN, stepOf, what, AccountIn(what));
@@ -77,7 +83,9 @@ public static partial class MacroName
     }
 
     // First "n/N" preceded by whitespace; "egg 2/6 + 4/6" takes 2/6.
-    [GeneratedRegex(@"^(?<route>.*?)\s+(?<n>\d{1,6})/(?<of>\d{1,6})(?!\d)")]
+    // [0-9], not \d: in .NET \d matches every Unicode decimal digit (full-width, Arabic-Indic),
+    // which int parsing does not read. Those digits are part of the route text, not a counter.
+    [GeneratedRegex(@"^(?<route>.*?)\s+(?<n>[0-9]{1,6})/(?<of>[0-9]{1,6})(?![0-9])")]
     private static partial Regex StepPattern();
 
     [GeneratedRegex(@"\[([^\[\]]+)\]")]

@@ -25,6 +25,88 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The tag names the release, and manifest.json is what RoRoRo reads to decide
+      # what is installed and whether an update is newer. They are typed by hand in
+      # two places, so a tag pushed before the version bump publishes a release
+      # whose zip says it is the previous version. v0.7.0-rc1 did exactly that: its
+      # manifest said 0.6.0.
+      #
+      # A prerelease suffix on the tag is allowed, because this repo tags release
+      # candidates as vX.Y.Z-rcN while the manifest stays at X.Y.Z. Only tag runs
+      # are checked: a manual run from a branch has no tag to compare.
+      - name: Check the tag against manifest.json
+        shell: pwsh
+        working-directory: rororo-ur-task
+        run: |
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            Write-Host "::notice::Not a tag run ($env:GITHUB_REF). Skipped the tag and manifest version check."
+            exit 0
+          }
+          $version = (Get-Content manifest.json -Raw | ConvertFrom-Json).version
+          $tag = $env:GITHUB_REF_NAME
+          $expected = "v$version"
+          if ($tag -cne $expected -and -not $tag.StartsWith("$expected-", [StringComparison]::Ordinal)) {
+            Write-Host "::error::Tag '$tag' does not match manifest.json, which says version '$version'. Expected '$expected' or '$expected-<prerelease>'. Bump manifest.json and rororo-ur-task.csproj, or move the tag."
+            exit 1
+          }
+          Write-Host "Tag '$tag' matches manifest.json version '$version'."
+
+          # A full release, not a release candidate, must have a dated changelog entry.
+          # 0.12.1 and 0.13.0 both shipped with theirs still reading "unreleased", and
+          # stayed that way for a month.
+          if ($tag -ceq $expected) {
+            $entry = Select-String -Path CHANGELOG.md -Pattern "^## $([regex]::Escape($version))(\s|$)" | Select-Object -First 1
+            if (-not $entry) {
+              Write-Host "::error::CHANGELOG.md has no '## $version' entry. Write it before tagging."
+              exit 1
+            }
+            if ($entry.Line -match 'unreleased') {
+              Write-Host "::error::CHANGELOG.md still says '$($entry.Line)'. Put the release date on it before tagging."
+              exit 1
+            }
+            Write-Host "CHANGELOG.md entry: $($entry.Line)"
+          }
+
+      # A release used to be one step: build the zip from whatever the tag pointed
+      # at. Nothing here ran a test, and nothing made the tag wait for test.yml, so
+      # v0.7.0 and v0.12.0 were published from commits whose test workflow was red.
+      # A tag push now runs both suites first, and a red one stops the release
+      # before anything is built or published.
+      #
+      # Two steps, the same split as test.yml and for the same reason: a red in
+      # the first is the plugin's own logic, a red in the second is the plugin
+      # against the host, and the two should never be mistaken for each other.
+      - name: Test (standalone units)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -p:StandaloneTestsOnly=true
+          -c Release
+          --nologo
+
+      # On v0.7.0 and v0.12.0 it was this check that was red while the unit tests
+      # were green, so gating on the unit tests alone would have stopped neither.
+      # It is the plugin's only test against the real host, and a release is the
+      # moment that matters most.
+      #
+      # It builds against the host's main branch, not its last release. If it is
+      # red because the host changed something the test stands in for, fix the
+      # stand-in first: that is a small test change, and finding out here is the
+      # point. If the host's main is broken for its own reasons, re-run once the
+      # host is green; do not remove this step to get a release out.
+      - name: Checkout host (sibling layout the test project expects)
+        uses: actions/checkout@v6
+        with:
+          repository: estevanhernandez-stack-ed/ROROROblox
+          path: ROROROblox
+
+      - name: Test (with the real host)
+        working-directory: rororo-ur-task
+        run: >-
+          dotnet test tests/rororo-ur-task.Tests/rororo-ur-task.Tests.csproj
+          -c Release
+          --nologo
+
       - name: Build plugin artifacts
         shell: pwsh
         working-directory: rororo-ur-task

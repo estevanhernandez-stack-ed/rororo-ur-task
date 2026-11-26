@@ -18,9 +18,32 @@ namespace Labs626.UrTask.Tests;
 /// <c>HeaderInjectingCallInvoker</c>) so this test mirrors how the plugin
 /// actually runs in production, not a fixed-accessor fake.
 /// </summary>
-public class PluginClientIntegrationTests
+// PluginClient.ConnectAsync writes a "Theme: host palette received on connect" line through
+// DiagLog, whose Directory is one process-wide static. Outside the shared "DiagLog" collection
+// (see DiagLogTests) this class ran in parallel with the classes that repoint it, and its line
+// landed in their temp directory: both CI reds on host-integration were a DiagLogTests line
+// count one over ("Expected: 400 Actual: 401"). Join the collection and write to a scratch
+// directory of our own, the same way MacroPlayerClientSpaceTests does.
+[Collection("DiagLog")]
+public class PluginClientIntegrationTests : IDisposable
 {
     private const string PluginId = "626labs.ur-task";
+
+    private readonly string _dir;
+
+    public PluginClientIntegrationTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "urtask-pluginclient-" + Guid.NewGuid().ToString("N"));
+        // Fully qualified on purpose: this file also imports the host's namespaces, and it is
+        // only compiled when the host is checked out next door.
+        Labs626.UrTask.Diagnostics.DiagLog.Directory = _dir;
+        Labs626.UrTask.Diagnostics.DiagLog.ResetForTests();
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch { }
+    }
 
     [Fact]
     public async Task ConnectAsync_HandshakeSucceeds_AndEventsFlow()

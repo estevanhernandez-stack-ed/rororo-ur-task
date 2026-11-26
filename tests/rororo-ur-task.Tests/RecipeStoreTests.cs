@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using Labs626.UrTask.Macros;
 
 namespace Labs626.UrTask.Tests;
@@ -48,5 +49,39 @@ public class RecipeStoreTests
         var loaded = new RecipeStore(dir).LoadAll();
         Assert.Empty(loaded.Recipes);
         Assert.Single(loaded.Failures);
+    }
+
+    // L5-02: a save replaces the file in one step, so a failed save never costs the old recipe.
+    [Fact]
+    public void Save_OverAnExistingFile_LeavesTheNewFileAndNoTmp()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "urtask-recipes-" + Guid.NewGuid());
+        var store = new RecipeStore(dir);
+        var id = Guid.NewGuid().ToString();
+        store.Save(Sample(id));
+
+        store.Save(Sample(id) with { Name = "second" });
+
+        Assert.Equal("second", Assert.Single(store.LoadAll().Recipes).Name);
+        Assert.Equal(new[] { $"{id}.json" }, Directory.GetFiles(dir).Select(Path.GetFileName).ToArray());
+    }
+
+    [Fact]
+    public void Save_WhenTheNewFileCannotBeMovedIntoPlace_KeepsTheOldRecipe()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "urtask-recipes-" + Guid.NewGuid());
+        var store = new RecipeStore(dir);
+        var id = Guid.NewGuid().ToString();
+        store.Save(Sample(id));
+        var tmp = Path.Combine(dir, $"{id}.json.tmp");
+        File.WriteAllText(tmp, string.Empty);
+
+        // Something holds the freshly written .tmp without sharing delete, so the rename fails.
+        using (new FileStream(tmp, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            Assert.ThrowsAny<Exception>(() => store.Save(Sample(id) with { Name = "second" }));
+        }
+
+        Assert.Equal("walk + mine", Assert.Single(store.LoadAll().Recipes).Name);
     }
 }

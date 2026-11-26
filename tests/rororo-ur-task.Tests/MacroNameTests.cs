@@ -150,4 +150,30 @@ public class MacroNameTests
         Assert.Equal(MacroName.UngroupedGroup, p.Group);
         Assert.Equal("a|b", p.What);
     }
+
+    // L5-01: \d in .NET matches any Unicode decimal digit, int.Parse only ASCII 0-9. A name
+    // with full-width or Arabic-Indic digits used to throw out of Parse on every library refresh.
+    [Theory]
+    [InlineData("PS99 | farm \uFF11/\uFF13 | best", "farm \uFF11/\uFF13")]
+    [InlineData("PS99 | farm \u0661/\u0663 | best", "farm \u0661/\u0663")]
+    [InlineData("PS99 | farm 1/\uFF13 | best", "farm 1/\uFF13")]
+    public void NonAsciiDigits_AreNotAStepCounter_AndDoNotThrow(string name, string route)
+    {
+        var p = MacroName.Parse(name);
+
+        Assert.Equal("PS99", p.Group);
+        Assert.Equal(route, p.Route);
+        Assert.Null(p.StepN);
+        Assert.Null(p.StepOf);
+        Assert.Equal("best", p.What);
+    }
+
+    [Fact]
+    public void AsciiStepFollowedByANonAsciiDigit_StillReadsTheAsciiStep()
+    {
+        var p = MacroName.Parse("PS99 | farm 1/3\uFF13 | best");
+
+        Assert.Equal(1, p.StepN);
+        Assert.Equal(3, p.StepOf);
+    }
 }

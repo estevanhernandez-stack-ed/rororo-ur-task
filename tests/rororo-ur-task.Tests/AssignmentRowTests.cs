@@ -104,14 +104,14 @@ public class AssignmentRowTests
 
     private static readonly KeepAliveLimit Fifteen = new(TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(9), false);
 
-    private sealed class Clock { public long Now = 10 * 60_000; }
+    private sealed class Clock { public long Now = 10 * 60_000; public bool LoopRunning = true; }
 
     private static (AssignmentRow row, KeepAliveLedger ledger, Clock clock) KeepAliveRow()
     {
         var clock = new Clock();
         var ledger = new KeepAliveLedger(() => clock.Now, () => DateTimeOffset.UnixEpoch);
         var gate = new ForegroundGate(() => clock.Now, _ => { });
-        var view = new KeepAliveView(ledger, gate, () => clock.Now, _ => Fifteen);
+        var view = new KeepAliveView(ledger, gate, () => clock.Now, _ => Fifteen, () => clock.LoopRunning);
         var row = new AssignmentRow(Alt(1), view) { Role = CadenceRole.KeepAlive };
         return (row, ledger, clock);
     }
@@ -145,6 +145,45 @@ public class AssignmentRowTests
 
         clock.Now += 20 * 60_000;
         Assert.Equal("next: 0m", row.NextDueText);   // overdue
+    }
+
+    /// L3-10: a stopped loop is not coming for anyone, so the row must not count down to "next: 0m".
+    [Fact]
+    public void Next_due_text_says_stopped_when_the_loop_is_not_running()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        StampAgo(ledger, clock, row.Alt.RobloxUserId, 5 * 60_000);
+        Assert.Equal("next: 4m", row.NextDueText);
+
+        clock.LoopRunning = false;
+        Assert.Equal("stopped", row.NextDueText);
+
+        clock.LoopRunning = true;
+        Assert.Equal("next: 4m", row.NextDueText);
+    }
+
+    // Break-glass stops the loop and marks every account Held. "held" is the row's only sign that
+    // break-glass is why nothing is coming, so it has to win over the plain "stopped".
+    [Fact]
+    public void Next_due_text_says_held_while_break_glass_holds_a_stopped_loop()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        ledger.SetState(row.Alt.RobloxUserId, AccountKeepAliveState.Held);
+        clock.LoopRunning = false;
+
+        Assert.Equal("held", row.NextDueText);
+    }
+
+    [Fact]
+    public void Next_due_text_keeps_off_for_a_switched_off_row_even_when_the_loop_is_stopped()
+    {
+        var (row, ledger, clock) = KeepAliveRow();
+        ledger.Track(row.Alt, Fifteen);
+        ledger.SetOff(row.Alt.RobloxUserId, true);
+        clock.LoopRunning = false;
+        Assert.Equal("off", row.NextDueText);
     }
 
     [Fact]

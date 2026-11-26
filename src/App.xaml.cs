@@ -140,8 +140,11 @@ public partial class App : Application
         {
             // best-effort shutdown — don't let cleanup throw on exit
         }
-        // Absence of this line at the end of a session = crash or hang, not exit. A losing second
-        // copy skips it: the log file belongs to the first instance, exit included.
+        // Written only when Ur Task ends itself (tray Quit, or it noticed the host was gone). RoRoRo
+        // kills the plugin's process tree when it closes, so most sessions end with no line at all and
+        // that is normal: a missing line means RoRoRo closed it, it crashed (FATAL), or it hung at
+        // startup (WATCHDOG). A losing second copy skips it: the log file belongs to the first
+        // instance, exit included.
         if (_isFirstInstance)
         {
             DiagLog.Write($"exiting cleanly (code {e.ApplicationExitCode})");

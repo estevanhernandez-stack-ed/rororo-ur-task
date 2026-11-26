@@ -59,6 +59,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private (int W, int H)? _recordingClientSize;
     private bool? _recordingMaximized;
     private int? _recordingDisplayScale;
+    // Built on first use, so its AccountRemoved subscription is made from the recording code.
+    private RecordingExitWatch? _recordingExitWatch;
+    // Recording pauses keep-alive and hands it back on stop (owner ruling, 0.13.1): RecordingPause decides,
+    // RecordingHold warns about the accounts left unserved meanwhile.
+    private readonly RecordingPause _recordingPause = new();
+    private RecordingHold? _recordingHold;
+    private System.Threading.Timer? _recordingHoldTimer;
+    private readonly object _recordingHoldLock = new();
+    private bool _recordingWatchesLoop;
+    /// <summary>How long a recording waits for the loop it stopped to finish unwinding. The loop is
+    /// usually asleep and gone in a few ms; a turbo sweep in mid-flight needs a little longer.</summary>
+    private const int LoopStopWaitMs = 1000;
     private readonly IDisplayScale _displayScale = new DisplayScale();
     private Macro? _lastMacro;
     private bool _sequenceActive;
@@ -174,7 +186,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
                 isBreakglass: () => _breakglass.IsOn, deadlines: status.Deadlines, registry: playbacks);
             _bridgeInvoker = invoker;
-            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status, log: Diagnostics.DiagLog.Write);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
 
@@ -254,7 +266,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             if (!args.Macro.IsClientSpace && args.Macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
                 or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
             {
-                Log("Legacy screen-coordinate macro — window position matters; use STACK or re-record for window-relative playback.");
+                Log("This macro was recorded with screen positions, so its clicks land where the window was. Keep the game window where it was when you recorded, or record it again.");
             }
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
@@ -341,7 +353,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// this into IsRoutineRunning to drive the routine strip's RUN/STOP toggle,
     /// same shape as IsRunnerActive/PlayStopButtonLabel for the plain assignment loop.
     /// </summary>
-    public bool IsRecipeRunning => _activeRecipeRunner?.IsRunning ?? false;
+    // Not the runner's own IsRunning: that flips inside RunAsync, after RunRecipe has already raised
+    // RecipeRunningChanged, so the button read false for the whole run. The field is set at start and
+    // cleared in the run's finally (only by the run that still owns it), so it is the true window.
+    public bool IsRecipeRunning => _activeRecipeRunner is not null;
 
     /// <summary>Fires whenever a recipe run starts or ends — see <see cref="IsRecipeRunning"/>.
     /// Fires on whatever thread the transition happened on; the subscriber marshals.</summary>
@@ -498,7 +513,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // position step plus once for a Loop terminal, and re-reading + re-deserializing
         // every macro file on each call turns an N-step recipe into N+1 full library
         // reloads. Snapshot into a dictionary instead.
-        var macros = LoadMacrosLoggingFailuresOnce().ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        var macros = MacroStore.IndexById(LoadMacrosLoggingFailuresOnce());
 
         var runner = new RecipeRunner(
             runOnce: (macro, alts, ct) => _sequence.PlayAsync(macro, alts, null, ct),
@@ -671,10 +686,32 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public async Task StartAsync()
     {
+        // Esc stays registered for the whole of a bridge playback, the waits between a repeat's
+        // passes included: no sequence is running then, and a press would go to the game.
+        if (_bridgeInvoker is { } bridge) bridge.ActivePlaybacksChanged += RefreshAbortKey;
+
+        // Hotkeys get their own try: a key another program holds used to throw out of the one
+        // big try below, which also skipped loading the macro library and connecting to RoRoRo.
+        // The window showed "Not connected", zero macros and no hotkeys at all.
         try
         {
+            _hotkeys.AbortKeyFailed += failure => Log(failure.AbortKeyLine(
+                abortChordWorks: !_hotkeys.Failures.Any(f => f.Key == "Ctrl+Shift+F12")));
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            var failed = _hotkeys.Failures;
+            if (failed.Count == 0)
+                Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            else
+                foreach (var failure in failed)
+                    Log(failure.StartupLine(othersWork: failed.Count < Hotkeys.HotkeyService.ChordHotkeyVkCodes.Count));
+        }
+        catch (Exception ex)
+        {
+            Log($"Hotkeys aren't working: {ex.Message} Use the buttons in the Ur Task window.");
+        }
+
+        try
+        {
             if (_breakglass.IsOn)
             {
                 Log(Hotkeys.Breakglass.StillOnAtStartLine);
@@ -703,7 +740,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log($"Connected. Host version {HostVersion}. Snapshot has {Accounts.Snapshot().Count} accounts.");
             // Belt and braces: the snapshot came in through AccountAdded, which tracked it already.
             foreach (var info in Accounts.Snapshot()) TrackAccount(info);
-            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token);
+            _ = _activityPoller.RunAsync(TimeSpan.FromSeconds(30), _activityCts.Token, RefreshGameIdentityAsync);
         }
         catch (Exception ex)
         {
@@ -713,12 +750,30 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
-    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history.</summary>
+    /// <summary>Puts an account in the keep-alive ledger with its game's limit. Re-tracking keeps its history
+    /// and moves only the limit: when an account's game fills in after its launch, that is said once.</summary>
     private void TrackAccount(AccountRegistry.AccountInfo info)
     {
-        try { Ledger.Track(info, KeepAliveLimits.For(info.PlaceId, info.PlaceName, UI.UserPreferences.Load())); }
+        try
+        {
+            var prefs = UI.UserPreferences.Load();
+            var changed = KeepAliveLimits.TrackAnnounced(
+                Ledger, info, a => KeepAliveLimits.For(a.PlaceId, a.PlaceName, prefs));
+            if (changed is not null) Log(changed);
+        }
         catch (Exception ex) { Log($"keep-alive: couldn't track {info.DisplayName}: {ex.Message}"); }
     }
+
+    /// <summary>
+    /// RoRoRo fills in an account's game from presence, after the launch event, and re-sends nothing when
+    /// it does. So on each activity poll, while any running account still has no game, RoRoRo is asked for
+    /// its running accounts again. The registry raises AccountAdded only for an account whose info
+    /// changed, so this says nothing until a game arrives; then the AccountAdded handler re-tracks the account.
+    /// </summary>
+    private Task RefreshGameIdentityAsync(CancellationToken ct)
+        => KeepAliveLimits.AnyGameMissing(Accounts.Snapshot())
+            ? _client.RefreshRunningAccountsAsync(ct)
+            : Task.CompletedTask;
 
     public async ValueTask DisposeAsync()
     {
@@ -726,9 +781,24 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _bridgeCts.Dispose(); } catch { }
         try { _activityCts.Cancel(); } catch { }
         try { _holdTimer?.Dispose(); } catch { }
+        // The recording's warning timer too: it reads the ledger and logs, and neither should outlive this.
+        try { StopRecordingHold(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        // Stop every playback and give it a moment to unwind before the process goes. The
+        // players let go of held keys and mouse buttons in their finally blocks, which run only
+        // if the playback unwinds first: quitting from the tray during a held W left the key down
+        // in the game. The routine goes first, so it cannot start a fresh loop under the others.
+        await PlaybackShutdown.AbortAndWaitAsync(
+            new (string, Func<bool>)[]
+            {
+                ("the routine", () => _activeRecipeRunner?.Abort() ?? false),
+                ("the keep-alive loop", _runner.Abort),
+                ("the sequence", _sequence.Abort),
+                ("the player", _player.Abort),
+            },
+            isRunning: () => _player.IsPlaying || _runner.IsRunning,
+            log: Diagnostics.DiagLog.Write).ConfigureAwait(false);
         // Belt-and-suspenders: a graceful app exit may race the runner's own
         // Stopped event (background task hasn't ticked yet) — dispose the claim
         // directly too so a clean quit doesn't wait out the TTL for no reason.
@@ -748,15 +818,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private void OnHostLost()
     {
         Log("Host RoRoRo connection lost — aborting playback and exiting plugin.");
-        try { _bridgeCts.Cancel(); } catch { }
-        try { _runner.Abort(); } catch { }
-        try { _sequence.Abort(); } catch { }
-        try { _player.Abort(); } catch { }
+        // These aborts are what stops input once the host is gone, so one that fails leaves a
+        // line in the diagnostics log instead of vanishing.
+        try { _bridgeCts.Cancel(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the bridge: {ex.Message}"); }
+        try { _runner.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the keep-alive loop: {ex.Message}"); }
+        try { _sequence.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the sequence: {ex.Message}"); }
+        try { _player.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the player: {ex.Message}"); }
         // The recipe runner has its own token — aborting the sub-runners above only
         // cancels THEIR internal tokens, not the recipe's. Without this, RecipeRunner
         // never observes cancellation and starts a fresh terminal loop against
         // orphaned PIDs after the host is gone.
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        try { _activeRecipeRunner?.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the routine: {ex.Message}"); }
 
         // Marshal to UI thread for the WPF shutdown. If we can't reach the
         // dispatcher (rare race), fall back to a hard exit so we don't linger.
@@ -786,6 +858,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // Keep-alive and recording never run together: the recorder would capture its Spaces.
+                if (RecordingPause.RefusesLoopStart(_recorder.IsRecording, _runner.IsRunning)) { Log(RecordingPause.RefusedLine); break; }
                 // Break-glass: the user has the wheel. An agent's Ctrl+Shift+P (a script re-arming
                 // keep-alive) is indistinguishable from theirs, so it waits for their F11 like everything else.
                 if (_breakglass.IsOn)
@@ -866,7 +940,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Abort:
-                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
+                // Bridge playbacks first, as break-glass does: a repeat loops on after an aborted
+                // pass unless its own token is cancelled. No StopMacro here, which would write a
+                // second abort line naming a bridge caller; the line below names the key.
+                bool aborted = ((_bridgeInvoker?.StopAllForUserAbort() ?? 0) > 0)
+                    | _runner.Abort() | _sequence.Abort() | _player.Abort()
                     | (_activeRecipeRunner?.Abort() ?? false);
                 Log(Hotkeys.AbortLog.Line(aborted, source ?? "unknown source"));
                 break;
@@ -892,7 +970,12 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 {
                     Log(Hotkeys.Breakglass.OffLine(restoreKeepAlive));
                     StopHold();
-                    if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
+                    // Mid-recording the loop may not start, and the Play guard would refuse this restore
+                    // with nothing left to bring keep-alive back. The recording takes it and restarts
+                    // the loop when it stops.
+                    if (restoreKeepAlive && _recordingPause.TakeRestore())
+                        Log("Keep-alive comes back when you stop recording.");
+                    else if (restoreKeepAlive) OnHotkey(HotkeyKind.Play);
                 }
                 break;
             }
@@ -932,7 +1015,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     private void RefreshAbortKey()
     {
-        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false))
+        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false)
+            || (_bridgeInvoker?.ActivePlaybackCount ?? 0) > 0)
             _hotkeys.EnableAbortKey();
         else
             _hotkeys.DisableAbortKey();
@@ -946,6 +1030,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log("Record refused — foreground window isn't a RoRoRo-managed Roblox process. (Switch to multi-window mode to record anyway.)");
             return;
         }
+        PauseKeepAliveForRecording();
         try
         {
             // Esc is always filtered (so Esc during record doesn't bake into the macro).
@@ -956,11 +1041,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var anchorHwnd = CurrentRecordMode == RecordMode.PerWindow && account is not null
                 ? _metrics.HwndForPid(account.Pid)
                 : IntPtr.Zero;
+            // The keyboard hook hears every key on the machine. Per-window recordings keep only the
+            // ones pressed while the bound account is in front; multi-window mode keeps them all.
+            var boundPid = CurrentRecordMode == RecordMode.PerWindow && account is not null ? account.Pid : 0;
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes,
                 ignoreMouseEvents: RecordKeyboardOnly,
-                clientAnchorHwnd: anchorHwnd);
+                clientAnchorHwnd: anchorHwnd,
+                boundProcessId: boundPid);
+            if (boundPid != 0)
+                (_recordingExitWatch ??= new RecordingExitWatch(Accounts, OnRecordingAccountClosed)).Watch(boundPid);
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
@@ -979,19 +1070,125 @@ internal sealed class PluginRuntime : IAsyncDisposable
         catch (Exception ex)
         {
             Log($"Record failed to start: {ex.Message}");
+            ResumeKeepAliveAfterRecording();
+        }
+    }
+
+    // ---------- Keep-alive pauses while recording ----------
+
+    /// <summary>A recording is about to start: a running assignment loop stops first and is remembered,
+    /// so its Spaces are not recorded and a turbo sweep cannot swallow the user's keys. Break-glass
+    /// does the same thing for the same loop.</summary>
+    private void PauseKeepAliveForRecording()
+    {
+        if (!_recordingWatchesLoop)
+        {
+            _recordingWatchesLoop = true;
+            _runner.Progress += (_, p) =>
+            {
+                if (p.Phase == AssignmentPhase.Started) _recordingPause.LoopStartedMeanwhile();
+            };
+        }
+
+        // Read before the stop: the schedule goes with the loop. Active accounts count too. Their macros
+        // stop with the loop, so they sit as idle as the keep-alive ones while the recording runs.
+        IReadOnlyCollection<long> served = _runner.KeepAliveUserIds.Concat(_runner.ActiveUserIds).ToHashSet();
+        if (!_recordingPause.Begin(_runner.IsRunning)) return;
+
+        _runner.Abort();
+        // Wait for it to be really gone before the hooks go in. A short, bounded wait on the caller's
+        // thread; if it runs out the recording starts anyway and the log says the loop was slow.
+        if (!SpinWait.SpinUntil(() => !_runner.IsRunning, LoopStopWaitMs))
+            Diagnostics.DiagLog.Write($"recording: the assignment loop was still stopping after {LoopStopWaitMs} ms");
+        Log(RecordingPause.PausedLine);
+        StartRecordingHold(served);
+    }
+
+    /// <summary>The recording ended (saved, empty, failed, or its account closed): the loop comes back
+    /// if this recording paused it, nobody started one since, and break-glass is not on.</summary>
+    private void ResumeKeepAliveAfterRecording()
+    {
+        StopRecordingHold();
+        var breakglassOn = _breakglass.IsOn;
+        var wasPaused = _recordingPause.IsPaused;
+        if (!_recordingPause.End(breakglassOn))
+        {
+            // Break-glass took no note of a loop this recording had already stopped, so say how to get it back.
+            if (wasPaused && breakglassOn)
+                Log("Keep-alive stays off because break-glass is on. Press Ctrl+Shift+P after you hand back to turn it on.");
+            return;
+        }
+        // A routine that is still positioning starts its own loop, and with no accounts there is nothing to keep alive.
+        if (_activeRecipeRunner is { IsRunning: true } || Accounts.Snapshot().Count == 0) return;
+        // Ctrl+Shift+P is a toggle: pressed while the stopped loop is still unwinding (a recording of a
+        // few ms), it would stop that loop rather than start a new one.
+        if (!SpinWait.SpinUntil(() => !_runner.IsRunning, LoopStopWaitMs))
+        {
+            Log("Keep-alive didn't restart after your recording. Press Ctrl+Shift+P to turn it on.");
+            return;
+        }
+        Log(RecordingPause.ResumedLine);
+        OnHotkey(HotkeyKind.Play);
+    }
+
+    /// <summary>The recording-pause twin of <see cref="StartHold"/>: same timer shape, narrower audience.</summary>
+    private void StartRecordingHold(IReadOnlyCollection<long> served)
+    {
+        lock (_recordingHoldLock)
+        {
+            _recordingHoldTimer?.Dispose();
+            var hold = _recordingHold ??= new RecordingHold(Ledger, Log, () => Ledger.NowMs,
+                userId => Accounts.Snapshot().Any(a => a.RobloxUserId == userId));
+            _recordingHoldTimer = new System.Threading.Timer(_ =>
+            {
+                try { hold.Tick(); } catch (Exception ex) { Log($"recording hold: {ex.Message}"); }
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
+            hold.Begin(served);
+        }
+    }
+
+    private void StopRecordingHold()
+    {
+        lock (_recordingHoldLock)
+        {
+            _recordingHoldTimer?.Dispose();
+            _recordingHoldTimer = null;
+            _recordingHold?.End();
+        }
+    }
+
+    /// <summary>The account a per-window recording is bound to has closed: nothing more can belong to
+    /// the recording, so it stops and what was captured is saved. Runs on the host event thread.</summary>
+    private void OnRecordingAccountClosed(AccountRegistry.AccountInfo info)
+    {
+        try
+        {
+            if (!_recorder.IsRecording) return;
+            Log($"{info.DisplayName} closed, so your recording stopped. Anything recorded up to then is saved.");
+            StopAndSaveRecording();
+        }
+        catch (Exception ex)
+        {
+            Log($"Stopping the recording after {info.DisplayName} closed failed: {ex.Message}");
         }
     }
 
     private void StopAndSaveRecording()
     {
+        _recordingExitWatch?.Clear();
         // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
-        var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
+        var captured = _recorder.Stop();
+        // Read before the trim: the chord's keys go, the moment it was pressed is when the recording ended.
+        var endedAtMs = MacroRecorder.RecordingEndMs(captured, _recorder.StoppedAtMs);
+        var events = MacroRecorder.TrimHotkeyKeys(captured);
         var bound = _recordingBoundAccount;
         var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;
         _recordingAnchorHwnd = IntPtr.Zero;
         // _recordingClientSize is read below for the macro fields; clear after construction.
         State = PluginState.Idle;
+        // Before the save and the rename prompt, which can sit open: accounts should not wait on a dialog.
+        ResumeKeepAliveAfterRecording();
 
         if (events.Count == 0) { Log("Stop — 0 events captured."); return; }
 
@@ -1046,7 +1243,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // cost a recording: on failure the v3 file stays, and the log says why.
             try
             {
-                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
+                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null, endedAtMs);
                 if (!ReferenceEquals(converted, macro))
                 {
                     Store.Save(converted);

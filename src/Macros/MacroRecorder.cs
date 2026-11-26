@@ -54,6 +54,8 @@ public sealed class MacroRecorder
     private HashSet<int>? _chordIgnoredVkCodes;
     private bool _ignoreMouseEvents;
     private IntPtr _clientAnchorHwnd = IntPtr.Zero;
+    private uint _boundProcessId;
+    private PerWindowKeyFilter? _keyFilter;
     private long _lastMouseMoveMs;
     private Thread? _hookThread;
     private uint _hookThreadId;
@@ -66,6 +68,10 @@ public sealed class MacroRecorder
 
     /// <summary>True between <see cref="Start"/> and <see cref="Stop"/>.</summary>
     public bool IsRecording => _events is not null;
+
+    /// <summary>The recording clock's reading when <see cref="Stop"/> last ended a recording: when the
+    /// stop chord (or button) landed, on the same clock as the event timestamps.</summary>
+    public long StoppedAtMs { get; private set; }
 
     /// <summary>
     /// Begin recording. Blocks until the hooks are installed (or installation
@@ -90,12 +96,19 @@ public sealed class MacroRecorder
     /// <paramref name="clientAnchorHwnd"/> — when set, mouse coordinates are
     /// recorded relative to this window's client area (v3 client-space macros);
     /// when default, absolute screen pixels (legacy/AllWindows).
+    ///
+    /// <paramref name="boundProcessId"/> — when set (per-window recordings), a key
+    /// press is recorded only while a window of this process is in front; see
+    /// <see cref="PerWindowKeyFilter"/>. The keyboard hook is machine-wide, so
+    /// without it a password typed into a browser mid-recording lands in the
+    /// macro. Zero (multi-window mode) records every key, as before.
     /// </summary>
     public void Start(
         IReadOnlyCollection<int>? alwaysIgnore = null,
         IReadOnlyCollection<int>? chordIgnore = null,
         bool ignoreMouseEvents = true,
-        IntPtr clientAnchorHwnd = default)
+        IntPtr clientAnchorHwnd = default,
+        int boundProcessId = 0)
     {
         lock (_lock)
         {
@@ -111,6 +124,8 @@ public sealed class MacroRecorder
                 : null;
             _ignoreMouseEvents = ignoreMouseEvents;
             _clientAnchorHwnd = clientAnchorHwnd;
+            _boundProcessId = boundProcessId > 0 ? (uint)boundProcessId : 0;
+            _keyFilter = _boundProcessId != 0 ? new PerWindowKeyFilter() : null;
             _lastMouseMoveMs = -MouseMoveMinIntervalMs; // ensure the first move always records
             _readySignal = new ManualResetEventSlim(false);
             _installError = null;
@@ -148,6 +163,7 @@ public sealed class MacroRecorder
             if (!IsRecording) return Array.Empty<MacroEvent>();
             thread = _hookThread;
             captured = _events;
+            StoppedAtMs = _clock?.ElapsedMilliseconds ?? 0;
             threadId = _hookThreadId;
             _events = null;
             _clock = null;
@@ -235,6 +251,11 @@ public sealed class MacroRecorder
                     WM_KEYUP or WM_SYSKEYUP => MacroEventKind.KeyUp,
                     _ => null,
                 };
+                // Per-window: only what was typed into the bound account. The foreground test is two
+                // lock-free user32 reads, and only a press needs it.
+                if (kind is not null && _keyFilter is { } filter
+                    && !filter.Keep(kind.Value, vkCode, kind == MacroEventKind.KeyDown && IsBoundProcessInFront()))
+                    kind = null;
                 if (kind is not null)
                 {
                     _events.Add(new MacroEvent(
@@ -342,6 +363,24 @@ public sealed class MacroRecorder
         return kept;
     }
 
+    private bool IsBoundProcessInFront()
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        _ = GetWindowThreadProcessId(hwnd, out var pid);
+        return pid == _boundProcessId;
+    }
+
+    /// <summary>
+    /// When a recording ended, on its own clock. A recording ends when the stop chord is pressed, not
+    /// at the last real key: "press E, wait 30 s, stop" is E and then 30 s (owner ruling, 0.13.1).
+    /// <see cref="TrimHotkeyKeys"/> drops the chord's keys, so this must be read from the untrimmed
+    /// list. The recorder's own stop time is the truth; the last captured event (the chord's Ctrl
+    /// or Shift press) stands in for it when that time is missing. Pure: the test seam.
+    /// </summary>
+    internal static long RecordingEndMs(IReadOnlyList<MacroEvent> captured, long stoppedAtMs)
+        => Math.Max(stoppedAtMs, captured.Count == 0 ? 0 : captured[^1].TimestampMs);
+
     private (int X, int Y)? ResolveClientOrigin()
     {
         if (_clientAnchorHwnd == IntPtr.Zero) return null;
@@ -418,6 +457,12 @@ public sealed class MacroRecorder
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
     private const int VK_CONTROL = 0x11;
     private const int VK_SHIFT = 0x10;

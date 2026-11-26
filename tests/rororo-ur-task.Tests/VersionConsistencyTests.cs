@@ -50,4 +50,24 @@ public class VersionConsistencyTests
         var raw = doc.RootElement.GetProperty("minHostVersion").GetString();
         Assert.True(Version.TryParse(raw, out _), $"minHostVersion '{raw}' is not a parseable version.");
     }
+
+    /// <summary>
+    /// The manifest's entrypoint and the csproj's AssemblyName name the same file from two places.
+    /// RoRoRo refuses an install when the entrypoint is missing from the zip, so renaming the
+    /// assembly without the manifest (or the reverse) builds, passes every other test, and then
+    /// fails in the install dialog of everyone who updates.
+    /// </summary>
+    [Fact]
+    public void ManifestEntrypoint_IsTheBuiltExecutable()
+    {
+        var manifestPath = Path.Combine(AppContext.BaseDirectory, "manifest.json");
+        Assert.True(File.Exists(manifestPath),
+            $"manifest.json was not copied next to the test binary (looked in {AppContext.BaseDirectory}).");
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        var entrypoint = doc.RootElement.GetProperty("entrypoint").GetString();
+
+        var asm = typeof(Labs626.UrTask.Theming.HostThemeReader).Assembly;
+        Assert.Equal(asm.GetName().Name + ".exe", entrypoint);
+    }
 }
