@@ -2,18 +2,130 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.13.1 — unreleased
+
+A fix release from a full read of 0.13.0. No new features. The stop keys stop more, keep-alive can
+no longer go quiet without saying so, and one bad file can no longer take Ur Task down.
 
 ### Changed
 
-- Built against plugin contract 0.14.0 (was 0.8.0). Nothing new is called yet, so Ur Task still
-  runs on RoRoRo 1.19 and later.
+These are the ones you will notice.
+
+- **Recording pauses keep-alive.** Press record while keep-alive is on and it pauses. Stop
+  recording and it comes back by itself. Ur Task used to record its own keep-alive Spaces into
+  your macro, and with Turbo on it could swallow keys you pressed. If an account gets close to
+  its idle limit while you record, the activity list names it and the time. Ctrl+Shift+P during a
+  recording is refused with a line that says to stop recording first.
+- **A per-window recording keeps only the keys you type into that game window.** It used to keep
+  every key pressed anywhere on the PC until you stopped, including what you typed in other apps.
+  To record across windows, tick "Record across all windows". A per-window recording also stops
+  and saves if its account closes.
+- **A click is refused when another window covers the spot.** If Ur Task's own compact window, a
+  notification or another always-on-top tool sits over the place a macro clicks, the macro stops
+  and names the account. It used to click the window on top. Colour checks stop the same way,
+  where they used to read the covering window's pixels.
+- **A macro that presses the Windows key, Sleep, or a browser or app-launch key is not imported
+  and not played.** Windows acts on those keys even while Roblox is in front. The macro stays in
+  your library so you can see it and delete it.
+- **Import has limits:** 20 MB per file, 500 macros per file, and 200,000 events or 5,000 steps
+  per macro. A file over a limit is refused with a line that says which.
+- **A macro file with a missing, malformed or duplicate id is a load failure, not a macro.** It
+  shows as one line in the activity list at startup. Import the file to give it a fresh id.
+- **Rows say "stopped" when keep-alive is not running**, and the tray tooltip says whether
+  keep-alive is on. Rows used to keep counting down to a Space that was not coming.
+- **Esc is held for the whole of a macro that another plugin or an agent started**, including
+  the pauses between its passes, so Esc always stops it.
 
 ### Fixed
 
-- The host integration test compiles again. RoRoRo added a launch target (one named server) and
-  the test stand-in had not followed.
-- The test workflow now also runs every day, so a host change is caught without a commit here.
+**Stop keys and hotkeys**
+
+- Esc and Ctrl+Shift+F12 stop a repeating macro started by another plugin or an agent. They used
+  to stop one pass, and the next began half a second later.
+- A repeating macro whose game window is gone stops and says so. It used to retry with no pause,
+  pinning a CPU core and overwriting the log.
+- Holding Ctrl+Shift+P, Ctrl+Shift+R or Ctrl+Shift+F11 a moment too long no longer flips it back
+  off.
+- Double-clicking PLAY ASSIGNMENTS no longer starts the loop and stops it again.
+- If another program is using one of Ur Task's hotkeys, the others still work, your macros still
+  load and Ur Task still connects to RoRoRo. The activity list names the hotkey. It used to start
+  with no macros, no hotkeys and "Not connected".
+- Quitting Ur Task in the middle of a macro lets go of held keys and mouse buttons.
+
+**Keep-alive**
+
+- An account that launches while keep-alive is starting is served. It could wedge the loop so
+  that no account got a Space, while the window said running.
+- One account that keeps failing no longer stops the others being served.
+- Keep-alive looks again every 5 seconds, so an account you switch back on, or one that rejoins,
+  is served on time. It used to sleep until the next account it already knew about was due.
+- An account's idle limit follows its game once RoRoRo names it. Accounts launched after Ur Task
+  connected used to stay on the unknown-game limit of 18 minutes. Pet Simulator 99 is 15.
+- A macro that hits an error is reported as refused, gives up its turn, and raises the usual
+  warning after three in a row. It used to be retried every 31 seconds as a "keep-alive" failure
+  while the other accounts' macros never played.
+- Break-glass released during a recording brings keep-alive back when you stop recording.
+
+**Files**
+
+- A macro name with non-English digits, such as １ or ١, no longer crashes Ur Task on every
+  start.
+- A failed save keeps the old macro. A save used to delete the old file first.
+- Rename and "Allow in all games" change the macro as it is on disk now, so they no longer undo
+  what another tool changed since Ur Task loaded it.
+- Two macro files with the same id no longer crash a routine run.
+
+**Playback**
+
+- Macros with only keys, waits and pastes no longer need a recorded window size, are no longer
+  refused at a different display scale, and no longer resize your window.
+- A recording that includes mouse clicks keeps the wait between your last input and the stop.
+  Keyboard-only recordings still end at the last key: carrying that wait needs a change to the
+  macro file format, which comes in 0.14.0.
+
+**RoRoRo connection**
+
+- Declining "account launched" or "account exited" at install no longer makes Ur Task quit and
+  blame RoRoRo. It asks RoRoRo for the account list every 30 seconds.
+- If RoRoRo's account events end while Ur Task is running, Ur Task writes why to the log and
+  exits. It used to run on with an account list that could no longer change.
+
+**Window**
+
+- The routine RUN button shows STOP while a routine runs.
+- PLAY ASSIGNMENTS enables as soon as an account appears.
+- "Export as AutoHotkey" is reachable again, as two menu items, and "Allow in all games" shows a
+  tick.
+- The note under a mouse recording no longer tells you to STACK your windows.
+
+### For other plugins and agents
+
+The action bridge. No request or response shape changed, and no reason code changed meaning.
+
+- A client that connects and sends nothing is dropped after 2 seconds. It used to block every
+  other caller, StopMacro included.
+- StopMacro for a playback that is not running stops nothing. It used to stop whatever was
+  running and answer `stopped: 0`.
+- RunMacro refuses `interAltDelayMs` outside 0 to 60000 (`-1` used to hang the bridge) and a
+  blank `macroId`. A malformed RunMacro sent while something is playing answers `refused`, where
+  it used to answer `busy`.
+- A repeat whose every target's game window is gone ends as `failed` with reason `refused`, and
+  the detail names the accounts. Any other pass that completes nothing waits 1 second before the
+  next, doubling to 30.
+- Bridge errors reach `ur-task.log`. They used to go nowhere in a release build.
+
+### Under the hood
+
+- Built against plugin contract 0.14.0 (was 0.8.0). Nothing new is called, so Ur Task still runs
+  on RoRoRo 1.19 and later.
+- A release checks its tag against `manifest.json` and runs both test suites, the one against the
+  real host included, before it builds anything.
+- The test workflow also runs every day, so a host change is caught without a commit here.
+- The test that failed about two runs in three is fixed at its cause: a test constructor that
+  wrote into another test's log.
+- README, FEATURES and the keystone no longer claim what the code does not do: the minimum
+  RoRoRo version is 1.19, there is no consent opt-out, and a missing "exiting cleanly" line is
+  normal when RoRoRo closes Ur Task.
 
 ## 0.13.0 — 2026-10-25
 
