@@ -2,7 +2,7 @@
 
 All notable changes to RoRoRo Ur Task are documented here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## 0.13.1 — unreleased
+## 0.13.1 — 2026-11-26
 
 A fix release from a full read of 0.13.0. No new features. The stop keys stop more, keep-alive can
 no longer go quiet without saying so, and one bad file can no longer take Ur Task down.
