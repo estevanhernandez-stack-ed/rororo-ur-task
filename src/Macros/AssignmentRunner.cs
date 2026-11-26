@@ -1477,7 +1477,20 @@ internal sealed class AssignmentRunner
             {
                 try
                 {
-                    var playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                    PlaybackResult playResult;
+                    try
+                    {
+                        playResult = await _player.PlayAsync(asn.Macro, asn.Alt.RobloxUserId, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        // A macro that throws is a macro that did not play: the branch a refusal takes, with
+                        // the message as the reason, so the streak counts, the user is told, the 30 s back-off
+                        // applies and the next Active gets its turn. It used to escape to the loop's catch,
+                        // which wrote a "keep-alive" line to the file log only and retried the same account
+                        // every 31 s. Only a real cancellation stays silent (the catch below).
+                        playResult = PlaybackResult.Refused($"The macro hit an error and stopped ({ex.Message}).");
+                    }
                     // Preflight refusals (e.g. client-space resize failed) and
                     // mid-playback aborts (e.g. foreground shifted) return before the
                     // player's Started/Ended events fire — without this, they vanish
