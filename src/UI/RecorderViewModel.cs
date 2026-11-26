@@ -217,9 +217,19 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         };
         _runtime.MacrosChanged += () =>
         {
-            _allMacros = _runtime.Store.LoadAll().Macros;
-            ReloadArchived();
-            RefreshMacroList();
+            // This runs on the UI thread, at startup and after every library change. An
+            // exception here used to end the app, and at startup it ended every start. One
+            // macro the list can't draw is not worth that: say so and keep running.
+            try
+            {
+                _allMacros = _runtime.Store.LoadAll().Macros;
+                ReloadArchived();
+                RefreshMacroList();
+            }
+            catch (Exception ex)
+            {
+                LogStatus($"Couldn't refresh your macro list: {ex.Message}");
+            }
         };
         _runtime.CurrentlyPlayingMacroChanged += _ =>
         {
