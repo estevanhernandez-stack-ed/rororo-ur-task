@@ -100,6 +100,31 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_ReturnsOnlyOnceTheListenerCanTakeMessages()
+    {
+        // EnableAbortKey and Dispose reach the pump thread with PostThreadMessage, which fails
+        // (and the message is lost) while that thread has no message queue yet. The real
+        // RegisterHotKey happened to create one; a registration that touches no window API did
+        // not, so an enable right after Start was dropped and a Dispose right after Start
+        // joined a thread that never saw its quit message, forever.
+        var cycles = Task.Run(() =>
+        {
+            for (int i = 0; i < 300; i++)
+            {
+                var keys = new FakeHotkeys();
+                using var svc = keys.NewService();
+                svc.Start();
+                svc.EnableAbortKey();
+                if (!SpinWait.SpinUntil(() => keys.Held.Contains(BareEsc), 2000)) return i;
+            }
+            return -1;
+        });
+
+        Assert.True(cycles.Wait(TimeSpan.FromSeconds(60)), "a Dispose right after Start never returned");
+        Assert.Equal(-1, cycles.Result); // the cycle whose enable was lost, or -1 for none
+    }
+
+    [Fact]
     public void Dispose_UnregistersOnlyWhatRegistered()
     {
         var keys = new FakeHotkeys();

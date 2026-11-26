@@ -29,6 +29,7 @@ internal sealed class HotkeyService : IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
     private const int WM_QUIT = 0x0012;
+    private const uint PM_NOREMOVE = 0x0000;
     // Custom thread messages to toggle the on-demand bare-Esc abort hotkey.
     // RegisterHotKey is thread-affine (the hotkey binds to the calling thread's
     // queue), so callers post these and the pump thread does the (un)registration.
@@ -212,6 +213,13 @@ internal sealed class HotkeyService : IDisposable
         bool abortKeyFailureReported = false;
         try
         {
+            // Make this thread's message queue exist before Start is told the service is ready.
+            // PostThreadMessage fails, and the message is lost, while the target thread has no
+            // queue: an enable right after Start was dropped, and a Dispose right after Start
+            // joined a thread that never saw its quit message. Windows creates the queue on the
+            // thread's first window call, which RegisterHotKey used to be by accident.
+            PeekMessage(out _, IntPtr.Zero, 0, 0, PM_NOREMOVE);
+
             // Each chord registers on its own. One failure used to throw, and the finally then
             // unregistered the chords that had succeeded: one key held by another program cost
             // every hotkey, the abort chord included.
@@ -328,6 +336,10 @@ internal sealed class HotkeyService : IDisposable
 
     [DllImport("user32.dll")]
     private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
