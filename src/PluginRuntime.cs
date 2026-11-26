@@ -674,10 +674,29 @@ internal sealed class PluginRuntime : IAsyncDisposable
         // Esc stays registered for the whole of a bridge playback, the waits between a repeat's
         // passes included: no sequence is running then, and a press would go to the game.
         if (_bridgeInvoker is { } bridge) bridge.ActivePlaybacksChanged += RefreshAbortKey;
+
+        // Hotkeys get their own try: a key another program holds used to throw out of the one
+        // big try below, which also skipped loading the macro library and connecting to RoRoRo.
+        // The window showed "Not connected", zero macros and no hotkeys at all.
         try
         {
+            _hotkeys.AbortKeyFailed += failure => Log(failure.AbortKeyLine(
+                abortChordWorks: !_hotkeys.Failures.Any(f => f.Key == "Ctrl+Shift+F12")));
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            var failed = _hotkeys.Failures;
+            if (failed.Count == 0)
+                Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            else
+                foreach (var failure in failed)
+                    Log(failure.StartupLine(othersWork: failed.Count < Hotkeys.HotkeyService.ChordHotkeyVkCodes.Count));
+        }
+        catch (Exception ex)
+        {
+            Log($"Hotkeys aren't working: {ex.Message} Use the buttons in the Ur Task window.");
+        }
+
+        try
+        {
             if (_breakglass.IsOn)
             {
                 Log(Hotkeys.Breakglass.StillOnAtStartLine);

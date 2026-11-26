@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace Labs626.UrTask.Hotkeys;
@@ -67,6 +68,42 @@ internal sealed class HotkeyService : IDisposable
     private const int ID_RUN_ROUTINE = 5;  // Ctrl+Shift+L — run the selected recipe/loadout routine
     private const int ID_BREAKGLASS = 6;   // Ctrl+Shift+F11 — toggle break-glass (the user has the wheel)
 
+    // The chords registered for the plugin's lifetime, in the order they are registered.
+    private static readonly (int Id, int Vk)[] Chords =
+    {
+        (ID_RECORD_TOGGLE, VK_R), (ID_PLAY, VK_P), (ID_ABORT_CHORD, VK_F12), (ID_RUN_ROUTINE, VK_L), (ID_BREAKGLASS, VK_F11),
+    };
+
+    // The seam over RegisterHotKey / UnregisterHotKey: register returns 0 or the Win32 error.
+    // Tests inject a fake, so none of them touches a real system-wide hotkey.
+    private readonly Func<int, uint, uint, int> _register;
+    private readonly Action<int> _unregister;
+
+    public HotkeyService() : this(RegisterReal, UnregisterReal) { }
+
+    internal HotkeyService(Func<int, uint, uint, int> register, Action<int> unregister)
+    {
+        _register = register ?? throw new ArgumentNullException(nameof(register));
+        _unregister = unregister ?? throw new ArgumentNullException(nameof(unregister));
+    }
+
+    private static int RegisterReal(int id, uint modifiers, uint vk)
+    {
+        if (RegisterHotKey(IntPtr.Zero, id, modifiers, vk)) return 0;
+        var error = Marshal.GetLastWin32Error();
+        return error != 0 ? error : -1;
+    }
+
+    private static void UnregisterReal(int id) => UnregisterHotKey(IntPtr.Zero, id);
+
+    /// <summary>The hotkeys that could not be registered at <see cref="Start"/>. Empty until then.
+    /// One chord another program holds no longer costs the rest: each registers on its own.</summary>
+    public IReadOnlyList<HotkeyFailure> Failures { get; private set; } = Array.Empty<HotkeyFailure>();
+
+    /// <summary>Bare Esc could not be registered when playback asked for it. Raised on the pump
+    /// thread, once per playback that asked, however many times it asked.</summary>
+    public event Action<HotkeyFailure>? AbortKeyFailed;
+
     private readonly object _lock = new();
     private Thread? _thread;
     private uint _threadId;
@@ -116,8 +153,10 @@ internal sealed class HotkeyService : IDisposable
             _thread.Start();
         }
         _readySignal!.Wait();
+        // A chord that would not register is in Failures, not thrown: this is only the pump
+        // thread itself failing to start.
         if (_startError is not null)
-            throw new InvalidOperationException("Failed to register hotkeys.", _startError);
+            throw new InvalidOperationException("Failed to start the hotkey listener.", _startError);
     }
 
     public void Dispose()
@@ -168,34 +207,28 @@ internal sealed class HotkeyService : IDisposable
         _threadId = GetCurrentThreadId();
         var registered = new List<int>();
         bool abortKeyRegistered = false;
+        // One report per playback that asked for Esc: it asks many times (the sequence, the
+        // player, every refresh), and each of those retries the registration.
+        bool abortKeyFailureReported = false;
         try
         {
-            const uint chord = ChordModifiers;
-
-            if (!RegisterHotKey(IntPtr.Zero, ID_RECORD_TOGGLE, chord, VK_R))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+R) failed, win32 error {Marshal.GetLastWin32Error()}");
-            registered.Add(ID_RECORD_TOGGLE);
-
-            if (!RegisterHotKey(IntPtr.Zero, ID_PLAY, chord, VK_P))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+P) failed, win32 error {Marshal.GetLastWin32Error()}");
-            registered.Add(ID_PLAY);
-
+            // Each chord registers on its own. One failure used to throw, and the finally then
+            // unregistered the chords that had succeeded: one key held by another program cost
+            // every hotkey, the abort chord included.
+            //
             // Abort is a chord (Ctrl+Shift+F12) so it never hijacks a bare key.
             // Bare Esc is ALSO an abort key, but registered on demand only while a
             // macro plays (see EnableAbortKey/WM_ENABLE_ABORT). v0.3.0 and earlier
             // registered bare Esc here for the whole session, which swallowed Esc
             // system-wide for every app whenever the plugin was running.
-            if (!RegisterHotKey(IntPtr.Zero, ID_ABORT_CHORD, chord, VK_F12))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+F12) failed, win32 error {Marshal.GetLastWin32Error()}");
-            registered.Add(ID_ABORT_CHORD);
-
-            if (!RegisterHotKey(IntPtr.Zero, ID_RUN_ROUTINE, chord, VK_L))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+L) failed, win32 error {Marshal.GetLastWin32Error()}");
-            registered.Add(ID_RUN_ROUTINE);
-
-            if (!RegisterHotKey(IntPtr.Zero, ID_BREAKGLASS, chord, VK_F11))
-                throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+F11) failed, win32 error {Marshal.GetLastWin32Error()}");
-            registered.Add(ID_BREAKGLASS);
+            var failures = new List<HotkeyFailure>();
+            foreach (var (id, vk) in Chords)
+            {
+                var error = _register(id, ChordModifiers, (uint)vk);
+                if (error == 0) registered.Add(id);
+                else failures.Add(new HotkeyFailure(KeyName(id), error));
+            }
+            Failures = failures;
 
             _running = true;
             _readySignal!.Set();
@@ -205,16 +238,27 @@ internal sealed class HotkeyService : IDisposable
                 if (msg.message == WM_ENABLE_ABORT)
                 {
                     if (!abortKeyRegistered)
-                        abortKeyRegistered = RegisterHotKey(IntPtr.Zero, ID_ABORT_BARE, AbortKeyModifiers, VK_ESCAPE);
+                    {
+                        var error = _register(ID_ABORT_BARE, AbortKeyModifiers, VK_ESCAPE);
+                        abortKeyRegistered = error == 0;
+                        if (abortKeyRegistered) abortKeyFailureReported = false;
+                        else if (!abortKeyFailureReported)
+                        {
+                            abortKeyFailureReported = true;
+                            try { AbortKeyFailed?.Invoke(new HotkeyFailure(KeyName(ID_ABORT_BARE), error)); }
+                            catch { /* swallow — handler exceptions shouldn't kill the pump */ }
+                        }
+                    }
                     continue;
                 }
                 if (msg.message == WM_DISABLE_ABORT)
                 {
                     if (abortKeyRegistered)
                     {
-                        UnregisterHotKey(IntPtr.Zero, ID_ABORT_BARE);
+                        _unregister(ID_ABORT_BARE);
                         abortKeyRegistered = false;
                     }
+                    abortKeyFailureReported = false; // the playback is over; the next one reports afresh
                     continue;
                 }
                 if (msg.message == WM_HOTKEY)
@@ -253,8 +297,8 @@ internal sealed class HotkeyService : IDisposable
         }
         finally
         {
-            if (abortKeyRegistered) UnregisterHotKey(IntPtr.Zero, ID_ABORT_BARE);
-            foreach (var id in registered) UnregisterHotKey(IntPtr.Zero, id);
+            if (abortKeyRegistered) _unregister(ID_ABORT_BARE);
+            foreach (var id in registered) _unregister(id);
         }
     }
 
@@ -301,3 +345,26 @@ internal sealed class HotkeyService : IDisposable
 }
 
 internal enum HotkeyKind { RecordToggle, Play, Abort, RunRoutine, Breakglass }
+
+/// <summary>A hotkey Windows would not register: the key as the log names it, and the Win32 error.</summary>
+internal sealed record HotkeyFailure(string Key, int Win32Error)
+{
+    private const int ERROR_HOTKEY_ALREADY_REGISTERED = 1409;
+
+    /// <summary>Why, in the user's words. 1409 is the one that happens: another program holds the key.</summary>
+    private string Why => Win32Error == ERROR_HOTKEY_ALREADY_REGISTERED
+        ? string.Create(CultureInfo.InvariantCulture, $"another program is using it (Windows error {Win32Error})")
+        : string.Create(CultureInfo.InvariantCulture, $"Windows refused it (Windows error {Win32Error})");
+
+    /// <summary>The activity line for a chord that did not register at startup.</summary>
+    /// <param name="othersWork">False when no hotkey registered at all.</param>
+    public string StartupLine(bool othersWork)
+        => $"Couldn't register {Key}: {Why}. "
+           + (othersWork ? "The other hotkeys still work." : "None of the hotkeys work, so use the buttons in the Ur Task window.");
+
+    /// <summary>The activity line when bare Esc could not be registered for a playback.</summary>
+    /// <param name="abortChordWorks">Whether Ctrl+Shift+F12 registered, so the line never names a dead key.</param>
+    public string AbortKeyLine(bool abortChordWorks)
+        => $"Esc can't stop this playback: {Why}. "
+           + (abortChordWorks ? "Press Ctrl+Shift+F12 to stop it." : "Use the stop button in the Ur Task window.");
+}
