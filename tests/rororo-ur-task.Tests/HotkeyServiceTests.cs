@@ -73,6 +73,20 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Every_hotkey_registers_with_no_repeat_so_a_held_chord_fires_once()
+    {
+        // Without MOD_NOREPEAT Windows posts WM_HOTKEY again on every typematic repeat. Record,
+        // play and break-glass are toggles, so a chord held half a second started, stopped and
+        // started again (L3-01).
+        const uint MOD_NOREPEAT = 0x4000;
+        Assert.Equal(MOD_NOREPEAT, HotkeyService.ChordModifiers & MOD_NOREPEAT);
+        Assert.Equal(MOD_NOREPEAT, HotkeyService.AbortKeyModifiers & MOD_NOREPEAT);
+        // Still Ctrl+Shift for the chords, and still a bare key for Esc.
+        Assert.Equal(0x0002u | 0x0004u, HotkeyService.ChordModifiers & ~MOD_NOREPEAT);
+        Assert.Equal(0u, HotkeyService.AbortKeyModifiers & ~MOD_NOREPEAT);
+    }
+
+    [Fact]
     public void EnableDisableAbortKey_BeforeStart_AreNoOps()
     {
         using var svc = new HotkeyService();

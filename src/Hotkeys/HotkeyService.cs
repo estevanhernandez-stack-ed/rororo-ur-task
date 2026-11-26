@@ -40,6 +40,16 @@ internal sealed class HotkeyService : IDisposable
     private const uint MOD_CONTROL = 0x0002;
     private const uint MOD_SHIFT   = 0x0004;
     private const uint MOD_WIN     = 0x0008;
+    // Without this Windows posts WM_HOTKEY again on every typematic repeat while the key is
+    // held. Record, play and break-glass are toggles: a chord held half a second started,
+    // stopped and started again.
+    private const uint MOD_NOREPEAT = 0x4000;
+
+    /// <summary>The modifier flags every chord hotkey registers with, and the flags bare Esc
+    /// registers with. Exposed so a test can hold them to MOD_NOREPEAT: RegisterHotKey itself
+    /// cannot be read back.</summary>
+    internal const uint ChordModifiers = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
+    internal const uint AbortKeyModifiers = MOD_NONE | MOD_NOREPEAT;
 
     // VK codes
     private const int VK_R = 0x52;
@@ -160,7 +170,7 @@ internal sealed class HotkeyService : IDisposable
         bool abortKeyRegistered = false;
         try
         {
-            const uint chord = MOD_CONTROL | MOD_SHIFT;
+            const uint chord = ChordModifiers;
 
             if (!RegisterHotKey(IntPtr.Zero, ID_RECORD_TOGGLE, chord, VK_R))
                 throw new InvalidOperationException($"RegisterHotKey(Ctrl+Shift+R) failed, win32 error {Marshal.GetLastWin32Error()}");
@@ -195,7 +205,7 @@ internal sealed class HotkeyService : IDisposable
                 if (msg.message == WM_ENABLE_ABORT)
                 {
                     if (!abortKeyRegistered)
-                        abortKeyRegistered = RegisterHotKey(IntPtr.Zero, ID_ABORT_BARE, MOD_NONE, VK_ESCAPE);
+                        abortKeyRegistered = RegisterHotKey(IntPtr.Zero, ID_ABORT_BARE, AbortKeyModifiers, VK_ESCAPE);
                     continue;
                 }
                 if (msg.message == WM_DISABLE_ABORT)

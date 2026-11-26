@@ -49,6 +49,47 @@ public class SweepKeyFilterTests
     }
 
     [Fact]
+    public void A_held_stop_chord_is_reported_once_per_press_not_on_every_auto_repeat()
+    {
+        // The hook sees a key-down for every typematic repeat. Break-glass is a toggle, so a held
+        // Ctrl+Shift+F11 flipped it on, off and on again (L3-01).
+        var f = new SweepKeyFilter(ctrlHeld: true, shiftHeld: true);
+
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F11, true, false, out var first));
+        Assert.Equal(HotkeyKind.Breakglass, first);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F11, true, false, out var repeat));   // auto-repeat: still dropped
+        Assert.Null(repeat);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F11, false, false, out _));
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F11, true, false, out var second));   // a new press
+        Assert.Equal(HotkeyKind.Breakglass, second);
+
+        Assert.True(f.OnKey(SweepKeyFilter.VK_ESCAPE, true, false, out var esc));
+        Assert.Equal(HotkeyKind.Abort, esc);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_ESCAPE, true, false, out var escRepeat));
+        Assert.Null(escRepeat);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F12, true, false, out var f12));
+        Assert.Equal(HotkeyKind.Abort, f12);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F12, true, false, out var f12Repeat));
+        Assert.Null(f12Repeat);
+    }
+
+    [Fact]
+    public void A_key_held_before_its_chord_still_reports_the_chord_once()
+    {
+        // F12 goes down alone (just a key), then Ctrl+Shift join while it repeats: that repeat is
+        // the first time the chord is down, so it is reported, once.
+        var f = new SweepKeyFilter();
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F12, true, false, out var alone));
+        Assert.Null(alone);
+        f.OnKey(LCtrl, true, false, out _);
+        f.OnKey(LShift, true, false, out _);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F12, true, false, out var chord));
+        Assert.Equal(HotkeyKind.Abort, chord);
+        Assert.True(f.OnKey(SweepKeyFilter.VK_F12, true, false, out var again));
+        Assert.Null(again);
+    }
+
+    [Fact]
     public void Clicks_and_the_wheel_are_dropped_and_injected_ones_pass()
     {
         var f = new SweepKeyFilter();
