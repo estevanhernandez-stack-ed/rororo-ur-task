@@ -59,6 +59,18 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private (int W, int H)? _recordingClientSize;
     private bool? _recordingMaximized;
     private int? _recordingDisplayScale;
+    // Built on first use, so its AccountRemoved subscription is made from the recording code.
+    private RecordingExitWatch? _recordingExitWatch;
+    // Recording pauses keep-alive and hands it back on stop (owner ruling, 0.13.1): RecordingPause decides,
+    // RecordingHold warns about the accounts left unserved meanwhile.
+    private readonly RecordingPause _recordingPause = new();
+    private RecordingHold? _recordingHold;
+    private System.Threading.Timer? _recordingHoldTimer;
+    private readonly object _recordingHoldLock = new();
+    private bool _recordingWatchesLoop;
+    /// <summary>How long a recording waits for the loop it stopped to finish unwinding. The loop is
+    /// usually asleep and gone in a few ms; a turbo sweep in mid-flight needs a little longer.</summary>
+    private const int LoopStopWaitMs = 1000;
     private readonly IDisplayScale _displayScale = new DisplayScale();
     private Macro? _lastMacro;
     private bool _sequenceActive;
@@ -789,6 +801,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Play:
+                // Keep-alive and recording never run together: the recorder would capture its Spaces.
+                if (RecordingPause.RefusesLoopStart(_recorder.IsRecording, _runner.IsRunning)) { Log(RecordingPause.RefusedLine); break; }
                 // Break-glass: the user has the wheel. An agent's Ctrl+Shift+P (a script re-arming
                 // keep-alive) is indistinguishable from theirs, so it waits for their F11 like everything else.
                 if (_breakglass.IsOn)
@@ -949,6 +963,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             Log("Record refused — foreground window isn't a RoRoRo-managed Roblox process. (Switch to multi-window mode to record anyway.)");
             return;
         }
+        PauseKeepAliveForRecording();
         try
         {
             // Esc is always filtered (so Esc during record doesn't bake into the macro).
@@ -959,11 +974,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var anchorHwnd = CurrentRecordMode == RecordMode.PerWindow && account is not null
                 ? _metrics.HwndForPid(account.Pid)
                 : IntPtr.Zero;
+            // The keyboard hook hears every key on the machine. Per-window recordings keep only the
+            // ones pressed while the bound account is in front; multi-window mode keeps them all.
+            var boundPid = CurrentRecordMode == RecordMode.PerWindow && account is not null ? account.Pid : 0;
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes,
                 ignoreMouseEvents: RecordKeyboardOnly,
-                clientAnchorHwnd: anchorHwnd);
+                clientAnchorHwnd: anchorHwnd,
+                boundProcessId: boundPid);
+            if (boundPid != 0)
+                (_recordingExitWatch ??= new RecordingExitWatch(Accounts, OnRecordingAccountClosed)).Watch(boundPid);
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
@@ -982,19 +1003,123 @@ internal sealed class PluginRuntime : IAsyncDisposable
         catch (Exception ex)
         {
             Log($"Record failed to start: {ex.Message}");
+            ResumeKeepAliveAfterRecording();
+        }
+    }
+
+    // ---------- Keep-alive pauses while recording ----------
+
+    /// <summary>A recording is about to start: a running assignment loop stops first and is remembered,
+    /// so its Spaces are not recorded and a turbo sweep cannot swallow the user's keys. Break-glass
+    /// does the same thing for the same loop.</summary>
+    private void PauseKeepAliveForRecording()
+    {
+        if (!_recordingWatchesLoop)
+        {
+            _recordingWatchesLoop = true;
+            _runner.Progress += (_, p) =>
+            {
+                if (p.Phase == AssignmentPhase.Started) _recordingPause.LoopStartedMeanwhile();
+            };
+        }
+
+        var served = _runner.KeepAliveUserIds;   // read before the stop: the schedule goes with the loop
+        if (!_recordingPause.Begin(_runner.IsRunning)) return;
+
+        _runner.Abort();
+        // Wait for it to be really gone before the hooks go in. A short, bounded wait on the caller's
+        // thread; if it runs out the recording starts anyway and the log says the loop was slow.
+        if (!SpinWait.SpinUntil(() => !_runner.IsRunning, LoopStopWaitMs))
+            Diagnostics.DiagLog.Write($"recording: the assignment loop was still stopping after {LoopStopWaitMs} ms");
+        Log(RecordingPause.PausedLine);
+        StartRecordingHold(served);
+    }
+
+    /// <summary>The recording ended (saved, empty, failed, or its account closed): the loop comes back
+    /// if this recording paused it, nobody started one since, and break-glass is not on.</summary>
+    private void ResumeKeepAliveAfterRecording()
+    {
+        StopRecordingHold();
+        var breakglassOn = _breakglass.IsOn;
+        var wasPaused = _recordingPause.IsPaused;
+        if (!_recordingPause.End(breakglassOn))
+        {
+            // Break-glass took no note of a loop this recording had already stopped, so say how to get it back.
+            if (wasPaused && breakglassOn)
+                Log("Keep-alive stays off because break-glass is on. Press Ctrl+Shift+P after you hand back to turn it on.");
+            return;
+        }
+        // A routine that is still positioning starts its own loop, and with no accounts there is nothing to keep alive.
+        if (_activeRecipeRunner is { IsRunning: true } || Accounts.Snapshot().Count == 0) return;
+        // Ctrl+Shift+P is a toggle: pressed while the stopped loop is still unwinding (a recording of a
+        // few ms), it would stop that loop rather than start a new one.
+        if (!SpinWait.SpinUntil(() => !_runner.IsRunning, LoopStopWaitMs))
+        {
+            Log("Keep-alive didn't restart after your recording. Press Ctrl+Shift+P to turn it on.");
+            return;
+        }
+        Log(RecordingPause.ResumedLine);
+        OnHotkey(HotkeyKind.Play);
+    }
+
+    /// <summary>The recording-pause twin of <see cref="StartHold"/>: same timer shape, narrower audience.</summary>
+    private void StartRecordingHold(IReadOnlyCollection<long> served)
+    {
+        lock (_recordingHoldLock)
+        {
+            _recordingHoldTimer?.Dispose();
+            var hold = _recordingHold ??= new RecordingHold(Ledger, Log, () => Ledger.NowMs,
+                userId => Accounts.Snapshot().Any(a => a.RobloxUserId == userId));
+            _recordingHoldTimer = new System.Threading.Timer(_ =>
+            {
+                try { hold.Tick(); } catch (Exception ex) { Log($"recording hold: {ex.Message}"); }
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
+            hold.Begin(served);
+        }
+    }
+
+    private void StopRecordingHold()
+    {
+        lock (_recordingHoldLock)
+        {
+            _recordingHoldTimer?.Dispose();
+            _recordingHoldTimer = null;
+            _recordingHold?.End();
+        }
+    }
+
+    /// <summary>The account a per-window recording is bound to has closed: nothing more can belong to
+    /// the recording, so it stops and what was captured is saved. Runs on the host event thread.</summary>
+    private void OnRecordingAccountClosed(AccountRegistry.AccountInfo info)
+    {
+        try
+        {
+            if (!_recorder.IsRecording) return;
+            Log($"{info.DisplayName} closed, so your recording stopped. Anything recorded up to then is saved.");
+            StopAndSaveRecording();
+        }
+        catch (Exception ex)
+        {
+            Log($"Stopping the recording after {info.DisplayName} closed failed: {ex.Message}");
         }
     }
 
     private void StopAndSaveRecording()
     {
+        _recordingExitWatch?.Clear();
         // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
-        var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
+        var captured = _recorder.Stop();
+        // Read before the trim: the chord's keys go, the moment it was pressed is when the recording ended.
+        var endedAtMs = MacroRecorder.RecordingEndMs(captured, _recorder.StoppedAtMs);
+        var events = MacroRecorder.TrimHotkeyKeys(captured);
         var bound = _recordingBoundAccount;
         var anchorHwnd = _recordingAnchorHwnd;
         _recordingBoundAccount = null;
         _recordingAnchorHwnd = IntPtr.Zero;
         // _recordingClientSize is read below for the macro fields; clear after construction.
         State = PluginState.Idle;
+        // Before the save and the rename prompt, which can sit open: accounts should not wait on a dialog.
+        ResumeKeepAliveAfterRecording();
 
         if (events.Count == 0) { Log("Stop — 0 events captured."); return; }
 
@@ -1049,7 +1174,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             // cost a recording: on failure the v3 file stays, and the log says why.
             try
             {
-                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null);
+                var converted = RecordingFinalizer.WithSteps(macro, isClientSpace ? _recordingDisplayScale : null, endedAtMs);
                 if (!ReferenceEquals(converted, macro))
                 {
                     Store.Save(converted);

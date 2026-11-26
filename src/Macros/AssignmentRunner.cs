@@ -252,6 +252,11 @@ internal sealed class AssignmentRunner
     public IReadOnlySet<long> ActiveUserIds
         => (_scheduled ?? []).Where(a => !a.IsKeepAlive).Select(a => a.Assignment.Alt.RobloxUserId).ToHashSet();
 
+    /// <summary>Accounts the running loop serves as keep-alive accounts. Empty when no loop runs. The same
+    /// snapshot read as <see cref="ActiveUserIds"/>.</summary>
+    public IReadOnlySet<long> KeepAliveUserIds
+        => (_scheduled ?? []).Where(a => a.IsKeepAlive).Select(a => a.Assignment.Alt.RobloxUserId).ToHashSet();
+
     /// <summary>
     /// An account that appeared while the loop runs joins it as keep-alive (Active needs a macro the
     /// running loop never had a chance to pair). Already scheduled: refreshes its window identity. Does

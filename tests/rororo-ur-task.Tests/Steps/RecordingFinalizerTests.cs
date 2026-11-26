@@ -46,4 +46,25 @@ public class RecordingFinalizerTests
         var twice = RecordingFinalizer.WithSteps(once, 100);
         Assert.Same(once.Steps, twice.Steps);
     }
+
+    [Fact]
+    public void A_point_macro_keeps_the_wait_between_its_last_input_and_the_stop()
+    {
+        // L3-13: the recording ended 10 s after the click was let go.
+        var m = RecordingFinalizer.WithSteps(Rec(Macro.CoordSpaceClient, Down, Up), 100, endMs: 10_180);
+
+        Assert.Equal(new WaitStep(10_000), m.Steps![^1]);
+        Assert.True(m.Duration >= TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public void A_keyboard_only_recording_cannot_carry_that_wait_yet()
+    {
+        // The event list has no way to say "nothing happens until T" without a new field or a key
+        // sent to the game, so it still ends at its last key. Waits for a schema change.
+        var m = RecordingFinalizer.WithSteps(Rec(Macro.CoordSpaceClient, KeyA), 100, endMs: 10_010);
+
+        Assert.False(m.HasSteps);
+        Assert.Equal(TimeSpan.FromMilliseconds(10), m.Duration);
+    }
 }
