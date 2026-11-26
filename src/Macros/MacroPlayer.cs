@@ -174,6 +174,13 @@ internal sealed class MacroPlayer : IMacroPlayer
                     if (origin is null)
                         return result = PlaybackResult.Aborted($"Target window vanished at event {i + 1}/{macro.Events.Count}.");
                     var (sx, sy) = WindowSpaceMath.ToScreen((evt.X, evt.Y), origin.Value);
+                    // Mouse input goes to the window under the pointer, not the one in front, and
+                    // the check above only knows which is in front. An always-on-top window over
+                    // the point (Ur Task's own compact window, a notification) would take the click.
+                    if (WindowUnderPoint.Guards(evt.Kind) && RootWindowAt(sx, sy) != clientHwnd)
+                        return result = PlaybackResult.Aborted(
+                            $"Another window is covering the spot this macro clicks in {preflight.DisplayName}'s game window (event {i + 1}/{macro.Events.Count}). " +
+                            "Move that window out of the way, then run the macro again.");
                     toSend = evt with { X = sx, Y = sy };
                 }
                 var landed = SendMacroEvent(toSend);
@@ -362,6 +369,10 @@ internal sealed class MacroPlayer : IMacroPlayer
         return $"Couldn't size this window to the macro's recorded {wanted.W}x{wanted.H} (got {got?.W}x{got?.H}). It looks recorded on a larger screen — move the window fully on-screen and retry, or re-record the macro on this monitor.";
     }
 
+    /// <summary>The top-level window under a screen point. A seam: the Win32 lookup means nothing
+    /// against a test's fake window. Both playback paths ask it before a press or a wheel notch.</summary>
+    internal Func<int, int, IntPtr> RootWindowAt { get; init; } = WindowUnderPoint.Root;
+
     /// <summary>
     /// True when any part of a step macro is a place in the window: a click, drag, scroll, a
     /// colour or reach check, a raw stretch with mouse events, or a ClearAt guard pixel. Only such
@@ -439,7 +450,7 @@ internal sealed class MacroPlayer : IMacroPlayer
                 SharedBaseline: Ipc.ClearAtMacro.SharesBaseline(macro.Id), Guard: macro.Guard,
                 OnKeyLanded: _ledger is null ? null : src => _ledger.StampLanded(targetUserId, src),
                 Gate: _gate);
-            var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId);
+            var io = new RealStepIo(hwnd, _metrics, _sampler, _foreground, targetUserId, RootWindowAt);
             return result = await StepRunner.RunAsync(macro.Steps!, ctx, io, _activeCts.Token).ConfigureAwait(false);
         }
         finally
