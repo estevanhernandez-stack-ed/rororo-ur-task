@@ -296,9 +296,9 @@ public class RunnerLedgerTests
     {
         var a = Alt(1);
         var fired = false;
-        var rig = Build(startMs: 10 * Min, runForMs: 20 * Min, onSleep: (r, ms) =>
+        var rig = Build(startMs: 10 * Min, runForMs: 20 * Min, onSleep: (r, _) =>
         {
-            if (fired || ms < Min) return;
+            if (fired) return;                              // the loop's first sleep (no sleep is a minute long any more)
             fired = true;
             r.Ledger.StampLanded(1, InputSource.Macro);   // e.g. a macro's keys, at 10:00
         });

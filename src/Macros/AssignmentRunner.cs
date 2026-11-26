@@ -117,6 +117,8 @@ internal sealed class AssignmentRunner
     internal const int WatchdogTickMs = 1_000;      // how often the watchdog looks while a playback is in
     internal const long PreemptFloorMs = 5_000;     // a playback always gets this long to reach a step boundary
     internal static readonly TimeSpan HostRefreshTimeout = TimeSpan.FromSeconds(2);   // loop start waits this long for RoRoRo's clock
+    internal const long MaxSleepMs = 5_000;         // no single sleep is longer: an account that joins or is switched back
+                                                    // on mid-sleep is looked at within this, not at the old wake time
 
     // Turbo keep-alive. One warned sweep services every keep-alive alt due within
     // the batch window, and each alt costs a polled foreground confirm instead of a
@@ -732,7 +734,11 @@ internal sealed class AssignmentRunner
                         case CadenceDecision.SleepUntil sleep:
                             // The whole point: nothing to do, so do NOTHING. No focus steal.
                             // Never sleep past the moment the open miss group is due to be written.
-                            var sleepMs = sleep.WakeAtMs - now;
+                            // And never longer than MaxSleepMs in one go: the wake time is the earliest due
+                            // among the accounts known NOW, and an account that joins, is switched back on, or
+                            // has its limit shortened mid-sleep can be due long before it. A wake only re-runs
+                            // the decide step above, which emits nothing and takes no focus when nothing is due.
+                            var sleepMs = Math.Min(sleep.WakeAtMs - now, MaxSleepMs);
                             if (_reporter.UntilFlush is { } until)
                                 sleepMs = Math.Min(sleepMs, Math.Max(1_000, (long)until.TotalMilliseconds));
                             try { await _deps.Sleep(sleepMs, ct).ConfigureAwait(false); }
