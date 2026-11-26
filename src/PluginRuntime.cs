@@ -254,7 +254,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             if (!args.Macro.IsClientSpace && args.Macro.Events.Any(e => e.Kind is MacroEventKind.MouseMove
                 or MacroEventKind.MouseDown or MacroEventKind.MouseUp or MacroEventKind.MouseWheel))
             {
-                Log("Legacy screen-coordinate macro — window position matters; use STACK or re-record for window-relative playback.");
+                Log("This macro was recorded with screen positions, so its clicks land where the window was. Keep the game window where it was when you recorded, or record it again.");
             }
             RaiseUI(() => CurrentlyPlayingMacroChanged?.Invoke(args.Macro.Id));
             Log(args.TargetUserId == 0
