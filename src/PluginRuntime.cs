@@ -750,7 +750,20 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _holdTimer?.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        // Stop every playback and give it a moment to unwind before the process goes. The
+        // players let go of held keys and mouse buttons in their finally blocks, which run only
+        // if the playback unwinds first: quitting from the tray during a held W left the key down
+        // in the game. The routine goes first, so it cannot start a fresh loop under the others.
+        await PlaybackShutdown.AbortAndWaitAsync(
+            new (string, Func<bool>)[]
+            {
+                ("the routine", () => _activeRecipeRunner?.Abort() ?? false),
+                ("the keep-alive loop", _runner.Abort),
+                ("the sequence", _sequence.Abort),
+                ("the player", _player.Abort),
+            },
+            isRunning: () => _player.IsPlaying || _runner.IsRunning,
+            log: Diagnostics.DiagLog.Write).ConfigureAwait(false);
         // Belt-and-suspenders: a graceful app exit may race the runner's own
         // Stopped event (background task hasn't ticked yet) — dispose the claim
         // directly too so a clean quit doesn't wait out the TTL for no reason.
@@ -770,15 +783,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private void OnHostLost()
     {
         Log("Host RoRoRo connection lost — aborting playback and exiting plugin.");
-        try { _bridgeCts.Cancel(); } catch { }
-        try { _runner.Abort(); } catch { }
-        try { _sequence.Abort(); } catch { }
-        try { _player.Abort(); } catch { }
+        // These aborts are what stops input once the host is gone, so one that fails leaves a
+        // line in the diagnostics log instead of vanishing.
+        try { _bridgeCts.Cancel(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the bridge: {ex.Message}"); }
+        try { _runner.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the keep-alive loop: {ex.Message}"); }
+        try { _sequence.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the sequence: {ex.Message}"); }
+        try { _player.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the player: {ex.Message}"); }
         // The recipe runner has its own token — aborting the sub-runners above only
         // cancels THEIR internal tokens, not the recipe's. Without this, RecipeRunner
         // never observes cancellation and starts a fresh terminal loop against
         // orphaned PIDs after the host is gone.
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        try { _activeRecipeRunner?.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the routine: {ex.Message}"); }
 
         // Marshal to UI thread for the WPF shutdown. If we can't reach the
         // dispatcher (rare race), fall back to a hard exit so we don't linger.
