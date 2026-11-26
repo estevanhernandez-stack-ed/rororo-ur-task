@@ -150,7 +150,7 @@ public class GameLimitRefreshTests
     public void The_rows_keep_alive_switch_does_not_put_a_learned_limit_back()
     {
         var ledger = new KeepAliveLedger(() => 0, () => DateTimeOffset.UnixEpoch);
-        var view = new UI.KeepAliveView(ledger, new ForegroundGate(() => 0, _ => { }), () => 0, ByGame);
+        var view = new UI.KeepAliveView(ledger, new ForegroundGate(() => 0, _ => { }), () => 0, ByGame, () => true);
         var row = new UI.AssignmentRow(Alt(1), view) { Role = CadenceRole.KeepAlive };   // created at launch, no game
         KeepAliveLimits.TrackAnnounced(ledger, Alt(1), ByGame);
         KeepAliveLimits.TrackAnnounced(ledger, InGame(1, Ps99), ByGame);                 // the game arrived later
