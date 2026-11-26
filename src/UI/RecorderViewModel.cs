@@ -31,7 +31,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _keepAliveView = new KeepAliveView(_runtime.Ledger, _runtime.Gate, () => Environment.TickCount64,
-            alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, _prefs));
+            alt => KeepAliveLimits.For(alt.PlaceId, alt.PlaceName, _prefs), () => IsRunnerActive);
 
         Macros = new ObservableCollection<Macro>();
         StatusLines = new ObservableCollection<string>();
@@ -701,6 +701,7 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(StatusLabel));
             OnPropertyChanged(nameof(StatusMeta));
             OnPropertyChanged(nameof(CurrentRunnerAltPid));
+            RefreshKeepAliveCountdowns(); // rows read IsRunnerActive; don't wait for the 10 s tick
             // Refresh command CanExecute
             (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
