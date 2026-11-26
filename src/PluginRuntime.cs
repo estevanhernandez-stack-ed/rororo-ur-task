@@ -59,6 +59,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private (int W, int H)? _recordingClientSize;
     private bool? _recordingMaximized;
     private int? _recordingDisplayScale;
+    // Built on first use, so its AccountRemoved subscription is made from the recording code.
+    private RecordingExitWatch? _recordingExitWatch;
     private readonly IDisplayScale _displayScale = new DisplayScale();
     private Macro? _lastMacro;
     private bool _sequenceActive;
@@ -956,11 +958,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var anchorHwnd = CurrentRecordMode == RecordMode.PerWindow && account is not null
                 ? _metrics.HwndForPid(account.Pid)
                 : IntPtr.Zero;
+            // The keyboard hook hears every key on the machine. Per-window recordings keep only the
+            // ones pressed while the bound account is in front; multi-window mode keeps them all.
+            var boundPid = CurrentRecordMode == RecordMode.PerWindow && account is not null ? account.Pid : 0;
             _recorder.Start(
                 alwaysIgnore: new[] { HotkeyService.AbortVkCode },
                 chordIgnore: HotkeyService.ChordHotkeyVkCodes,
                 ignoreMouseEvents: RecordKeyboardOnly,
-                clientAnchorHwnd: anchorHwnd);
+                clientAnchorHwnd: anchorHwnd,
+                boundProcessId: boundPid);
+            if (boundPid != 0)
+                (_recordingExitWatch ??= new RecordingExitWatch(Accounts, OnRecordingAccountClosed)).Watch(boundPid);
             _recordingAnchorHwnd = anchorHwnd;
             _recordingClientSize = anchorHwnd != IntPtr.Zero ? _metrics.ClientSize(anchorHwnd) : null;
             _recordingMaximized = anchorHwnd != IntPtr.Zero ? _metrics.IsMaximized(anchorHwnd) : null;
@@ -982,8 +990,25 @@ internal sealed class PluginRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>The account a per-window recording is bound to has closed: nothing more can belong to
+    /// the recording, so it stops and what was captured is saved. Runs on the host event thread.</summary>
+    private void OnRecordingAccountClosed(AccountRegistry.AccountInfo info)
+    {
+        try
+        {
+            if (!_recorder.IsRecording) return;
+            Log($"{info.DisplayName} closed, so your recording stopped. Anything recorded up to then is saved.");
+            StopAndSaveRecording();
+        }
+        catch (Exception ex)
+        {
+            Log($"Stopping the recording after {info.DisplayName} closed failed: {ex.Message}");
+        }
+    }
+
     private void StopAndSaveRecording()
     {
+        _recordingExitWatch?.Clear();
         // The record hotkey's own Ctrl/Shift presses are not the user's input; see TrimHotkeyKeys.
         var events = MacroRecorder.TrimHotkeyKeys(_recorder.Stop());
         var bound = _recordingBoundAccount;
