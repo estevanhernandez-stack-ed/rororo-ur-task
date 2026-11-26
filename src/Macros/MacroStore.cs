@@ -104,7 +104,7 @@ public sealed class MacroStore
                 }
                 if (!Guid.TryParse(macro.Id, out var id))
                 {
-                    failures.Add(new LoadFailure(path, BadIdReason(macro.Id)));
+                    failures.Add(new LoadFailure(path, BadIdReason));
                     continue;
                 }
                 read.Add((path, macro, id));
@@ -140,13 +140,14 @@ public sealed class MacroStore
         => string.Equals(Path.GetFileNameWithoutExtension(path), id, StringComparison.OrdinalIgnoreCase);
 
     // Load-failure reasons. They are read after "load failed: <file name> — " in the activity
-    // log, and an agent gets the same sentence back when it asks to run that file.
+    // log, and the bridge hands the same sentence to a caller that asks to run that file. The
+    // id itself is never echoed: it is text from a file anyone could have written, and it would
+    // land in the log as-is.
     internal const string NoIdReason =
         "This macro file has no id, so Ur Task can't use it. Use IMPORT to bring it in with a new id, then remove this file from the macros folder.";
 
-    internal static string BadIdReason(string id)
-        => $"Its id '{(id.Length > 40 ? id[..40] + "..." : id)}' is not a GUID, so Ur Task can't use it. "
-         + "Use IMPORT to bring it in with a new id, then remove this file from the macros folder.";
+    internal const string BadIdReason =
+        "The id in this macro file is not a GUID, so Ur Task can't use it. Use IMPORT to bring it in with a new id, then remove this file from the macros folder.";
 
     internal static string DuplicateIdReason(string keptFileName)
         => $"It has the same id as {keptFileName}, so Ur Task uses {keptFileName} and skips this file. "
