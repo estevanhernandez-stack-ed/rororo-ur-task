@@ -671,6 +671,9 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public async Task StartAsync()
     {
+        // Esc stays registered for the whole of a bridge playback, the waits between a repeat's
+        // passes included: no sequence is running then, and a press would go to the game.
+        if (_bridgeInvoker is { } bridge) bridge.ActivePlaybacksChanged += RefreshAbortKey;
         try
         {
             _hotkeys.Start();
@@ -936,7 +939,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     private void RefreshAbortKey()
     {
-        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false))
+        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false)
+            || (_bridgeInvoker?.ActivePlaybackCount ?? 0) > 0)
             _hotkeys.EnableAbortKey();
         else
             _hotkeys.DisableAbortKey();

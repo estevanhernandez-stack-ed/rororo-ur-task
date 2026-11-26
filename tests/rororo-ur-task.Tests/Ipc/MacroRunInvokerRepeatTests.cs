@@ -196,6 +196,32 @@ public class MacroRunInvokerRepeatTests
     }
 
     [Fact]
+    public async Task A_playback_says_when_it_starts_and_ends_and_is_still_active_while_it_waits()
+    {
+        // The runtime keeps bare Esc registered while this reports an active playback. Between
+        // the passes of a repeat no sequence is running, so without it Esc was released for the
+        // whole wait and a press went to the game instead of stopping the repeat.
+        var m = NewMacro();
+        var alt = Alt(123);
+        var sequence = new SequencePlayer(new CompletingPlayer(), new Foreground(),
+            _ => new FocusAttempt(false, MissCause.FocusRefused, "Windows refused focus"));
+        var delay = new HeldDelay();
+        var inv = Invoker(m, new[] { alt }, sequence, delay.Wait);
+        var counts = new List<int>();
+        inv.ActivePlaybacksChanged += () => { lock (counts) counts.Add(inv.ActivePlaybackCount); };
+
+        await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, 0, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => delay.Asked.Count == 1);   // the pass is over; the repeat is waiting
+        Assert.False(sequence.IsRunning);
+        Assert.Equal(1, inv.ActivePlaybackCount);
+        lock (counts) Assert.Equal(new[] { 1 }, counts);
+
+        Assert.Equal(1, inv.StopAllForUserAbort());
+        await WaitUntilAsync(() => { lock (counts) return counts.Count == 2; });
+        lock (counts) Assert.Equal(new[] { 1, 0 }, counts);
+    }
+
+    [Fact]
     public async Task The_wait_between_passes_resets_after_a_pass_that_completed_something()
     {
         var m = NewMacro();

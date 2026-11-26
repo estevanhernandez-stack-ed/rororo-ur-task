@@ -47,6 +47,17 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
     internal int ActivePlaybackCount => _playbacks.Count;
 
+    /// <summary>A playback joined or left the active set. The runtime keeps bare Esc registered
+    /// while <see cref="ActivePlaybackCount"/> is above zero: between the passes of a repeat no
+    /// sequence is running, and Esc would otherwise be released for the whole wait.</summary>
+    internal event Action? ActivePlaybacksChanged;
+
+    private void RaiseActivePlaybacksChanged()
+    {
+        try { ActivePlaybacksChanged?.Invoke(); }
+        catch (Exception ex) { _log($"  ! active-playbacks listener failed: {ex.Message}"); }
+    }
+
     // Production ctor wires the real collaborators.
     public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player,
         Func<bool> isBreakglass,
@@ -257,6 +268,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
         _registry.Started(playbackId, targets.Select(t => t.RobloxUserId).ToArray());
+        RaiseActivePlaybacksChanged();
         _ = ObservePlaybackAsync(playbackId, macro, targets, interAltDelayMs, repeat, playbackCts);
         return RunMacroResponse.Accepted(playbackId);
     }
@@ -449,6 +461,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
             _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
             _playbacks.TryRemove(playbackId, out _);
             playbackCts.Dispose();
+            RaiseActivePlaybacksChanged();
         }
     }
 
