@@ -222,9 +222,19 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
         };
         _runtime.MacrosChanged += () =>
         {
-            _allMacros = _runtime.Store.LoadAll().Macros;
-            ReloadArchived();
-            RefreshMacroList();
+            // This runs on the UI thread, at startup and after every library change. An
+            // exception here used to end the app, and at startup it ended every start. One
+            // macro the list can't draw is not worth that: say so and keep running.
+            try
+            {
+                _allMacros = _runtime.Store.LoadAll().Macros;
+                ReloadArchived();
+                RefreshMacroList();
+            }
+            catch (Exception ex)
+            {
+                LogStatus($"Couldn't refresh your macro list: {ex.Message}");
+            }
         };
         _runtime.CurrentlyPlayingMacroChanged += _ =>
         {
@@ -924,7 +934,21 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public void ToggleAllGames(Macro macro)
     {
         if (macro is null) return;
-        _runtime.Store.Save(macro with { AllGames = !macro.AllGames });
+        // The file can be busy (the bridge reading it, a virus scanner on it). That is a line
+        // in the activity log, not the end of the app. Same for Rename and Delete below.
+        try
+        {
+            // Update, not Save(macro with ...): `macro` is the copy from the last list refresh,
+            // and another tool may have rewritten the file since. Only this one field changes.
+            var allGames = !macro.AllGames;
+            if (!_runtime.Store.Update(macro.Id, fresh => fresh with { AllGames = allGames }))
+                LogStatus($"Couldn't change All games for '{macro.Name ?? "(unnamed)"}': its file is gone from your macros folder. Your list is now up to date.");
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't change All games for '{macro.Name ?? "(unnamed)"}', so it was not saved. Try again in a moment. ({ex.Message})");
+        }
+        // Raised either way: after a failed save the list goes back to what is on disk.
         _runtime.RaiseMacrosChanged();
     }
 
@@ -933,15 +957,31 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
     public void RenameMacro(Macro macro, string newName)
     {
         if (macro is null || string.IsNullOrWhiteSpace(newName)) return;
-        var renamed = macro with { Name = newName };
-        _runtime.Store.Save(renamed);
+        try
+        {
+            // Same as All games above: rename what is on disk now, not the list's older copy,
+            // and never bring back a macro that has been removed from the folder.
+            if (!_runtime.Store.Update(macro.Id, fresh => fresh with { Name = newName }))
+                LogStatus($"Couldn't rename '{macro.Name ?? "(unnamed)"}': its file is gone from your macros folder. Your list is now up to date.");
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't rename '{macro.Name ?? "(unnamed)"}' to '{newName}', so it was not saved. Try again in a moment. ({ex.Message})");
+        }
         _runtime.RaiseMacrosChanged();
     }
 
     public void DeleteMacro(Macro macro)
     {
         if (macro is null) return;
-        _runtime.Store.Delete(macro.Id);
+        try
+        {
+            _runtime.Store.Delete(macro.Id);
+        }
+        catch (Exception ex)
+        {
+            LogStatus($"Couldn't delete '{macro.Name ?? "(unnamed)"}', so it is still in your library. Try again in a moment. ({ex.Message})");
+        }
         _runtime.RaiseMacrosChanged();
     }
 
@@ -1037,24 +1077,24 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
 
         foreach (var path in filePaths)
         {
-            MacroBundle.ParseResult result;
-            try
-            {
-                result = MacroBundle.Parse(File.ReadAllText(path));
-            }
-            catch (Exception ex)
-            {
-                LogStatus($"Import failed for {Path.GetFileName(path)}: {ex.Message}");
-                continue;
-            }
+            // Size limits, parsing and the wording of every refusal live in MacroBundle, where
+            // they are tested; this only shows the lines and saves what came through.
+            var file = MacroBundle.ReadForImport(path);
+            foreach (var line in file.Log) LogStatus(line);
 
-            foreach (var failure in result.Failures)
-                LogStatus($"Skipped {failure.Label} in {Path.GetFileName(path)}: {failure.Reason}");
-
-            foreach (var macro in result.Macros)
+            foreach (var macro in file.Macros)
             {
-                _runtime.Store.Save(MacroBundle.PrepareForImport(macro, takenNames));
-                imported++;
+                // One macro that can't be written must not end the import (or the app): say
+                // which one, don't count it, carry on with the rest.
+                try
+                {
+                    _runtime.Store.Save(MacroBundle.PrepareForImport(macro, takenNames));
+                    imported++;
+                }
+                catch (Exception ex)
+                {
+                    LogStatus($"Couldn't save '{macro.Name ?? "(unnamed)"}' from {Path.GetFileName(path)}, so it was not imported. ({ex.Message})");
+                }
             }
         }
 

@@ -185,4 +185,18 @@ public class MacroLibraryTests
     {
         Assert.Empty(MacroLibrary.Group(Array.Empty<Macro>()));
     }
+
+    // L5-01: the library is built from every macro's name on every refresh, on the UI thread.
+    // One name with non-ASCII digits must not take the whole list (and the app) down.
+    [Fact]
+    public void NameWithNonAsciiDigits_StillBuildsTheLibrary()
+    {
+        var all = new[] { M("PS99 | farm \uFF11/\uFF13 | best"), M("PS99 | farm 1/3 | start"), M("Crystal") };
+
+        var groups = MacroLibrary.Group(all);
+
+        Assert.Equal(new[] { "PS99", MacroName.UngroupedGroup }, groups.Select(g => g.Name).ToArray());
+        Assert.Equal(2, groups[0].Macros.Count);
+        Assert.Single(MacroSearch.Filter(all, "best"));
+    }
 }

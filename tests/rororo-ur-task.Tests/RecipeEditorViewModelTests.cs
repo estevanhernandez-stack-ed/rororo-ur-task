@@ -141,4 +141,19 @@ public class RecipeEditorViewModelTests
         Assert.Equal(222, recipe.RecordedPlaceId);
         Assert.Equal("RealGame", recipe.RecordedGameName);
     }
+
+    // L5-04: two macros with one id (a backup copy left in the macros folder) used to throw out
+    // of the constructor, so the recipe editor never opened. The store no longer loads both, and
+    // the lookup holds anyway: first wins, a missing id is skipped.
+    [Fact]
+    public void Library_WithADuplicateIdAndAMissingId_StillOpens_FirstWins()
+    {
+        const string id = "11111111-1111-1111-1111-111111111111";
+        var vm = new RecipeEditorViewModel(new[] { M(id, "first"), M(id, "second"), M(null!, "no id") });
+
+        vm.AddPositionStep(id);
+
+        Assert.Equal(3, vm.Library.Count);
+        Assert.Equal("first", vm.StepMacroName(vm.Steps[0]));
+    }
 }
