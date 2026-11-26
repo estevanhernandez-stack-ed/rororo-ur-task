@@ -9,8 +9,8 @@ namespace Labs626.UrTask.Tests;
 /// <summary>
 /// MacroPlayer's point-macro path (PlayStepsAsync) against a fake window that enforces Roblox's
 /// minimum size, as spec §6 asks: a harness without that clamp passed once and then failed on real
-/// hardware. SendInput cannot be faked, so every macro here either plays wait steps only or stops
-/// on a check before any input is sent.
+/// hardware. SendInput cannot be faked, so every macro here plays steps that send nothing, stops
+/// on a check before any input is sent, or loses the foreground before its first step.
 /// </summary>
 [Collection("DiagLog")]
 public class MacroPlayerStepPathTests : IDisposable
@@ -32,7 +32,14 @@ public class MacroPlayerStepPathTests : IDisposable
     {
         public AccountRegistry.AccountInfo? Current { get; set; }
         public int Resolves;
-        public AccountRegistry.AccountInfo? ResolveForegroundAccount() { Interlocked.Increment(ref Resolves); return Current; }
+        /// <summary>The target stays in front for this many resolves, then something else is. One
+        /// covers the preflight only, so the runner stops at its first step before any input.</summary>
+        public int? GoneAfter;
+        public AccountRegistry.AccountInfo? ResolveForegroundAccount()
+        {
+            var n = Interlocked.Increment(ref Resolves);
+            return GoneAfter is int g && n > g ? null : Current;
+        }
     }
 
     private sealed class FakeScale(int percent) : IDisplayScale
@@ -53,6 +60,28 @@ public class MacroPlayerStepPathTests : IDisposable
         }
     }
 
+    /// <summary>Sees one colour everywhere. With <see cref="Skipped"/> it is the point's other
+    /// colour, so the step settles at once and skips without pressing.</summary>
+    private sealed class SolidSampler(Rgb colour) : IScreenSampler
+    {
+        public PixelBlock? Capture(IntPtr hwnd, int clientX, int clientY, int w, int h)
+        {
+            var px = new uint[w * h];
+            Array.Fill(px, 0xFF000000u | (uint)(colour.R << 16) | (uint)(colour.G << 8) | (uint)colour.B);
+            return new PixelBlock(clientX, clientY, w, h, px);
+        }
+    }
+
+    private static readonly Rgb Grey = new(90, 90, 90);
+
+    /// <summary>A step with a position that sends nothing: a first match whose only candidate shows
+    /// its other colour to a <see cref="SolidSampler"/> of <see cref="Grey"/>, and skips. It makes a
+    /// macro positional, so the window is sized for it, and the macro still plays to the end.</summary>
+    private static readonly MacroStep Skipped = new FirstMatchStep(0, "fm", "Tile", new[]
+    {
+        new PointStep(0, "c1", "On", 400, 300, Check: new ColorCheck(new CheckBox(), new Rgb(139, 224, 58), Other: Grey)),
+    }, NoMatchAction.Skip);
+
     /// <summary>
     /// A window whose outer size Roblox will not let go below <see cref="MinOuter"/> (its scaled
     /// minimum) nor above the monitor. The client follows the outer size through a constant chrome.
@@ -69,6 +98,7 @@ public class MacroPlayerStepPathTests : IDisposable
         public (int X, int Y)? Origin = null;
         public List<(int x, int y, int w, int h)> SetCalls = new();
         public int HwndForPidCalls;
+        public int Maximizes, RestoreDowns;
 
         public IntPtr HwndForPid(int pid) { HwndForPidCalls++; return Hwnd; }
         public (int X, int Y)? ClientOrigin(IntPtr hwnd) => Origin;
@@ -85,8 +115,8 @@ public class MacroPlayerStepPathTests : IDisposable
         public bool Minimize(IntPtr hwnd) => true;
         public bool Restore(IntPtr hwnd) => true;
         public (int X, int Y, int W, int H) WorkAreaFor(IntPtr hwnd) => WorkArea;
-        public void Maximize(IntPtr hwnd) { }
-        public void RestoreDown(IntPtr hwnd) { }
+        public void Maximize(IntPtr hwnd) { Maximizes++; }
+        public void RestoreDown(IntPtr hwnd) { RestoreDowns++; }
         public bool IsMaximized(IntPtr hwnd) => false;
     }
 
@@ -120,11 +150,12 @@ public class MacroPlayerStepPathTests : IDisposable
         var metrics = new FakeMetrics { MinOuter = PointMath.RobloxMinOuter(125) }; // a resize is due
         var fg = new FakeForeground { Current = Target };
         var gate = new ForegroundGate(() => 0, _ => { });
-        var player = new MacroPlayer(fg, metrics, new BlindSampler(), new FakeScale(125),
+        var player = new MacroPlayer(fg, metrics, new SolidSampler(Grey), new FakeScale(125),
             new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")), gate: gate);
         bool started = false;
         player.Started += (_, _) => started = true;
-        var macro = steps ? PointMacro(1000, 800, 100, new MacroStep[] { new WaitStep(0) }) : EventListMacro();
+        // Skipped: a macro with no positions is no longer sized, and this asserts the resize.
+        var macro = steps ? PointMacro(1000, 800, 100, new MacroStep[] { new WaitStep(0), Skipped }) : EventListMacro();
 
         var lease = await gate.RequestBreakAsync("Due Alt", TimeSpan.FromMinutes(5), default);
         var play = player.PlayAsync(macro, targetUserId: 42);
@@ -183,9 +214,9 @@ public class MacroPlayerStepPathTests : IDisposable
     public async Task Recorded_at_100_and_played_at_125_sizes_the_window_to_one_and_a_quarter()
     {
         var metrics = new FakeMetrics { MinOuter = PointMath.RobloxMinOuter(125) };
-        var player = Player(metrics, new FakeScale(125));
+        var player = Player(metrics, new FakeScale(125), new SolidSampler(Grey));
 
-        var result = await player.PlayAsync(PointMacro(1000, 800, 100, new MacroStep[] { new WaitStep(0) }), targetUserId: 42);
+        var result = await player.PlayAsync(PointMacro(1000, 800, 100, new MacroStep[] { new WaitStep(0), Skipped }), targetUserId: 42);
 
         Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
         var call = Assert.Single(metrics.SetCalls);
@@ -203,13 +234,101 @@ public class MacroPlayerStepPathTests : IDisposable
         bool started = false;
         player.Started += (_, _) => started = true;
 
-        var result = await player.PlayAsync(PointMacro(800, 599, 100, new MacroStep[] { new WaitStep(0) }), targetUserId: 42);
+        var result = await player.PlayAsync(PointMacro(800, 599, 100, new MacroStep[] { new WaitStep(0), Skipped }), targetUserId: 42);
 
         Assert.Equal(PlaybackOutcome.Refused, result.Outcome);
         Assert.Equal((1016, 788), (metrics.SetCalls.Single().w, metrics.SetCalls.Single().h));
         Assert.Equal((1004, 758), metrics.Client);
         Assert.StartsWith("Roblox wouldn't shrink this window to 1000x749; it stayed 1004x758. At 125% display scale Roblox's smallest window is 1020x797.", result.Reason);
         Assert.False(started);
+    }
+
+    // ---------- a macro with no positions leaves the window alone (L2-06) ----------
+
+    /// <summary>Key, wait and paste: nothing in it is a place in the window.</summary>
+    private static readonly MacroStep[] KeysOnly =
+    {
+        new KeyStep(0, 0x45, Down: true), new KeyStep(40, 0x45, Down: false), new WaitStep(0), new PasteStep(0, "hello"),
+    };
+
+    private static Macro NoSizeMacro(IReadOnlyList<MacroStep> steps) => new(
+        SchemaVersion: Macro.CurrentSchemaVersion, Id: "k1", Name: "keys", RecordMode: "PerWindow",
+        RecordedAgainstUserId: null, RecordedAgainstDisplayName: null, InterAltDelayMs: null, RecordedAtUnixMs: 1,
+        Events: Array.Empty<MacroEvent>(), Steps: steps);
+
+    [Fact]
+    public async Task A_key_wait_and_paste_macro_with_no_recorded_size_plays_and_leaves_the_window_alone()
+    {
+        // Keys cannot be faked, so the target leaves the front right after the preflight: the
+        // runner's own "step 1" sentence proves the steps were reached, and nothing is pressed.
+        var metrics = new FakeMetrics();
+        var fg = new FakeForeground { Current = Target, GoneAfter = 1 };
+        var player = new MacroPlayer(fg, metrics, new BlindSampler(), new FakeScale(125),
+            new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")));
+        bool started = false;
+        player.Started += (_, _) => started = true;
+
+        var result = await player.PlayAsync(NoSizeMacro(KeysOnly), targetUserId: 42);
+
+        Assert.Equal(PlaybackResult.Aborted("Foreground shifted away from Alt at step 1/4."), result);
+        Assert.True(started);
+        Assert.Empty(metrics.SetCalls);
+        Assert.Equal((0, 0), (metrics.Maximizes, metrics.RestoreDowns));
+        Assert.Equal((700, 500), metrics.Client);
+    }
+
+    [Fact]
+    public async Task A_wait_only_macro_with_no_recorded_size_plays_to_the_end()
+    {
+        var metrics = new FakeMetrics();
+        var player = Player(metrics, new FakeScale(100));
+
+        var result = await player.PlayAsync(NoSizeMacro(new MacroStep[] { new WaitStep(0), new WaitStep(0) }), targetUserId: 42);
+
+        Assert.Equal(PlaybackOutcome.Completed, result.Outcome);
+        Assert.Empty(metrics.SetCalls);
+    }
+
+    [Fact]
+    public async Task A_key_wait_and_paste_macro_plays_on_a_window_that_cannot_take_its_recorded_size()
+    {
+        // The refusing case above, 800x599 at 100% played at 125%, with no positions in the macro:
+        // there is nothing to place, so the window is neither resized nor moved, and it plays.
+        var metrics = new FakeMetrics { MinOuter = PointMath.RobloxMinOuter(125) };
+        var fg = new FakeForeground { Current = Target, GoneAfter = 1 };
+        var player = new MacroPlayer(fg, metrics, new BlindSampler(), new FakeScale(125),
+            new PointAdjustmentStore(Path.Combine(_dir, "adjustments.json")));
+
+        var result = await player.PlayAsync(PointMacro(800, 599, 100, KeysOnly), targetUserId: 42);
+
+        Assert.Equal(PlaybackResult.Aborted("Foreground shifted away from Alt at step 1/4."), result);
+        Assert.Empty(metrics.SetCalls);
+        Assert.Equal((10, 20, 716, 539), metrics.Outer);
+    }
+
+    [Fact]
+    public void Only_steps_with_a_place_in_the_window_need_positions()
+    {
+        static Macro With(params MacroStep[] steps) => NoSizeMacro(steps);
+        var check = new ColorCheck(new CheckBox(), new Rgb(1, 2, 3));
+        var keyDown = new MacroEvent(0, MacroEventKind.KeyDown, 0x45, 0, 0, 0, 0);
+        var keyUp = new MacroEvent(30, MacroEventKind.KeyUp, 0x45, 0, 0, 0, 0);
+
+        Assert.False(MacroPlayer.NeedsPositions(With(KeysOnly)));
+        Assert.False(MacroPlayer.NeedsPositions(With(new PointerMoveStep(0, 40, 0, 100))));
+        Assert.False(MacroPlayer.NeedsPositions(With(new RawStep(0, new[] { keyDown, keyUp }, "keys"))));
+
+        Assert.True(MacroPlayer.NeedsPositions(With(new WaitStep(0), new PointStep(0, "p", null, 10, 10))));
+        Assert.True(MacroPlayer.NeedsPositions(With(new HoldStep(0, "h", null, 10, 10, Check: new HoldCheck(new CheckBox())))));
+        Assert.True(MacroPlayer.NeedsPositions(With(new DragStep(0, 1, 10, 10, 5, 5, 100))));
+        Assert.True(MacroPlayer.NeedsPositions(With(new WheelStep(0, 10, 10, 120))));
+        Assert.True(MacroPlayer.NeedsPositions(With(new FirstMatchStep(0, "f", null, new[] { new PointStep(0, "c", null, 10, 10, Check: check) }))));
+        Assert.True(MacroPlayer.NeedsPositions(With(new SweepStep(0, new[] { new SweepPoint(1, 1), new SweepPoint(2, 2) }, 100))));
+        foreach (var kind in new[] { MacroEventKind.MouseMove, MacroEventKind.MouseDown, MacroEventKind.MouseUp, MacroEventKind.MouseWheel })
+            Assert.True(MacroPlayer.NeedsPositions(With(new RawStep(0, new[] { keyDown, new MacroEvent(10, kind, 0, 5, 5, 1, 0) }, "mixed"))));
+
+        // A screen guard is a place in the window even when every step is a key.
+        Assert.True(MacroPlayer.NeedsPositions(With(KeysOnly) with { Guard = new ScreenGuard(5, 5, 3, 3, new Rgb(1, 2, 3), 30) }));
     }
 
     [Fact]
