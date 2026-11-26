@@ -1,6 +1,6 @@
 # Review findings, v0.13.0
 
-**Baseline:** `main` at `c8b1412` · **Reviewed:** 2026-11-25 · **Status:** all seven lanes in, awaiting Este's approval of the dispositions. Nothing here is fixed.
+**Baseline:** `main` at `c8b1412` · **Reviewed:** 2026-11-25 · **Status:** band A is built as 0.13.1 (PR #49) and waits on a live smoke. Band B is open. See "Band A, as built" below for what landed and what changed along the way.
 
 Plan: `docs/superpowers/plans/2026-11-25-review-and-remediation-0.13.1.md`.
 
@@ -16,7 +16,7 @@ What broke is the edges around that core:
 - **Keep-alive can stop serving without saying so.** An account joining during loop start wedges the loop for every account (L1-02). A sleeping loop ignores an account switched back on (L1-04). Per-game limits silently fall back to Unknown (L1-07). After any stop, the rows keep counting down (L3-10).
 - **One bad file takes the app down.** Full-width digits in a name (L5-01), a copied file with a duplicate id (L5-04), a recipe with no steps (L5-08). The crash handler logs and exits by design, so each of these is a hard stop.
 - **The UI overwrites what an agent wrote** (L5-05), and saves are not atomic under a comment that says they are (L5-02).
-- **The release pipeline trusts nothing and checks nothing.** Three stable releases shipped from a red commit (L7-01).
+- **The release pipeline trusts nothing and checks nothing.** Two stable releases shipped with the host check red, and a third from a commit with no test run at all (L7-01, corrected below).
 - **The records are wrong in ways that matter.** The README names the wrong minimum host and promises a consent opt-out that does not exist (L7-03, L7-04). The keystone says a missing "exiting cleanly" line means a hang; 36 sessions on this machine have zero such lines (L4-13).
 
 ## Recommended cut
@@ -58,15 +58,42 @@ Este approved **band A as 0.13.1** and ruled on the eight behaviour calls. Where
 | # | Finding | Ruling | Lands in |
 | --- | --- | --- | --- |
 | 1 | L3-05 / L1-03, keep-alive's Spaces recorded into macros | **Keep-alive and recording do not run at the same time.** Pressing record pauses keep-alive and stopping the recording brings it back, the way break-glass does. If a paused account nears its idle limit mid-recording, the activity list names it and the time. This was Este's own option, not one of the three offered. It also removes the turbo case where a sweep eats the user's keys mid-recording. The own-input marker stays in wave B. | 0.13.1 |
-| 2 | L3-13, the trimmed trailing wait | **Restore it.** A recording ends when the stop chord is pressed. The chord's stray Ctrl is still trimmed. If the current file format cannot carry the end time, it waits for wave C. | 0.13.1 |
+| 2 | L3-13, the trimmed trailing wait | **Restore it.** A recording ends when the stop chord is pressed. The chord's stray Ctrl is still trimmed. As built: recordings with a mouse click carry the wait as a final wait step. Keyboard-only recordings cannot: the event list has no way to say "nothing happens until this time" without sending a real key or becoming a mouse macro. **Follow-up ruling: that field goes into 0.14.0.** | 0.13.1 for point macros, 0.14.0 for keyboard-only |
 | 3 | L3-08, clicks outside the game window | **Drop presses that start outside** the bound window's client area. Releases are always kept, so a drag that ends outside still records correctly. | 0.13.2 |
 | 4 | L2-08, held keys through a long wait | **Yes, in the second patch.** Check the foreground during a wait while anything is held. It gets its own tests and a live hold-and-alt-tab check. | 0.13.2 |
-| 5 | L5-10, what an imported macro can reach | **Checks now, summary later.** 0.13.1 refuses macros that use Windows-key, app-launch or sleep keys, and click points outside the game window. An import summary listing every pasted text is a later feature. | 0.13.1, summary unscheduled |
+| 5 | L5-10, what an imported macro can reach | **Checks now, summary later.** As built: 0.13.1 refuses macros that use Windows-key, app-launch, browser or sleep keys, at import and at playback, never at load. The click-point check did not ship: a mouse recording stopped with the on-screen STOP button ends with a click on Ur Task's own window, outside the game window, and those macros play today. The check is safe only once the recorder drops outside presses (ruling 3), so the two ship together. | Keys in 0.13.1, points in 0.13.2, summary unscheduled |
 | 6 | L1-16, keep-alive undoes STACK | **Re-minimize.** A window that was minimized when keep-alive reached it is minimized again after its Space. | 0.13.2 |
 | 7 | L7-14, the bridge switch | **Docs now, checkbox next.** 0.13.1 rewords README and FEATURES to say it is a file setting. 0.13.2 adds the checkbox. | 0.13.1 and 0.13.2 |
 | 8 | The copy vocabulary | **Its own pass in 0.14.0.** The patches fix only strings that are wrong or say nothing. Renames happen once, with a changelog entry. | 0.14.0 |
 
+| 9 | L7-01, the release gate | **Releases are gated on host-integration.** `release.yml` runs the suite against the real host before it builds. It tests the host's `main`: when it is red for a host-side reason, the fix is the test stand-in, not removing the step. | 0.13.1 |
+
 Standing ruling from earlier the same day: bare Esc is the easy kill key and stays. No fix may remove or narrow it.
+
+## Band A, as built
+
+Built 2026-11-25 on `release/0.13.1` by seven workers in separate worktrees, each test-first, each diff read before merge. With the real host: 1,245 of 1,245. Nothing has been seen working in the running app; the smoke checklist at `docs/smoke/2026-11-25-0.13.1-smoke.md` is the gate.
+
+**Landed:** L3-01, L3-03, L3-04, L3-10, L3-12, L3-02, L2-01, L2-02, L2-03, L2-06, L1-02, L1-04, L1-06, L1-07, L4-01, L4-03, L4-04, L4-06, L4-08, L4-11, L4-13 (keystone), L5-01, L5-02, L5-03, L5-04, L5-05, L6-06, L6-08, L6-11, L7-01, L7-02, L7-03, L7-04, L7-05, L7-11, rulings 1 and 9, and the key half of ruling 5.
+
+**Held out:** L1-01. Medium confidence, and a fix for an unconfirmed keep-alive bug is its own risk. Section 5 of the smoke decides it.
+
+**Found while building, and fixed:**
+
+- The "stopped" row label was placed ahead of "held", so a break-glass row could never say "held" again. Caught reading the diff; its suite was green.
+- Ruling 1 opened a hole against break-glass: released mid-recording, its keep-alive restore was refused and nothing brought keep-alive back. The recording now takes the restore and pays it at stop.
+- The pause warning covered keep-alive accounts only. A recording stops the whole loop, so Active accounts are covered too.
+- The back-off added for L2-01 released bare Esc for up to 30 s between failed passes. Esc is now held for the whole of a bridge playback.
+- Two branches merged with no textual conflict and broke the build: one added a constructor argument, the other added a test using the old shape.
+
+**Learned about the code:**
+
+- `File.Move` with overwrite fails while anything has the destination open, even a reader that shares delete. The old delete-then-move did not. Saves retry briefly.
+- `PostThreadMessage` loses a message sent to a thread with no message queue. The real `RegisterHotKey` call had been creating the queue as a side effect.
+- `AccountRegistry.OnLaunched` re-announced an account on every call, not only when it changed.
+- Break-glass does not "stop everything". It holds off Ctrl+Shift+P, Ctrl+Shift+L and bridge requests. It does not block a macro started from the window or stop a recording.
+
+**Left for 0.13.2, noted during the build:** a keep-alive account whose service keeps throwing has no miss count or warning; Delete and Archive act only on a file named after its id; recipe save and delete handlers have no try/catch; four hotkey paths still read the recipe runner's own running flag; a "paused for recording" row label; bridge drop lines are not rate-limited; the README row for `system.watch-global-input` omits the turbo input guard.
 
 ## What this review did not do
 
@@ -293,7 +320,7 @@ The unit suite is honest where it has seams. The step runner, the cadence schedu
 
 | ID | Sev | Verdict | Finding | Where | Smallest fix | Disposition |
 | --- | --- | --- | --- | --- | --- | --- |
-| L7-01 | S1 | CONFIRMED | Releases are not gated on tests, and three stable releases shipped from a red commit: v0.12.0, v0.9.0 and v0.7.0. `release.yml` runs the build script and nothing else, and `main` has no branch protection. Two of the three reds were the log-test flake, which is how tagging through red becomes a habit. | `.github/workflows/release.yml:3-31` | Run the standalone suite in `release.yml` before the build. Fix L7-05 first or it blocks tags at random. | 0.13.1 |
+| L7-01 | S1 | CORRECTED during the build | Releases are not gated on tests. The lane said three stable releases shipped from a red commit. Checked against GitHub: on v0.12.0 and v0.7.0 the unit tests were green and `host-integration` was the red job; the v0.9.0 tag commit has no test run at all. So a gate on the unit suite alone would have stopped neither. The v0.12.0 red was the log-test flake (L7-05). `main` has no branch protection. | `.github/workflows/release.yml:3-31` | Run both suites in `release.yml` before the build, the host one included. | 0.13.1, done |
 | L7-02 | S1 | PLAUSIBLE | Nothing checks the pairs that break a release: the tag against the manifest version, and the manifest's `entrypoint` against the built exe name. The host fails the install when the entrypoint is missing. Every past release is consistent, so this is a latent gap. | `tests/rororo-ur-task.Tests/VersionConsistencyTests.cs:21-52`, `manifest.json:24` | One more assertion in the version test. One step in `release.yml` that fails unless the tag matches the manifest. | 0.13.1 |
 | L7-03 | S1 | CONFIRMED | The README says RoRoRo 1.4.3 or later is enough. The manifest has required 1.19.0 since v0.7.0. | `README.md:35`, `manifest.json:23` | Fix the line. Add a test that reads the README for the manifest's value. | 0.13.1 |
 | L7-04 | S1 | CONFIRMED on the text | The README and FEATURES promise an opt-out the code cannot honour: "you can opt-out of any of them, but the plugin refuses to record / play without the corresponding consent." Nothing in `src/` reads what was granted and the handshake does not carry it. A user who declines mouse synthesis gets it anyway. Line 39 of the same file contradicts line 31. | `README.md:31`, `:39`, `docs/FEATURES.md:89` | Delete the clause in both. Say the three are disclosure and required. | 0.13.1 |
