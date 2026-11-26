@@ -1,5 +1,5 @@
 // src/Ipc/MacroRunnerServer.cs
-using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Text.Json;
@@ -20,9 +20,31 @@ internal sealed class MacroRunnerServer
     private readonly IMacroRunInvoker _invoker;
     private readonly string _pipeName;
     private readonly IStatusProvider? _status;
+    private readonly Action<string> _log;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
-    public MacroRunnerServer(IMacroRunInvoker invoker, string? pipeName = null, IStatusProvider? status = null)
+    /// <summary>How long one connection gets to send its request, and separately to take its
+    /// reply. Every request is a tiny control message from a local peer, so a peer that needs
+    /// longer has stalled, and it is holding the only pipe instance.</summary>
+    internal static readonly TimeSpan DefaultIoTimeout = TimeSpan.FromSeconds(2);
+    internal TimeSpan IoTimeout { get; init; } = DefaultIoTimeout;
+
+    /// <summary>The wait before trying again after the pipe could not be created: it doubles from
+    /// the start to the cap, and starts over once a pipe has been created.</summary>
+    internal static readonly TimeSpan CreateRetryStart = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan CreateRetryCap = TimeSpan.FromSeconds(30);
+
+    /// <summary>Test seam over pipe creation; it is handed the real create.</summary>
+    internal Func<Func<NamedPipeServerStream>, NamedPipeServerStream>? CreatePipe { get; set; }
+
+    /// <param name="log">The diagnostics log. Tests leave it out, so a test run never writes to
+    /// the real ur-task.log.</param>
+    /// <param name="delay">The wait between pipe-creation retries; tests skip it.</param>
+    public MacroRunnerServer(IMacroRunInvoker invoker, string? pipeName = null, IStatusProvider? status = null,
+        Action<string>? log = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
+        _log = log ?? (_ => { });
+        _delay = delay ?? Task.Delay;
         _status = status;
         _invoker = invoker ?? throw new ArgumentNullException(nameof(invoker));
         _pipeName = pipeName ?? PipeName;
@@ -38,20 +60,36 @@ internal sealed class MacroRunnerServer
         // hanging the app windowless with one core pegged.
         await Task.Yield();
 
+        // Every line here goes to the diagnostics log. They used to go to Debug.WriteLine, which
+        // is compiled out of a Release build, so a dead bridge left no trace at all.
+        var retry = CreateRetryStart;
         while (!ct.IsCancellationRequested)
         {
             NamedPipeServerStream pipe;
             try
             {
-                pipe = CreateServerPipe();
+                pipe = CreatePipe is { } create ? create(CreateServerPipe) : CreateServerPipe();
+                retry = CreateRetryStart;
             }
             catch (IOException ex)
             {
                 // Single-instance pipe already taken — another Ur Task instance
                 // owns the bridge. Serving is pointless; stop cleanly and let
                 // the owning instance keep handling sibling requests.
-                Debug.WriteLine($"[MacroRunnerServer] bridge pipe unavailable — not serving: {ex.Message}");
+                Log($"bridge pipe: another Ur Task already owns it, so this one is not serving bridge requests ({ex.Message})");
                 return;
+            }
+            catch (Exception ex)
+            {
+                // Anything else (creating over a squatter with different settings is an
+                // UnauthorizedAccessException) used to fault this discarded task: the bridge was
+                // gone for the session. Try again instead, less often each time.
+                Log(string.Create(CultureInfo.InvariantCulture,
+                    $"bridge pipe: could not create it ({ex.GetType().Name}: {ex.Message}); trying again in {retry.TotalSeconds:0} s"));
+                try { await _delay(retry, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                retry = retry + retry < CreateRetryCap ? retry + retry : CreateRetryCap;
+                continue;
             }
 
             try
@@ -62,13 +100,20 @@ internal sealed class MacroRunnerServer
                     await HandleConnectionAsync(pipe, ct).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) { break; }
+            // Only the bridge's own token ends the loop. A cancellation from anywhere else (a
+            // handler, a connection's deadline) is that connection's problem, not a shutdown.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
                 // A bad/hostile peer must not kill the loop. Log and accept the next one.
-                Debug.WriteLine($"[MacroRunnerServer] connection error: {ex.Message}");
+                Log($"bridge pipe: dropped a connection: {ex.Message}");
             }
         }
+    }
+
+    private void Log(string line)
+    {
+        try { _log(line); } catch { /* a log that throws must not end the accept loop */ }
     }
 
     /// <summary>
@@ -80,7 +125,21 @@ internal sealed class MacroRunnerServer
     /// </summary>
     public async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
     {
-        var frame = await FrameCodec.ReadFrameAsync(stream, ct).ConfigureAwait(false);
+        // The pipe has one instance, served one connection at a time. A peer that connects and
+        // sends nothing, or never takes its reply, would hold it for good: every other caller
+        // times out and StopMacro can no longer be sent. So the read and the write each get their
+        // own deadline, on a token of this connection's own (linked to the bridge's).
+        byte[]? frame;
+        using (var reading = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            reading.CancelAfter(IoTimeout);
+            try { frame = await FrameCodec.ReadFrameAsync(stream, reading.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException(string.Create(CultureInfo.InvariantCulture,
+                    $"the peer sent no request within {IoTimeout.TotalSeconds:0.#} s"));
+            }
+        }
         if (frame is null) return; // peer connected then closed
 
         byte[] outBytes;
@@ -94,7 +153,14 @@ internal sealed class MacroRunnerServer
             outBytes = Bytes(RunMacroResponse.Refused(Reasons.Refused, "Malformed request JSON."));
         }
 
-        await FrameCodec.WriteFrameAsync(stream, outBytes, ct).ConfigureAwait(false);
+        using var writing = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        writing.CancelAfter(IoTimeout);
+        try { await FrameCodec.WriteFrameAsync(stream, outBytes, writing.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(string.Create(CultureInfo.InvariantCulture,
+                $"the peer did not take its reply within {IoTimeout.TotalSeconds:0.#} s"));
+        }
     }
 
     private async Task<byte[]> DispatchAsync(RequestEnvelope? env, byte[] frame, CancellationToken ct)

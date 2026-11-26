@@ -44,6 +44,20 @@ public class SequencePlayerTests
         public bool Abort() => false;
     }
 
+    private sealed class ThrowingPlayer : IMacroPlayer
+    {
+        public bool IsPlaying => false;
+#pragma warning disable CS0067 // the interface needs them; nothing here raises them
+        public event EventHandler<PlaybackStartedArgs>? Started;
+        public event EventHandler<PlaybackEndedArgs>? Ended;
+#pragma warning restore CS0067
+        public Task<PlaybackResult> PlayAsync(Macro macro, long targetUserId, CancellationToken external = default)
+            => throw new InvalidOperationException("SendInput blew up.");
+        public Task<PlaybackResult> PlayAllWindowsRawAsync(Macro macro, CancellationToken external = default)
+            => Task.FromResult(PlaybackResult.Completed());
+        public bool Abort() => false;
+    }
+
     private sealed class FakeForeground : IForegroundWatcher
     {
         public Func<AccountRegistry.AccountInfo?>? Resolver { get; set; }
@@ -329,6 +343,90 @@ public class SequencePlayerTests
 
         Assert.Equal(new[] { 47821334L }, player.CalledWithTargets);
         Assert.Equal(PlaybackOutcome.Completed, Assert.Single(result.PerAlt).Outcome);
+    }
+
+    [Theory]
+    [InlineData(-1)]   // Task.Delay(-1) is an infinite wait: the first target was focused and nothing ever played
+    [InlineData(-2)]   // below -1 Task.Delay throws ArgumentOutOfRangeException
+    public async Task PlayAsync_ANegativeDelayFromTheMacroFile_PlaysWithNoDelayInsteadOfHangingOrThrowing(int fileDelayMs)
+    {
+        var player = new FakePlayer();
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        fg.Resolver = () => target;
+        var sequence = new SequencePlayer(player, fg, _ => (true, null));
+        var macro = NewMacro() with { InterAltDelayMs = fileDelayMs };
+
+        var result = await sequence.PlayAsync(macro, new[] { target }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(PlaybackOutcome.Completed, Assert.Single(result.PerAlt).Outcome);
+        Assert.False(sequence.IsRunning);
+    }
+
+    [Theory]
+    [InlineData(null, null, 500)]        // neither says: the default
+    [InlineData(null, 250, 250)]         // the macro file's own delay
+    [InlineData(100, 250, 100)]          // the caller's wins
+    [InlineData(-1, null, 0)]
+    [InlineData(null, -7, 0)]
+    [InlineData(60001, null, 60000)]
+    [InlineData(null, int.MaxValue, 60000)]
+    public void EffectiveInterAltDelayMs_IsClampedTo0To60000_WhateverItsSource(int? requested, int? fromFile, int expected)
+        => Assert.Equal(expected, SequencePlayer.EffectiveInterAltDelayMs(requested, fromFile));
+
+    // ── An exception that is not a cancellation ──
+    //
+    // PlayAsync caught only OperationCanceledException. Anything else escaped with no Done or
+    // Aborted progress, so a listener tracking "a sequence is active" never cleared. The runtime's
+    // is the one that keeps bare Esc registered system-wide.
+
+    [Fact]
+    public async Task PlayAsync_ThePlayerThrows_StillEndsWithAnAbortedProgressEvent()
+    {
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        fg.Resolver = () => target;
+        var sequence = new SequencePlayer(new ThrowingPlayer(), fg, _ => (true, null));
+        var phases = new List<SequencePhase>();
+        sequence.Progress += (_, p) => phases.Add(p.Phase);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sequence.PlayAsync(NewMacro(), new[] { target, Alt(1002, 47821335, "ScrambledTen") }, interAltDelayMs: 0));
+
+        Assert.Equal("SendInput blew up.", ex.Message); // the caller still sees what went wrong
+        Assert.Equal(new[] { SequencePhase.Focusing, SequencePhase.Playing, SequencePhase.Aborted }, phases);
+        Assert.False(sequence.IsRunning);
+    }
+
+    [Fact]
+    public async Task PlayAsync_TheFocusCallThrows_StillEndsWithAnAbortedProgressEvent()
+    {
+        var sequence = new SequencePlayer(new FakePlayer(), new FakeForeground(),
+            new Func<int, FocusAttempt>(_ => throw new InvalidOperationException("no desktop")));
+        var phases = new List<SequencePhase>();
+        sequence.Progress += (_, p) => phases.Add(p.Phase);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sequence.PlayAsync(NewMacro(), new[] { Alt(1001, 47821334, "Goldnail8") }, interAltDelayMs: 0));
+
+        Assert.Equal(SequencePhase.Aborted, phases[^1]);
+        Assert.False(sequence.IsRunning);
+    }
+
+    [Fact]
+    public async Task PlayAsync_ANormalEnd_SaysDoneOrAbortedExactlyOnce()
+    {
+        var fg = new FakeForeground();
+        var target = Alt(1001, 47821334, "Goldnail8");
+        fg.Resolver = () => target;
+        var sequence = new SequencePlayer(new FakePlayer(), fg, _ => (true, null));
+        var phases = new List<SequencePhase>();
+        sequence.Progress += (_, p) => phases.Add(p.Phase);
+
+        await sequence.PlayAsync(NewMacro(), new[] { target }, interAltDelayMs: 0);
+
+        Assert.Single(phases, p => p is SequencePhase.Done or SequencePhase.Aborted);
+        Assert.Equal(SequencePhase.Done, phases[^1]);
     }
 
     [Fact]

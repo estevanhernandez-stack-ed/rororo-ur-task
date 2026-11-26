@@ -186,7 +186,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
                 isBreakglass: () => _breakglass.IsOn, deadlines: status.Deadlines, registry: playbacks);
             _bridgeInvoker = invoker;
-            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status, log: Diagnostics.DiagLog.Write);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
 
@@ -686,10 +686,32 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     public async Task StartAsync()
     {
+        // Esc stays registered for the whole of a bridge playback, the waits between a repeat's
+        // passes included: no sequence is running then, and a press would go to the game.
+        if (_bridgeInvoker is { } bridge) bridge.ActivePlaybacksChanged += RefreshAbortKey;
+
+        // Hotkeys get their own try: a key another program holds used to throw out of the one
+        // big try below, which also skipped loading the macro library and connecting to RoRoRo.
+        // The window showed "Not connected", zero macros and no hotkeys at all.
         try
         {
+            _hotkeys.AbortKeyFailed += failure => Log(failure.AbortKeyLine(
+                abortChordWorks: !_hotkeys.Failures.Any(f => f.Key == "Ctrl+Shift+F12")));
             _hotkeys.Start();
-            Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            var failed = _hotkeys.Failures;
+            if (failed.Count == 0)
+                Log("Hotkeys ready: Ctrl+Shift+R record/stop · Ctrl+Shift+P play assignments · Ctrl+Shift+L run routine · Ctrl+Shift+F12 abort (Esc also aborts while playing) · Ctrl+Shift+F11 break-glass.");
+            else
+                foreach (var failure in failed)
+                    Log(failure.StartupLine(othersWork: failed.Count < Hotkeys.HotkeyService.ChordHotkeyVkCodes.Count));
+        }
+        catch (Exception ex)
+        {
+            Log($"Hotkeys aren't working: {ex.Message} Use the buttons in the Ur Task window.");
+        }
+
+        try
+        {
             if (_breakglass.IsOn)
             {
                 Log(Hotkeys.Breakglass.StillOnAtStartLine);
@@ -761,7 +783,20 @@ internal sealed class PluginRuntime : IAsyncDisposable
         try { _holdTimer?.Dispose(); } catch { }
         try { _hotkeys.Dispose(); } catch { }
         try { _recorder.Stop(); } catch { }
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        // Stop every playback and give it a moment to unwind before the process goes. The
+        // players let go of held keys and mouse buttons in their finally blocks, which run only
+        // if the playback unwinds first: quitting from the tray during a held W left the key down
+        // in the game. The routine goes first, so it cannot start a fresh loop under the others.
+        await PlaybackShutdown.AbortAndWaitAsync(
+            new (string, Func<bool>)[]
+            {
+                ("the routine", () => _activeRecipeRunner?.Abort() ?? false),
+                ("the keep-alive loop", _runner.Abort),
+                ("the sequence", _sequence.Abort),
+                ("the player", _player.Abort),
+            },
+            isRunning: () => _player.IsPlaying || _runner.IsRunning,
+            log: Diagnostics.DiagLog.Write).ConfigureAwait(false);
         // Belt-and-suspenders: a graceful app exit may race the runner's own
         // Stopped event (background task hasn't ticked yet) — dispose the claim
         // directly too so a clean quit doesn't wait out the TTL for no reason.
@@ -781,15 +816,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private void OnHostLost()
     {
         Log("Host RoRoRo connection lost — aborting playback and exiting plugin.");
-        try { _bridgeCts.Cancel(); } catch { }
-        try { _runner.Abort(); } catch { }
-        try { _sequence.Abort(); } catch { }
-        try { _player.Abort(); } catch { }
+        // These aborts are what stops input once the host is gone, so one that fails leaves a
+        // line in the diagnostics log instead of vanishing.
+        try { _bridgeCts.Cancel(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the bridge: {ex.Message}"); }
+        try { _runner.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the keep-alive loop: {ex.Message}"); }
+        try { _sequence.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the sequence: {ex.Message}"); }
+        try { _player.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the player: {ex.Message}"); }
         // The recipe runner has its own token — aborting the sub-runners above only
         // cancels THEIR internal tokens, not the recipe's. Without this, RecipeRunner
         // never observes cancellation and starts a fresh terminal loop against
         // orphaned PIDs after the host is gone.
-        try { _activeRecipeRunner?.Abort(); } catch { }
+        try { _activeRecipeRunner?.Abort(); } catch (Exception ex) { Diagnostics.DiagLog.Write($"host lost: couldn't stop the routine: {ex.Message}"); }
 
         // Marshal to UI thread for the WPF shutdown. If we can't reach the
         // dispatcher (rare race), fall back to a hard exit so we don't linger.
@@ -901,7 +938,11 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 break;
 
             case HotkeyKind.Abort:
-                bool aborted = _runner.Abort() | _sequence.Abort() | _player.Abort()
+                // Bridge playbacks first, as break-glass does: a repeat loops on after an aborted
+                // pass unless its own token is cancelled. No StopMacro here, which would write a
+                // second abort line naming a bridge caller; the line below names the key.
+                bool aborted = ((_bridgeInvoker?.StopAllForUserAbort() ?? 0) > 0)
+                    | _runner.Abort() | _sequence.Abort() | _player.Abort()
                     | (_activeRecipeRunner?.Abort() ?? false);
                 Log(Hotkeys.AbortLog.Line(aborted, source ?? "unknown source"));
                 break;
@@ -967,7 +1008,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
     /// </summary>
     private void RefreshAbortKey()
     {
-        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false))
+        if (_runner.IsRunning || _sequenceActive || _playerActive || (_activeRecipeRunner?.IsRunning ?? false)
+            || (_bridgeInvoker?.ActivePlaybackCount ?? 0) > 0)
             _hotkeys.EnableAbortKey();
         else
             _hotkeys.DisableAbortKey();

@@ -24,6 +24,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 {
     internal const string ForegroundSentinel = "foreground";
 
+    /// <summary>The wait before the next pass of a repeat whose last pass completed nothing. It
+    /// doubles from the start to the cap and starts over after a pass that completed something.</summary>
+    internal static readonly TimeSpan RepeatBackoffStart = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan RepeatBackoffCap = TimeSpan.FromSeconds(30);
+
     private readonly Func<MacroStore.LoadResult> _load;
     private readonly HashSet<string> _loggedFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<IReadOnlyList<AccountRegistry.AccountInfo>> _snapshot;
@@ -36,10 +41,22 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     private readonly Action<string> _log;
     private readonly Func<IReadOnlyList<KeepAliveDeadline>> _deadlines;
     private readonly Func<DateTimeOffset> _now;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _playbacks = new();
 
     internal int ActivePlaybackCount => _playbacks.Count;
+
+    /// <summary>A playback joined or left the active set. The runtime keeps bare Esc registered
+    /// while <see cref="ActivePlaybackCount"/> is above zero: between the passes of a repeat no
+    /// sequence is running, and Esc would otherwise be released for the whole wait.</summary>
+    internal event Action? ActivePlaybacksChanged;
+
+    private void RaiseActivePlaybacksChanged()
+    {
+        try { ActivePlaybacksChanged?.Invoke(); }
+        catch (Exception ex) { _log($"  ! active-playbacks listener failed: {ex.Message}"); }
+    }
 
     // Production ctor wires the real collaborators.
     public MacroRunInvoker(MacroStore store, AccountRegistry accounts, IForegroundWatcher foreground, SequencePlayer player,
@@ -72,8 +89,11 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Action<string>? log = null,
         Func<bool>? isBreakglass = null,
         Func<IReadOnlyList<KeepAliveDeadline>>? deadlines = null,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
+        // The wait between repeat passes. Tests hold it, so none sleeps real seconds.
+        _delay = delay ?? Task.Delay;
         _deadlines = deadlines ?? (() => Array.Empty<KeepAliveDeadline>());
         _now = now ?? (() => DateTimeOffset.Now);
         // Tests leave it out, so a test run never writes to the real ur-task.log.
@@ -98,9 +118,10 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         Func<bool>? abort = null,
         PlaybackRegistry? registry = null,
         Action<string>? log = null,
-        Func<bool>? isBreakglass = null)
+        Func<bool>? isBreakglass = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
         : this(() => new MacroStore.LoadResult(loadMacros(), Array.Empty<MacroStore.LoadFailure>()),
-               snapshot, resolveForegroundUserId, isBusy, playWithResult, abort, registry, log, isBreakglass)
+               snapshot, resolveForegroundUserId, isBusy, playWithResult, abort, registry, log, isBreakglass, delay: delay)
     { }
 
     // Test ctor, unchanged signature: fakes that only need to run. Adapts into the one delegate.
@@ -126,6 +147,10 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
     public Task<RunMacroResponse> RunAsync(RunMacroRequest request, CancellationToken ct)
     {
         if (BreakglassRefusal() is { } handsOff) return handsOff;
+        // Shape before busy, as ClearAt and SweepPath do: a malformed call is refused as malformed
+        // even while something is playing.
+        if (Malformed(request) is { } problem)
+            return Task.FromResult(RunMacroResponse.Refused(Reasons.Refused, problem, Actors.AgentOrNull(request.CallerPluginId)));
         if (_isBusy() || !_playbacks.IsEmpty)
             return Task.FromResult(RunMacroResponse.Refused(Reasons.Busy, "A sequence is already running."));
 
@@ -151,6 +176,20 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
 
         var started = Start(Guid.NewGuid().ToString("N"), macro, targets, request.InterAltDelayMs, request.Repeat, ct);
         return Task.FromResult(started with { Note = DeadlineNote(macro, targets) });
+    }
+
+    /// <summary>What is wrong with a RunMacro request's own values, or null. A blank id is compared
+    /// by string equality and so matched a macro whose file has no id. The delay goes into
+    /// Task.Delay: -1 there waits forever, which hung the playback with the first target focused
+    /// and left every later start refused busy.</summary>
+    private static string? Malformed(RunMacroRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.MacroId))
+            return "Name the macro id to run. ListMacros lists them.";
+        if (request.InterAltDelayMs is { } delay && (delay < 0 || delay > SequencePlayer.MaxInterAltDelayMs))
+            return string.Create(CultureInfo.InvariantCulture,
+                $"The delay between accounts (interAltDelayMs) must be 0 to {SequencePlayer.MaxInterAltDelayMs} ms; got {delay}.");
+        return null;
     }
 
     /// <summary>A heads-up when this run is long enough to cross another account's keep-alive deadline that is
@@ -247,6 +286,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _playbacks[playbackId] = playbackCts;
         _registry.Started(playbackId, targets.Select(t => t.RobloxUserId).ToArray());
+        RaiseActivePlaybacksChanged();
         _ = ObservePlaybackAsync(playbackId, macro, targets, interAltDelayMs, repeat, playbackCts);
         return RunMacroResponse.Accepted(playbackId);
     }
@@ -276,11 +316,16 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         }
         else
         {
-            foreach (var kvp in _playbacks)
-            {
-                try { kvp.Value.Cancel(); } catch (ObjectDisposedException) { }
-                stopped++;
-            }
+            stopped = CancelAllPlaybacks();
+        }
+
+        // A named playback that is not running (it already finished, or the id is wrong) stops
+        // nothing. Aborting here anyway killed whatever was in flight: the user's own sequence,
+        // or another caller's playback.
+        if (stopped == 0 && !string.IsNullOrEmpty(request.PlaybackId))
+        {
+            _log($"Stop ignored: playback {request.PlaybackId} is not running ({Hotkeys.AbortLog.StopMacro(request.CallerPluginId)}).");
+            return StopMacroResponse.Done(0);
         }
 
         // Abort the in-flight SequencePlayer pass so cancellation takes effect immediately,
@@ -290,6 +335,25 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         _log(Hotkeys.AbortLog.Line(stopped > 0 || aborted, Hotkeys.AbortLog.StopMacro(request.CallerPluginId)));
 
         return StopMacroResponse.Done(stopped);
+    }
+
+    /// <summary>
+    /// The user's stop keys (Esc, Ctrl+Shift+F12). Cancels every bridge playback's own token, so a
+    /// repeat ends where it stands: aborting the sequence alone leaves the aborted pass reading as
+    /// one more failed pass, and the next one starts. Logs nothing, because the caller's abort line
+    /// already names the key. Returns how many playbacks it stopped.
+    /// </summary>
+    internal int StopAllForUserAbort() => CancelAllPlaybacks();
+
+    private int CancelAllPlaybacks()
+    {
+        int stopped = 0;
+        foreach (var kvp in _playbacks)
+        {
+            try { kvp.Value.Cancel(); } catch (ObjectDisposedException) { }
+            stopped++;
+        }
+        return stopped;
     }
 
     public GetPlaybackResponse GetPlayback(GetPlaybackRequest request)
@@ -315,6 +379,7 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         var state = PlaybackState.Finished;
         string? reason = null, detail = null, actor = null, advice = null;
         int? stepIndex = null;
+        var backoff = RepeatBackoffStart;
         try
         {
             do
@@ -376,6 +441,30 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
                     // aborted v3 pass loops on as it did in 0.8.
                     if (failure.StepIndex is not null) break;
                 }
+
+                if (!repeat || playbackCts.IsCancellationRequested) continue;
+                // Every target's window is gone. Targets were resolved once, at RunMacro time, so
+                // a crashed, kicked or relaunched account (a new pid) never comes back: end the
+                // repeat instead of retrying it forever.
+                if (last is { PerAlt.Count: > 0 } pass
+                    && pass.PerAlt.All(a => a.Outcome == PlaybackOutcome.Refused && a.Code == SequencePlayer.WindowGoneCode))
+                {
+                    state = PlaybackState.Failed;
+                    reason = Reasons.Refused;
+                    detail = WindowsGoneDetail(pass.PerAlt);
+                    break;
+                }
+                // A pass that completed nothing can end without ever yielding (a refused focus
+                // with no inter-alt delay), and then this loop pegged a core, rolled the log over
+                // in seconds and left no gap for a stop to land in. Wait before the next one,
+                // longer each time. `last == null` is the test ctor's run-only fakes: a clean pass.
+                if (last is null || last.PerAlt.Any(a => a.Outcome == PlaybackOutcome.Completed))
+                    backoff = RepeatBackoffStart;
+                else if (!_isBreakglass())
+                {
+                    await _delay(backoff, playbackCts.Token).ConfigureAwait(false);
+                    backoff = backoff + backoff < RepeatBackoffCap ? backoff + backoff : RepeatBackoffCap;
+                }
             }
             // Break-glass ends a repeat too: an aborted pass would otherwise loop on into the user's hands.
             while (repeat && !playbackCts.IsCancellationRequested && !_isBreakglass());
@@ -385,21 +474,53 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         catch (Exception ex) { state = PlaybackState.Failed; reason = Reasons.Error; detail = ex.Message; }
         finally
         {
-            // A finished ClearAt names the points that showed no outline, so Ur OCR stops
-            // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
-            // macro's steps are not caller points, and a failed or stopped pass never looked at
-            // the rest. A repeat reports its last pass, like everything else here.
-            var noOutline = state == PlaybackState.Finished && ClearAtMacro.SharesBaseline(macro.Id)
-                            && last?.PerAlt is { Count: > 0 } played
-                ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
-                : null;
-            _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline, actor, advice);
-            // Same state string GetPlayback returns, and before the removal below, so anything
-            // waiting for the playback to leave the active set finds the line already written.
-            _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
-            _playbacks.TryRemove(playbackId, out _);
-            playbackCts.Dispose();
+            // The removal at the bottom must run whatever happens above it: a playback left in
+            // the active set makes the bridge answer busy until Ur Task is restarted (a macro
+            // with a null id threw here once, from SharesBaseline).
+            bool recorded = false;
+            try
+            {
+                // A finished ClearAt names the points that showed no outline, so Ur OCR stops
+                // re-sending them (ore-stop pulse, fix 1). Only a ClearAt, and only a finish: a saved
+                // macro's steps are not caller points, and a failed or stopped pass never looked at
+                // the rest. A repeat reports its last pass, like everything else here.
+                var noOutline = state == PlaybackState.Finished && macro.Id is { } id && ClearAtMacro.SharesBaseline(id)
+                                && last?.PerAlt is { Count: > 0 } played
+                    ? played.SelectMany(a => a.NoOutline ?? Array.Empty<int>()).Distinct().Order().ToArray()
+                    : null;
+                _registry.Finished(playbackId, state, reason, detail, stepIndex, noOutline, actor, advice);
+                recorded = true;
+                // Same state string GetPlayback returns, and before the removal below, so anything
+                // waiting for the playback to leave the active set finds the line already written.
+                _log(PlaybackEndLog.BridgeLine(playbackId, macro.Name, state.ToString().ToLowerInvariant(), reason, detail));
+            }
+            catch (Exception ex)
+            {
+                // Not recorded: say it failed, so GetPlayback does not read "running" for good.
+                if (!recorded)
+                {
+                    try { _registry.Finished(playbackId, PlaybackState.Failed, Reasons.Error, ex.Message, null); }
+                    catch { /* the registry itself is broken; the removal below still runs */ }
+                }
+                try { _log($"  ! bridge playback {playbackId}: could not record how it ended: {ex.Message}"); }
+                catch { /* the log is what threw */ }
+            }
+            finally
+            {
+                _playbacks.TryRemove(playbackId, out _);
+                try { playbackCts.Dispose(); } catch { /* nothing left to release */ }
+                RaiseActivePlaybacksChanged();
+            }
         }
+    }
+
+    private static string WindowsGoneDetail(IReadOnlyList<AltOutcome> pass)
+    {
+        var names = pass.Select(a => a.Alt.DisplayName).ToList();
+        if (names.Count == 1)
+            return $"Stopped repeating: {names[0]}'s game window is gone. Run the macro again once the account is back in a game.";
+        var list = string.Join(", ", names.Take(names.Count - 1)) + " and " + names[^1];
+        return $"Stopped repeating: the game windows for {list} are gone. Run the macro again once the accounts are back in a game.";
     }
 
     private IReadOnlyList<AccountRegistry.AccountInfo> ResolveTargets(IReadOnlyList<string>? requested)

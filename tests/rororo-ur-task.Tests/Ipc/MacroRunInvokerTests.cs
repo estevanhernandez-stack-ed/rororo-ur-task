@@ -102,6 +102,59 @@ public class MacroRunInvokerTests
         Assert.Equal(new long[] { 123 }, played);
     }
 
+    [Theory]
+    [InlineData(-1)]      // Task.Delay(-1) waits forever: the playback hung and every later start was refused busy
+    [InlineData(-2)]      // below -1 Task.Delay throws
+    [InlineData(60001)]
+    [InlineData(int.MaxValue)]
+    public async Task A_delay_between_accounts_outside_0_to_60000_is_refused_before_anything_plays(int delayMs)
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var played = new List<long>();
+        var inv = Build(new[] { m }, new[] { Alt(123) }, busy: false, playedUserIds: played);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, delayMs, "626labs.ur-mcp"), default);
+
+        Assert.Equal((false, "refused", $"The delay between accounts (interAltDelayMs) must be 0 to 60000 ms; got {delayMs}.", "agent:626labs.ur-mcp"),
+            (r.Ok, r.Reason, r.Detail, r.Actor));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+        Assert.Empty(played);
+    }
+
+    [Theory]
+    [InlineData(null, null)]   // no id asked for, and a macro whose file has no id: null equals null
+    [InlineData("", "")]
+    [InlineData("  ", "  ")]
+    [InlineData("", null)]
+    public async Task A_blank_or_missing_macro_id_is_refused_and_never_matches_a_macro_with_no_id(string? asked, string? idInFile)
+    {
+        // A macro file with no id loads with a blank one, and the lookup is plain string equality.
+        var noId = NewMacro(idInFile!, "No id in the file");
+        var played = new List<long>();
+        var inv = Build(new[] { noId }, new[] { Alt(123) }, busy: false, playedUserIds: played);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", asked!, new[] { "123" }, null, "626labs.ur-mcp"), default);
+
+        Assert.Equal((false, "refused", "Name the macro id to run. ListMacros lists them.", "agent:626labs.ur-mcp"),
+            (r.Ok, r.Reason, r.Detail, r.Actor));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+        Assert.Empty(played);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(60000)]
+    public async Task A_delay_between_accounts_inside_the_range_or_left_out_is_accepted(int? delayMs)
+    {
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var inv = Build(new[] { m }, new[] { Alt(123) }, busy: false);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, delayMs, "626labs.ur-mcp"), default);
+
+        Assert.True(r.Ok);
+    }
+
     /// <summary>
     /// Core regression guard: RunAsync must return Accepted immediately even when the
     /// underlying playback never completes. The caller (Ur-OCR 5Hz tick) must not be blocked.
@@ -219,6 +272,62 @@ public class MacroRunInvokerTests
         Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 0, 2000));
     }
 
+    [Fact]
+    public async Task StopMacro_for_a_playback_that_is_not_running_leaves_whatever_is_running_alone()
+    {
+        // L4-06: a caller stopping a playback that had already finished got stopped: 0 and still
+        // aborted the sequence in flight, which was the user's own or another caller's.
+        int aborts = 0;
+        var lines = new List<string>();
+        var m = NewMacro("m1", "Farm");
+        var invoker = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { Alt(1) },
+            resolveForegroundUserId: () => 1L,
+            isBusy: () => false,
+            playWithResult: async (mm, t, d, ct) => { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); return null; },
+            abort: () => { Interlocked.Increment(ref aborts); return true; },
+            log: l => { lock (lines) lines.Add(l); });
+        var run = await invoker.RunAsync(
+            new RunMacroRequest("1.0", "RunMacro", "m1", new[] { "1" }, null, "x", Repeat: true), CancellationToken.None);
+        Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 1, 2000));
+
+        var stale = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", "a-playback-that-already-finished", null, "626labs.ur-ocr"));
+
+        Assert.True(stale.Ok);
+        Assert.Equal(0, stale.Stopped);
+        Assert.Equal(0, aborts);
+        Assert.Equal(1, invoker.ActivePlaybackCount);
+        // The line says what was ignored: something IS playing, just not that id.
+        lock (lines) Assert.Equal(new[] { "Stop ignored: playback a-playback-that-already-finished is not running (StopMacro from 626labs.ur-ocr)." }, lines);
+
+        // The right id still stops it, and aborts the pass in flight.
+        var stop = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-ocr"));
+        Assert.Equal(1, stop.Stopped);
+        Assert.Equal(1, aborts);
+        Assert.True(SpinWait.SpinUntil(() => invoker.ActivePlaybackCount == 0, 2000));
+    }
+
+    [Fact]
+    public void StopMacro_with_no_playback_id_is_stop_all_and_still_aborts_a_sequence_the_bridge_did_not_start()
+    {
+        // Stop-all is the documented "stop everything" (break-glass uses it): it aborts whatever
+        // sequence is in flight even when no bridge playback is registered.
+        int aborts = 0;
+        var invoker = new MacroRunInvoker(
+            loadMacros: Array.Empty<Macro>,
+            snapshot: Array.Empty<AccountRegistry.AccountInfo>,
+            resolveForegroundUserId: () => null,
+            isBusy: () => true,
+            playWithResult: (m, t, d, ct) => Task.FromResult<SequenceResult?>(null),
+            abort: () => { aborts++; return true; });
+
+        var stop = invoker.StopMacro(new StopMacroRequest("1.0", "StopMacro", null, null, "x"));
+
+        Assert.Equal(0, stop.Stopped);
+        Assert.Equal(1, aborts);
+    }
+
     [Theory]
     [InlineData(true, "Aborted (StopMacro from 626labs.ur-ocr).")]
     [InlineData(false, "Abort ignored — nothing playing (StopMacro from 626labs.ur-ocr).")]
@@ -256,13 +365,19 @@ public class MacroRunInvokerTests
     }
 
     private static MacroRunInvoker BuildWithResult(Macro m, AccountRegistry.AccountInfo alt,
-        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult)
+        Func<Macro, IReadOnlyList<AccountRegistry.AccountInfo>, int?, CancellationToken, Task<SequenceResult?>> playWithResult,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
         => new MacroRunInvoker(
             loadMacros: () => new[] { m },
             snapshot: () => new[] { alt },
             resolveForegroundUserId: () => alt.RobloxUserId,
             isBusy: () => false,
-            playWithResult: playWithResult);
+            playWithResult: playWithResult,
+            delay: delay);
+
+    // The wait a repeat takes after a pass that completed nothing, skipped: these tests are about
+    // what ends a repeat, not how long it waits (MacroRunInvokerRepeatTests covers the waits).
+    private static Task NoWait(TimeSpan wait, CancellationToken ct) => Task.CompletedTask;
 
     private static async Task WaitUntilAsync(Func<bool> cond)
     {
@@ -410,13 +525,81 @@ public class MacroRunInvokerTests
             Interlocked.Increment(ref passes);
             await Task.Delay(5, ct);
             return refused;
-        });
+        }, delay: NoWait);
 
         var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
         await WaitUntilAsync(() => Volatile.Read(ref passes) >= 3);
         inv.StopMacro(new StopMacroRequest("1.0", "StopMacro", run.PlaybackId, null, "626labs.ur-mcp"));
         await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
         Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+    }
+
+    // A repeat whose play fake behaves like SequencePlayer cancelled mid-play: the pass holds until
+    // the sequence is aborted or the playback token is cancelled, then its single target comes back
+    // Aborted with nothing Skipped (MacroPlayer was already playing).
+    private static MacroRunInvoker RepeatAbortedMidPlay(Macro m, AccountRegistry.AccountInfo alt,
+        Action passStarted, out Func<bool> abortSequence)
+    {
+        TaskCompletionSource? midPlay = null;
+        abortSequence = () => Volatile.Read(ref midPlay)?.TrySetResult() ?? false;
+        return new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: async (_, _, _, ct) =>
+            {
+                var pass = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Volatile.Write(ref midPlay, pass);
+                passStarted();
+                using (ct.Register(() => pass.TrySetResult())) await pass.Task.ConfigureAwait(false);
+                return new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Aborted, "Cancelled.") }, 0, 0, 1, TimeSpan.Zero);
+            },
+            delay: NoWait);
+    }
+
+    [Fact]
+    public async Task A_user_abort_ends_a_repeat_whose_pass_was_aborted_mid_play()
+    {
+        // L3-03: Esc and Ctrl+Shift+F12 aborted the sequence but not the bridge playback's own
+        // token, so the aborted pass read as one more failed pass and the next one started.
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var inv = RepeatAbortedMidPlay(m, alt, () => Interlocked.Increment(ref passes), out var abortSequence);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 1);
+
+        // What the stop key does (PluginRuntime's Abort case): stop the bridge playbacks, then
+        // abort the sequence. The sequence abort alone leaves the repeat looping.
+        Assert.Equal(1, inv.StopAllForUserAbort());
+        abortSequence();
+
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal("stopped", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+        Assert.Equal(1, Volatile.Read(ref passes));
+    }
+
+    [Fact]
+    public async Task A_pass_aborted_without_a_user_abort_does_not_end_a_repeat()
+    {
+        // The other half of the distinction: a pass that merely came back Aborted (nothing went
+        // through StopMacro or the stop keys, so the playback token is live) loops on, as in 0.8.
+        var m = NewMacro(Guid.NewGuid().ToString());
+        var alt = Alt(123);
+        int passes = 0;
+        var inv = RepeatAbortedMidPlay(m, alt, () => Interlocked.Increment(ref passes), out var abortSequence);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp", Repeat: true), default);
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 1);
+        abortSequence();
+        await WaitUntilAsync(() => Volatile.Read(ref passes) == 2);
+        Assert.Equal("running", inv.GetPlayback(new GetPlaybackRequest("1.0", "GetPlayback", run.PlaybackId, "626labs.ur-mcp")).State);
+
+        Assert.Equal(1, inv.StopAllForUserAbort());
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+        Assert.Equal(0, inv.StopAllForUserAbort()); // nothing left to stop
     }
 
     [Fact]
@@ -467,6 +650,65 @@ public class MacroRunInvokerTests
 
         Assert.Equal($"bridge playback {run.PlaybackId} 'Mine spot N': failed (check-failed). alt-123: step 2 'Spot N' could not see the window.",
             Assert.Single(lines));
+    }
+
+    [Fact]
+    public async Task A_playback_whose_end_bookkeeping_throws_still_leaves_the_active_set()
+    {
+        // The end of a playback records its state and writes a log line before it leaves the
+        // active set. Anything thrown there (a null macro id did it) skipped the removal, and the
+        // bridge answered busy until Ur Task was restarted.
+        var m = NewMacro(Guid.NewGuid().ToString(), "Farm");
+        var alt = Alt(123);
+        var ok = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero);
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: (_, _, _, _) => Task.FromResult<SequenceResult?>(ok),
+            log: line => { if (line.StartsWith("bridge playback", StringComparison.Ordinal)) throw new IOException("log disk full"); });
+
+        var first = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Assert.True(first.Ok);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        // Its state was recorded before the log line threw, and the next start is not refused busy.
+        Assert.Equal("finished", Status(inv, first.PlaybackId).State);
+        var second = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Assert.True(second.Ok);
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+    }
+
+    [Fact]
+    public async Task A_playback_whose_state_cannot_be_recorded_reads_failed_not_running_forever()
+    {
+        var m = NewMacro(Guid.NewGuid().ToString(), "Farm");
+        var alt = Alt(123);
+        var ok = new SequenceResult(new[] { new AltOutcome(alt, PlaybackOutcome.Completed, null) }, 1, 0, 0, TimeSpan.Zero);
+        // The registry's clock throws once, on the first Finished call.
+        bool failNext = false;
+        var registry = new PlaybackRegistry(() =>
+        {
+            if (Volatile.Read(ref failNext)) { Volatile.Write(ref failNext, false); throw new InvalidOperationException("clock broke"); }
+            return DateTimeOffset.UtcNow;
+        });
+        var gate = new TaskCompletionSource();
+        var inv = new MacroRunInvoker(
+            loadMacros: () => new[] { m },
+            snapshot: () => new[] { alt },
+            resolveForegroundUserId: () => alt.RobloxUserId,
+            isBusy: () => false,
+            playWithResult: async (_, _, _, _) => { await gate.Task; return ok; },
+            registry: registry);
+
+        var run = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", m.Id, new[] { "123" }, null, "626labs.ur-mcp"), default);
+        Volatile.Write(ref failNext, true);
+        gate.TrySetResult();
+        await WaitUntilAsync(() => inv.ActivePlaybackCount == 0);
+
+        var status = Status(inv, run.PlaybackId);
+        Assert.Equal(("failed", "error"), (status.State, status.Reason));
     }
 
     // ---------- ClearAt ----------

@@ -19,6 +19,7 @@ internal sealed class SweepKeyFilter
     private static readonly int[] Shifts = { VK_SHIFT, 0xA0, 0xA1 };
 
     private readonly HashSet<int> _dropped = new();
+    private readonly HashSet<int> _reported = new();   // chord keys already reported for this press
     private bool _ctrl, _shift;
 
     public SweepKeyFilter(bool ctrlHeld = false, bool shiftHeld = false) { _ctrl = ctrlHeld; _shift = shiftHeld; }
@@ -26,18 +27,26 @@ internal sealed class SweepKeyFilter
     public int Dropped { get; private set; }
 
     /// <summary>True to drop the event. <paramref name="chord"/> is set when the press is one of
-    /// the stop chords: Ctrl+Shift+F12 or Esc (abort), Ctrl+Shift+F11 (break-glass).</summary>
+    /// the stop chords: Ctrl+Shift+F12 or Esc (abort), Ctrl+Shift+F11 (break-glass). Once per
+    /// physical press: the hook sees a key-down for every auto-repeat, and break-glass is a toggle,
+    /// so a held chord would flip it on, off and on again.</summary>
     public bool OnKey(int vk, bool down, bool injected, out HotkeyKind? chord)
     {
         chord = null;
         if (injected) return false;
         if (Array.IndexOf(Ctrls, vk) >= 0) _ctrl = down;
         if (Array.IndexOf(Shifts, vk) >= 0) _shift = down;
-        if (!down) return Release(vk);
+        if (!down)
+        {
+            _reported.Remove(vk);
+            return Release(vk);
+        }
 
         if (_dropped.Add(vk)) Dropped++;   // auto-repeat of a dropped key counts once
-        if (vk == VK_ESCAPE || (vk == VK_F12 && _ctrl && _shift)) chord = HotkeyKind.Abort;
-        else if (vk == VK_F11 && _ctrl && _shift) chord = HotkeyKind.Breakglass;
+        HotkeyKind? pressed = null;
+        if (vk == VK_ESCAPE || (vk == VK_F12 && _ctrl && _shift)) pressed = HotkeyKind.Abort;
+        else if (vk == VK_F11 && _ctrl && _shift) pressed = HotkeyKind.Breakglass;
+        if (pressed is not null && _reported.Add(vk)) chord = pressed;
         return true;
     }
 
