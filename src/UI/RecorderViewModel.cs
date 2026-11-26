@@ -336,6 +336,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            // The play and routine buttons depend on the row count too, and RelayCommand never re-queries on its own.
+            (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
         });
         _runtime.Accounts.AccountRemoved += (_, info) => RaiseUI(() =>
         {
@@ -344,6 +349,11 @@ internal sealed class RecorderViewModel : INotifyPropertyChanged
             (StackWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (GridWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (RestoreWindowsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            // The play and routine buttons depend on the row count too, and RelayCommand never re-queries on its own.
+            (PlayAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (StopAssignmentsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (TogglePlayStopCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            RaiseRoutineCommandStates();
         });
 
         // Seed current alts on construction
