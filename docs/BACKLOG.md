@@ -65,6 +65,13 @@ underneath:
 2. **A macro step.** Schema v3 → v4 gains a repeat event — what to send, interval, jitter, stop
    condition. The recorder writes ONE step and the player expands it at playback.
 
+**Second use case (Este, 2026-10-05): silent boss-fight tapping.** In PS99 Hatch Wars tap battles one click
+inside the moving circle registers a hit, so the clicker isn't there to out-click anyone — it's there so the
+player doesn't have to physically mash the mouse (Este used a separate autoclicker on his other PC to "click
+silently" while levelling the main). That means the standalone toggle is the headline feature, not just a macro
+step: arm with the chord, leave the pointer over the battle, disarm when the fight ends. The agent's own boss
+fights hit the same need (a 60-tap loop through a helper script, 2026-10-05).
+
 **Do not record the repeated clicks literally.** At the 7ms interval that script defaults to,
 thirty seconds of autoclicking is roughly 4,300 events, in a file that otherwise holds one event
 per real action. It would be unreadable and un-tunable — changing the rate would mean recording
@@ -235,3 +242,26 @@ Ur AFK stays as the last-resort net for users who will not configure anything (2
 The claim rule is the load-bearing part either way: Ur Task claims what it is actually servicing,
 moment to moment, and Ur AFK takes the rest. Otherwise both plugins service the same alt and fight
 over the foreground.
+
+## Macro packs that set the game's keybinds
+
+**Raised by Este:** 2026-10-05 · **Kind:** feature idea, not started
+
+The better macro packs set every account's in-game keybinds for you, so one macro works on all of them. Found the
+need the same night: the PS99 "Supercomputer Radio" key is Left Ctrl + C on six accounts and Left Ctrl + Z on two, so a
+single hotkey macro fails on two of eight.
+
+- **Verify before writing.** PS99's public profile API returns each account's keybinds (?include=profile,
+  Keybinds: item id + key list), so a pack can diff wanted vs actual per account and only touch the ones that differ.
+  Reference: ps99-ops/tools/ps99-keybinds.py.
+- **Setting them is a menu flow:** Settings (gear) > Keybinds > Edit, then pick the item and press the key. That is a
+  stepped flow with screen checks (see docs/ideas/2026-10-05-stepped-flows-and-walk-calibration.md), not a timed
+  macro.
+- **A pack declares its bindings** next to its macros (item id -> chord), so importing a pack can offer "apply these
+  keybinds to N accounts" and re-check them through the API afterwards.
+- Keep chords off Ur Task's own Ctrl+Shift set.
+- **Default: adapt the macro, don't overwrite the player's keybinds (Este, 2026-10-05).** Other packs clear every
+  keybind and write their own, which breaks the player's muscle memory. Ours can do better because the binds are
+  readable: a macro step says "use <item>" (e.g. Supercomputer Radio), and playback resolves it to that account's own
+  chord from the profile API (Ctrl+C on one account, Ctrl+Z on another). Unbound item: fall back to the on-screen button,
+  or offer to bind just that one. Overwrite-all stays an opt-in for people who want uniform binds.
