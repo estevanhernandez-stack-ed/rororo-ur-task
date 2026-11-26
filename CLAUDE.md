@@ -94,9 +94,18 @@ not need to track anything. Do not grow it back into one.
 | logs | `%LOCALAPPDATA%\626Labs\RoRoRoUrTask\logs\ur-task.log` |
 | action bridge | named pipe `\\.\pipe\626labs-ur-task`, current-user only |
 
-The log is the debugging surface. A clean session always ends with an "exiting cleanly" line —
-**its absence is the evidence**, which is why the startup watchdog exists: the failure mode it
-catches is the windowless hang, which throws nothing for any handler to see.
+The log is the debugging surface. A session starts with a `=== RoRoRo Ur Task v… starting` line.
+It ends with "exiting cleanly" **only when Ur Task ends itself**: tray Quit, or it notices the host
+is gone. RoRoRo hard-kills the plugin's process tree when it exits, updates or restarts a plugin,
+so `App.OnExit` never runs and most sessions end with no exit line at all. That is normal. (When
+this was checked in November 2026 the live log held 36 session starts and zero exit lines.)
+
+So a missing exit line is not evidence by itself. It means one of three things:
+
+- **RoRoRo closed it.** The log just stops. The usual case.
+- **It crashed.** Look for `FATAL` before the next session start.
+- **It hung at startup.** Look for `WATCHDOG`. This is why the startup watchdog exists: the
+  failure mode it catches is the windowless hang, which throws nothing for any handler to see.
 
 ---
 
