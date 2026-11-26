@@ -174,7 +174,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var invoker = new Ipc.MacroRunInvoker(new Macros.MacroStore(), Accounts, _foreground, _sequence,
                 isBreakglass: () => _breakglass.IsOn, deadlines: status.Deadlines, registry: playbacks);
             _bridgeInvoker = invoker;
-            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status);
+            _bridgeServer = new Ipc.MacroRunnerServer(invoker, status: status, log: Diagnostics.DiagLog.Write);
             _ = _bridgeServer.RunAcceptLoopAsync(_bridgeCts.Token);
         }
 
