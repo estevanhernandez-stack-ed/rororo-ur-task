@@ -122,6 +122,26 @@ public class MacroRunInvokerTests
     }
 
     [Theory]
+    [InlineData(null, null)]   // no id asked for, and a macro whose file has no id: null equals null
+    [InlineData("", "")]
+    [InlineData("  ", "  ")]
+    [InlineData("", null)]
+    public async Task A_blank_or_missing_macro_id_is_refused_and_never_matches_a_macro_with_no_id(string? asked, string? idInFile)
+    {
+        // A macro file with no id loads with a blank one, and the lookup is plain string equality.
+        var noId = NewMacro(idInFile!, "No id in the file");
+        var played = new List<long>();
+        var inv = Build(new[] { noId }, new[] { Alt(123) }, busy: false, playedUserIds: played);
+
+        var r = await inv.RunAsync(new RunMacroRequest("1.0", "RunMacro", asked!, new[] { "123" }, null, "626labs.ur-mcp"), default);
+
+        Assert.Equal((false, "refused", "Name the macro id to run. ListMacros lists them.", "agent:626labs.ur-mcp"),
+            (r.Ok, r.Reason, r.Detail, r.Actor));
+        Assert.Equal(0, inv.ActivePlaybackCount);
+        Assert.Empty(played);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData(0)]
     [InlineData(60000)]

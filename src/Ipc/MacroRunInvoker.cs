@@ -178,11 +178,14 @@ internal sealed class MacroRunInvoker : IMacroRunInvoker
         return Task.FromResult(started with { Note = DeadlineNote(macro, targets) });
     }
 
-    /// <summary>What is wrong with a RunMacro request's own values, or null. The delay goes into
+    /// <summary>What is wrong with a RunMacro request's own values, or null. A blank id is compared
+    /// by string equality and so matched a macro whose file has no id. The delay goes into
     /// Task.Delay: -1 there waits forever, which hung the playback with the first target focused
     /// and left every later start refused busy.</summary>
     private static string? Malformed(RunMacroRequest request)
     {
+        if (string.IsNullOrWhiteSpace(request.MacroId))
+            return "Name the macro id to run. ListMacros lists them.";
         if (request.InterAltDelayMs is { } delay && (delay < 0 || delay > SequencePlayer.MaxInterAltDelayMs))
             return string.Create(CultureInfo.InvariantCulture,
                 $"The delay between accounts (interAltDelayMs) must be 0 to {SequencePlayer.MaxInterAltDelayMs} ms; got {delay}.");
