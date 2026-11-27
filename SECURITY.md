@@ -10,6 +10,10 @@ to reproduce it. Please do not open a public issue. Expect an acknowledgement wi
 Fixes ship in the next release. Only the latest release is supported: there are no back-ports,
 so the fix for an older version is to update.
 
+One exception. If a release ever drops a Windows version that an earlier release ran on, the last
+release that still works there keeps getting security fixes for 6 months after the release that
+dropped it. No release has dropped a Windows version so far.
+
 Ur Task is a plugin for [RoRoRo](https://github.com/estevanhernandez-stack-ed/ROROROblox). A
 problem in the launcher itself, in how it stores accounts, or in how it installs plugins belongs
 in that repo.
